@@ -389,3 +389,7 @@ To publish the draft, either click Publish on GitHub or run Actions › "Publish
 (`.github/workflows/publish-release.yml`) with the version. It publishes only the one draft release of
 `desktop-native-v<version>` whose tag is on `main` and which carries all six packages, and marks it the latest
 release; anything else stops it with a message.
+
+A whole release in one run: "Tag release" with `publish` checked tags `main`, waits for the release job and then
+publishes the draft. Before that, the version is set on `main` with `node scripts/bump-version.mjs <version>` (through a
+pull request). The steps for a Claude session are in `CLAUDE.md`, "Releasing".

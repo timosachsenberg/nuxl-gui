@@ -4,7 +4,8 @@
 #
 # It publishes only that: a draft of that tag, whose tag points at a commit of main, with the six packages the
 # release job attaches. Anything else (no draft, several drafts of the tag, a release that is published already, a
-# missing package) stops it with a message and changes nothing.
+# missing package) stops it with a message and changes nothing. "Tag release" with `publish` runs it after the
+# release job.
 name: Publish release
 
 on:
@@ -14,13 +15,15 @@ on:
         description: 'The version whose draft release to publish (e.g. 0.1.0)'
         required: true
         type: string
+  # tag-release.yml with `publish` calls it once the draft is there
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
 
 permissions:
   contents: read
-
-concurrency:
-  group: publish-release
-  cancel-in-progress: false
 
 jobs:
   publish:
@@ -28,6 +31,9 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write # publishing the release
+    concurrency:
+      group: publish-release
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
         with:
