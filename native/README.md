@@ -384,3 +384,8 @@ The tag can also be made from the web: Actions › "Tag release" (`.github/workf
 with the version (e.g. `0.1.0`). It checks that `main`'s head is that version and that its `main` run passed, tags
 it `desktop-native-v<version>` (never moving an existing tag), and starts `desktop.yml` on the tag, whose release
 job then makes the draft release. (A tag made with a workflow's own token starts no workflow by itself.)
+
+To publish the draft, either click Publish on GitHub or run Actions › "Publish release"
+(`.github/workflows/publish-release.yml`) with the version. It publishes only the one draft release of
+`desktop-native-v<version>` whose tag is on `main` and which carries all six packages, and marks it the latest
+release; anything else stops it with a message.
