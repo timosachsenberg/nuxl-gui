@@ -1,6 +1,8 @@
 # Tags a release from the web: run it from the Actions tab ("Tag release", Run workflow) with the version, e.g.
 # 0.1.0. It tags the head of main as desktop-native-v<version> and starts desktop.yml on the tag, whose release job
-# makes the draft release from the packages of main's tested run of that commit (desktop.yml, `release`).
+# makes the draft release from the packages of main's tested run of that commit (desktop.yml, `release`). With
+# `publish`, it waits for that job and then publishes the draft (publish-release.yml): the whole release in one run.
+# The version itself is set beforehand, on main: scripts/bump-version.mjs (CLAUDE.md, "Releasing").
 #
 # Why the second step: a tag pushed with the workflow's own token starts no workflow (GitHub's rule against
 # workflows triggering each other), but a workflow_dispatch does. The same checks as the release job run first, so
@@ -15,6 +17,11 @@ on:
         description: 'The version to release, as src-tauri/tauri.conf.json on main says it (e.g. 0.1.0)'
         required: true
         type: string
+      publish:
+        description: 'Publish the release once its draft is made (else it stays a draft, to publish by hand or with "Publish release")'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -85,3 +92,37 @@ jobs:
         run: |
           gh workflow run desktop.yml --ref "$TAG"
           echo "started desktop.yml on $TAG: its release job makes the draft release ($GITHUB_SERVER_URL/$GH_REPO/actions/workflows/desktop.yml)"
+
+      - name: Wait for the draft release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # the run just started (the tag is new, so desktop.yml has no other run on it)
+          run=""
+          for _ in $(seq 60); do
+            run=$(gh run list --workflow desktop.yml --branch "$TAG" --event workflow_dispatch --limit 1 \
+              --json databaseId --jq '.[0].databaseId // empty')
+            [ -n "$run" ] && break
+            sleep 5
+          done
+          if [ -z "$run" ]; then
+            echo "::error::desktop.yml did not start on $TAG within 5 minutes; nothing is published (run it on the tag, then \"Publish release\")."
+            exit 1
+          fi
+          echo "waiting for $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$run"
+          if ! gh run watch "$run" --exit-status --interval 20 >/dev/null; then
+            echo "::error::The release job on $TAG failed ($GITHUB_SERVER_URL/$GH_REPO/actions/runs/$run); nothing is published."
+            exit 1
+          fi
+
+  publish:
+    name: Publish desktop-native-v${{ inputs.version }}
+    needs: tag
+    if: inputs.publish
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-release.yml
+    with:
+      version: ${{ inputs.version }}

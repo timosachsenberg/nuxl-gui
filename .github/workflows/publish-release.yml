@@ -1,0 +1,97 @@
+# Publishes a draft release from the web: run it from the Actions tab ("Publish release", Run workflow) with the
+# version, e.g. 0.1.0. It publishes the draft "NuXL desktop <version>" that desktop.yml's release job made for the
+# tag desktop-native-v<version> (see tag-release.yml), and marks it the latest release.
+#
+# It publishes only that: a draft of that tag, whose tag points at a commit of main, with the six packages the
+# release job attaches. Anything else (no draft, several drafts of the tag, a release that is published already, a
+# missing package) stops it with a message and changes nothing. "Tag release" with `publish` runs it after the
+# release job.
+name: Publish release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The version whose draft release to publish (e.g. 0.1.0)'
+        required: true
+        type: string
+  # tag-release.yml with `publish` calls it once the draft is there
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish desktop-native-v${{ inputs.version }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write # publishing the release
+    concurrency:
+      group: publish-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Find the draft and check it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$VERSION' is not a version like 0.1.0."
+            exit 1
+          fi
+          tag="desktop-native-v$VERSION"
+          if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::There is no tag $tag: run \"Tag release\" first."
+            exit 1
+          fi
+          commit=$(git rev-parse "$tag^{commit}")
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "::error::The tag $tag points at $commit, which is not a commit of main."
+            exit 1
+          fi
+          # (the releases API names a draft only in the list of releases, not by its tag)
+          releases=$(gh api --paginate "repos/$GH_REPO/releases" \
+            --jq "[.[] | select(.tag_name == \"$tag\") | {id, draft, name, assets: [.assets[].name]}]" | jq -s 'add // []')
+          if [ "$(jq '[.[] | select(.draft | not)] | length' <<<"$releases")" -gt 0 ]; then
+            echo "::error::The release of $tag is published already."
+            exit 1
+          fi
+          drafts=$(jq '[.[] | select(.draft)]' <<<"$releases")
+          case "$(jq length <<<"$drafts")" in
+            0) echo "::error::There is no draft release of $tag: run desktop.yml on the tag (\"Tag release\" does), or wait for its release job."; exit 1 ;;
+            1) ;;
+            *) echo "::error::There are several draft releases of $tag; delete all but the one with the packages, then run this again."; exit 1 ;;
+          esac
+          assets=$(jq -r '.[0].assets[]' <<<"$drafts")
+          for want in "NuXL_${VERSION}_amd64.AppImage" "NuXL_${VERSION}_amd64.deb" "NuXL_${VERSION}_aarch64.AppImage" \
+            "NuXL_${VERSION}_arm64.deb" "NuXL_${VERSION}_aarch64.dmg" "NuXL_${VERSION}_x64-setup.exe"; do
+            if ! grep -qxF "$want" <<<"$assets"; then
+              echo "::error::The draft of $tag has no $want."
+              exit 1
+            fi
+          done
+          echo "draft $(jq -r '.[0].name' <<<"$drafts") of $tag ($commit), with:"
+          echo "$assets"
+          echo "RELEASE_ID=$(jq -r '.[0].id' <<<"$drafts")" >> "$GITHUB_ENV"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Publish it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          url=$(gh api -X PATCH "repos/$GH_REPO/releases/$RELEASE_ID" -F draft=false -f make_latest=true --jq .html_url)
+          echo "published $TAG: $url"
+          echo "Published [$TAG]($url)" >> "$GITHUB_STEP_SUMMARY"
