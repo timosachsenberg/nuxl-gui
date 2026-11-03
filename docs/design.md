@@ -17,7 +17,7 @@ OpenNuXL's options and outputs are those of OpenMS `develop` (pinned in `native/
 | Inputs | `.mzML`, `.mzML.gz` | `.mzML` only (OpenNuXL reads mzML; `.raw` needs ThermoRawFileParser, not bundled) |
 | Outputs | QPX Parquet | idXML (all hits, and FDR-filtered cross-links and peptides) and TSV reports |
 | Rescoring | Percolator + PeptDeep | Percolator (built into OpenMS, through `PercolatorAdapter`); OpenNuXL skips it below 1000 PSMs |
-| Decoys | ProSE's | OpenNuXL's own (`NuXL:decoys true`, prefix `DECOY_`), unless the database has decoys |
+| Decoys | ProSE's | always OpenNuXL's own (prefix `DECOY_`): its FDR, filtered outputs and Percolator exist only with them, so a database's own decoys are left out of `database.fasta` (with a note) |
 | Settings | enzyme, tolerances, modifications, FDR, ... | the same plus the **NuXL preset** (cross-linking protocol: RNA-UV (U), DNA-UV, RNA-DEB, ...), the longest nucleotide adduct (`NuXL:length`), scoring (`fast`/`slow`), cross-link FDR |
 | Results | proteins, peptides, PSMs, QC, open-search panels | the same levels, each PSM marked **cross-link or peptide**, with its **adduct**, its **cross-linked residue** (localization) and NuXL's own fragment annotation; Proteins show the cross-linked sites |
 | PSM view | observed vs PeptDeep prediction | observed peaks (read from the input mzML when the file is there) with NuXL's annotation (shifted ions, marker ions); mirror against the theoretical b/y ions |
@@ -29,7 +29,7 @@ A search lives in `<app data>/searches/<id>/` (`<id>.partial/` while it runs), a
 - `inputs.json`: the inputs in order, `[{ id, index, link, stem, name, path }]` (`args.rs` `InputRecord`); `link`
   is `<n>__<name>` (a symbolic link to the user's file in the folder; on Windows the user's own path where
   possible), `stem` is the link's name without `.mzML`.
-- `database.fasta` (the user's FASTA with the cRAP contaminants, `CON__` accessions) or `database.json`
+- `database.fasta` (the user's FASTA with the cRAP contaminants, `CON__` accessions, and without decoys of its own) or `database.json`
   (`{ "path": ... }`, the user's FASTA searched as it is).
 - `nuxl.log`: the tool's output of all runs (each run starts with a `$ <command line>` line).
 - `nuxl/` with OpenNuXL's outputs of input `k`, all named after the input's stem `<stem>`:
@@ -60,7 +60,7 @@ A search lives in `<app data>/searches/<id>/` (`<id>.partial/` while it runs), a
     are the `_perc_` files (Percolator ran and its results were written), else the plain ones. `xls` is the file
     of the highest cross-link threshold (`1.0000`: every target cross-link with its q-value); `proteins` is that of
     the lowest threshold ≤ 0.1 (OpenNuXL writes no protein report above 10 %). `notes` are OpenNuXL's warnings of
-    the run worth showing (the skipped Percolator). `fdr` are the search's cutoffs as the request gave them
+    the run worth showing (the skipped Percolator), and the shim's note when the database's own decoys were left out. `fdr` are the search's cutoffs as the request gave them
     (`settings.peptideFdr`, `settings.xlFdr`, fractions): OpenNuXL ran without filtering, so the results view filters
     the peptide PSMs and the cross-link PSMs at these.
 - `search.json` and `proteins.fasta`: History's record and the identified proteins, as in ProSE desktop.
@@ -73,8 +73,7 @@ For input `k` (`args.rs`), in the search folder as working directory:
 OpenNuXL -in <link or path> -database <database.fasta or the user's FASTA> -out nuxl/<stem>.idXML
          -out_tsv nuxl/<stem>.tsv -threads <n>
          -report:peptideFDR 0 -report:xlFDR 1.0 <fdr> -report:xl_peptidelevel_FDR 1.0 1.0
-         -percolator_backend builtin|none -percolator_executable ""  (none: rescoring off)
-         [-NuXL:decoys false]   (the database has decoys already)
+         -percolator_backend builtin|none   (none: rescoring off)
          <the allowlisted parameters of the form>
 ```
 
@@ -83,6 +82,8 @@ OpenNuXL -in <link or path> -database <database.fasta or the user's FASTA> -out 
   cross-link FDR, ≤ 0.1, left out when it is 1.0) is there so that OpenNuXL writes its protein report.
 - The allowlist (`args.rs` `PARAMETERS`) holds OpenNuXL's options by their full name (`precursor:mass_tolerance`,
   `NuXL:presets`, ...) with their types, as in ProSE desktop; nothing else of the front end becomes an option.
+- `NuXL:decoys` is never passed (OpenNuXL's FDR needs its decoys), nor `-percolator_executable` (empty, it would turn
+  the built-in Percolator off too). `precursor:isotopes` is an integer list.
 - `-in`, `-database`, `-out*`, `-threads`, `-report:*FDR*`, `-percolator_*`, `NuXL:decoys`, `output_folder`,
   `NuXL:presets_file`, `ThermoRaw_executable`, `NET_executable` are the shim's own and never come from the form.
 
@@ -102,8 +103,8 @@ OpenNuXL prints OpenMS' progress lines on stdout: `Progress of '<label>':`, then
 `-- done [took ...] --`, and log lines such as `Running percolator.`. The shim (`progress.rs`) turns them into
 `{ label, file, fraction }`: the file `k` of `n` and a fraction over all runs, each run weighted equally and split
 into its stages (reading and preprocessing the spectra, the database and decoys, scoring — the long stage, with
-its percentages —, post-processing, FDR, Percolator). Labels as in ProSE desktop: "Searching <name> (2 of 3)…",
-"Scoring <name> (2 of 3)… 45 %", "Percolator: <name> (2 of 3)…".
+its percentages —, post-processing, FDR, Percolator). Labels as in ProSE desktop: "Searching <name> (2 of 3)...",
+"Scoring <name> (2 of 3)... 45 %", "Percolator: <name> (2 of 3)...".
 
 ## 5. Results (the front end)
 
