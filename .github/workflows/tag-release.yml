@@ -1,0 +1,87 @@
+# Tags a release from the web: run it from the Actions tab ("Tag release", Run workflow) with the version, e.g.
+# 0.1.0. It tags the head of main as desktop-native-v<version> and starts desktop.yml on the tag, whose release job
+# makes the draft release from the packages of main's tested run of that commit (desktop.yml, `release`).
+#
+# Why the second step: a tag pushed with the workflow's own token starts no workflow (GitHub's rule against
+# workflows triggering each other), but a workflow_dispatch does. The same checks as the release job run first, so
+# that no tag is made that the release job would refuse: the version is tauri.conf.json's at main's head, and
+# main's push run of that commit passed. An existing tag is never moved.
+name: Tag release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The version to release, as src-tauri/tauri.conf.json on main says it (e.g. 0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag desktop-native-v${{ inputs.version }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write # the tag
+      actions: write # starting desktop.yml on it
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Check the version, main's tested run and the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$VERSION' is not a version like 0.1.0."
+            exit 1
+          fi
+          sha=$(git rev-parse HEAD)
+          have=$(jq -r .version src-tauri/tauri.conf.json)
+          if [ "$have" != "$VERSION" ]; then
+            echo "::error::main ($sha) is version $have (src-tauri/tauri.conf.json), not $VERSION."
+            exit 1
+          fi
+          tag="desktop-native-v$VERSION"
+          if gh api "repos/$GH_REPO/git/ref/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::The tag $tag exists already; it is not moved. To release it again, re-run its desktop run (Actions), or delete the tag first."
+            exit 1
+          fi
+          run=$(gh run list --workflow desktop.yml --branch main --event push --commit "$sha" --status success \
+            --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -z "$run" ]; then
+            echo "::error::No successful run of desktop.yml on main for $sha: wait for it to pass, then run this again."
+            exit 1
+          fi
+          echo "main $sha, version $VERSION, tested by $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$run"
+          echo "SHA=$sha" >> "$GITHUB_ENV"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Tag main's head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # an annotated tag, as `git tag -a` makes it
+          tag_object=$(gh api "repos/$GH_REPO/git/tags" -f tag="$TAG" -f message="NuXL desktop ${TAG#desktop-native-v}" \
+            -f object="$SHA" -f type=commit --jq .sha)
+          gh api "repos/$GH_REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$tag_object" >/dev/null
+          echo "tagged $SHA as $TAG"
+
+      - name: Start the release (desktop.yml on the tag)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh workflow run desktop.yml --ref "$TAG"
+          echo "started desktop.yml on $TAG: its release job makes the draft release ($GITHUB_SERVER_URL/$GH_REPO/actions/workflows/desktop.yml)"
