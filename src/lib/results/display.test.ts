@@ -100,8 +100,8 @@ describe('resultName', () => {
     expect(resultName(['EGF_time_1.mzML', 'EGF_time_2.mzML'])).toBe('EGF_time')
     expect(resultName(['DatabaseSuitability_1.mzML', 'DatabaseSuitability_2.mzML'])).toBe('DatabaseSuitability')
     expect(resultName(['/input/0/a b (1).mzML'])).toBe('a_b_1')
-    expect(resultName(['control_1.mzML', 'EGF_1.mzML'])).toBe('prose-results')
-    expect(resultName([])).toBe('prose-results')
+    expect(resultName(['control_1.mzML', 'EGF_1.mzML'])).toBe('nuxl-results')
+    expect(resultName([])).toBe('nuxl-results')
   })
 
   it('keeps the letters of any script', () => {

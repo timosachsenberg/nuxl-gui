@@ -94,7 +94,7 @@ function exportLight(svg: SVGSVGElement): string {
     if (inline.length > 0) copy.setAttribute('style', inline.join('; '))
   })
 
-  // what only the page shows (e.g. "Predicting with PeptDeep…"), no links, no images, no stylesheets or
+  // what only the page shows (e.g. "The theoretical spectrum could not be computed"), no links, no images, no stylesheets or
   // scripts: a link keeps its content
   for (const el of pageOnly) el.remove()
   for (const el of Array.from(clone.querySelectorAll('a'))) el.replaceWith(...Array.from(el.childNodes))

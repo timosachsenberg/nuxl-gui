@@ -79,7 +79,8 @@ export function changedParameters(
 /**
  * The parameters of a search request: the values of OpenNuXL's parameters (`entries`: the shim's allowlist) that
  * differ from OpenNuXL's defaults. Nothing else goes: not the search's own settings (`SEARCH_SETTINGS`), not a name
- * OpenNuXL's list does not have (a preset of another version).
+ * OpenNuXL's list does not have (a preset of another version), not an empty text (the shim passes no argument for
+ * one, so OpenNuXL's default applies: the field says so, `emptyTextDefault`).
  */
 export function requestParameters(values: Record<string, unknown>, entries: ParamEntry[]): Record<string, unknown> {
   const parameters: Record<string, unknown> = {}
@@ -87,9 +88,18 @@ export function requestParameters(values: Record<string, unknown>, entries: Para
     if (!(e.name in values)) continue
     const value = values[e.name]
     if (value === undefined || sameValue(value, e.value)) continue
+    if (e.type === 'string' && value === '') continue
     parameters[e.name] = copyValue(value)
   }
   return parameters
+}
+
+/**
+ * OpenNuXL's default that runs when a text parameter is left empty (the shim passes no argument for an empty text):
+ * its default when that is not empty, else null (empty and the default are the same).
+ */
+export function emptyTextDefault(entry: ParamEntry): string | null {
+  return entry.type === 'string' && typeof entry.value === 'string' && entry.value !== '' ? entry.value : null
 }
 
 /** A value that can be edited without changing the original (lists are copied). */

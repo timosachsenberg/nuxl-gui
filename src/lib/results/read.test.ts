@@ -194,18 +194,28 @@ describe('readSearch: the example', () => {
     ])
     expect(summary).toMatchObject({ psmFdr: 0.01, proteinFdrApplied: false, openSearch: false, modificationAnalysis: null, decoyString: 'DECOY_' })
     expect(summary.search).toMatchObject({ enzyme: 'Trypsin/P', databaseFile: '/home/sachsenb/Development/OpenMS/src/tests/topp/OpenNuXL_1_input.fasta', secondsTotal: 1.5 })
-    expect(nuxl).toEqual({ xlFdr: 0.01, peptideFdr: 0.01, percolator: [false], notes: [['Too few PSMs for score recalibration. Skipped.']] })
+    expect(nuxl).toEqual({
+      xlFdr: 0.01,
+      peptideFdr: 0.01,
+      percolator: [false],
+      percolatorScores: false,
+      notes: [['Too few PSMs for score recalibration. Skipped.']],
+    })
     expect(await countTargetPsms(folder('example').files)).toBe(17)
   })
 })
 
 describe('readSearch: Percolator, the precursor error, the FDR group', () => {
-  /** The example with the cross-links' file changed by `edit` and outputs.json saying Percolator ran. */
-  const percolated = (edit: (xls: string) => string) =>
+  /**
+   * The example with the cross-links' file changed by `edit` (and the peptides' file by `editPeptides`) and
+   * outputs.json saying Percolator ran.
+   */
+  const percolated = (edit: (xls: string) => string, editPeptides?: (peptides: string) => string) =>
     readSearch(
       folder('example', {
         override: {
           [XLS]: edit(text(`example/${XLS}`)),
+          ...(editPeptides ? { [PEPTIDES]: editPeptides(text(`example/${PEPTIDES}`)) } : {}),
           [OUTPUTS]: JSON.stringify({ ...JSON.parse(text(`example/${OUTPUTS}`)), percolator: true, notes: [] }),
         },
       }).files,
@@ -215,17 +225,35 @@ describe('readSearch: Percolator, the precursor error, the FDR group', () => {
     return xls.replace(/\t\t\t<\/PeptideHit>\n/g, () => `${params(n++)}\t\t\t</PeptideHit>\n`)
   }
 
-  test("a rescored run: Percolator's svm score (svm_score, as NuXLFDR keeps it) and PEP (MS:1001493)", async () => {
-    const r = await percolated((xls) =>
-      withParams(xls, (n) => `\t\t\t\t<UserParam type="float" name="svm_score" value="${n / 10}"/>\n\t\t\t\t<UserParam type="float" name="MS:1001493" value="${n / 100}"/>\n`),
+  const svmAndPep = (offset: number) => (xls: string) =>
+    withParams(
+      xls,
+      (n) => `\t\t\t\t<UserParam type="float" name="svm_score" value="${(n + offset) / 10}"/>\n\t\t\t\t<UserParam type="float" name="MS:1001493" value="${(n + offset) / 100}"/>\n`,
     )
+
+  test("a rescored run: Percolator's svm score (svm_score, as NuXLFDR keeps it) and PEP (MS:1001493)", async () => {
+    const r = await percolated(svmAndPep(0), svmAndPep(100))
     const { psms } = r.tables
-    // the cross-links (rows 5 ..) rescored; the peptides' file was not edited: NuXL's score, no PEP
+    // the cross-links (rows 5 ..) and the peptides (rows 0 .. 4) rescored
     expect(Array.from(psms.score.subarray(5, 8))).toEqual([0, 0.1, 0.2])
     expect(Array.from(psms.pep.subarray(5, 8))).toEqual([0, 0.01, 0.02])
-    expect(psms.pep[0]).toBeNaN()
+    expect(psms.score[0]).toBe(10)
+    expect(psms.pep[0]).toBe(1)
     expect(r.summary.files[0].percolator).toEqual({ applied: true, skipped: null, warning: null })
     expect(r.nuxl.percolator).toEqual([true])
+    expect(r.nuxl.percolatorScores).toBe(true)
+  })
+
+  test("Percolator's scores for only some PSMs: NuXL's score for all of them, one scale", async () => {
+    const plain = await readExample()
+    // the cross-links' file rescored, the peptides' not
+    const r = await percolated(svmAndPep(0))
+    const { psms } = r.tables
+    expect(r.nuxl.percolatorScores).toBe(false)
+    expect(Array.from(psms.score)).toEqual(Array.from(plain.tables.psms.score))
+    expect(Array.from(r.tables.proteins.score)).toEqual(Array.from(plain.tables.proteins.score))
+    // Percolator's PEP stays where it is
+    expect(Array.from(psms.pep.subarray(5, 8))).toEqual([0, 0.01, 0.02])
   })
 
   test("OpenNuXL's precursor error unless it disagrees with the masses; NuXL:fdr_group as written", async () => {

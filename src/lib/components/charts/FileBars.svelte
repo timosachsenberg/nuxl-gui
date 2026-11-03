@@ -1,7 +1,7 @@
 <script lang="ts">
-  // The PSMs of each file as horizontal bars (a bar chart of one series, so one colour): the file's
-  // name at the left, the value at the bar's end. The bars are at most 16 px thick with the data end
-  // rounded, drawn from one baseline. Hovering a row names the file in full. The numbers are also in the
+  // Counts of named things as horizontal bars (a bar chart of one series, so one colour): the PSMs of each
+  // file, of each adduct or amino acid. The name at the left, the value at the bar's end. The bars are at most 16 px thick with the data end
+  // rounded, drawn from one baseline. Hovering a row names the item in full. The numbers are also in the
   // table under the chart (`ChartCard`).
   import { hBarPath, fitText } from '$lib/format/chart'
   import { formatCount } from '$lib/results/display'
@@ -14,16 +14,24 @@
     items,
     color,
     unit = 'PSMs',
+    testid = 'file-chart',
+    mono = false,
   }: {
     title: string
     description: string
+    /** The bars: `file` is the name at the left (a file, an adduct, an amino acid). */
     items: { file: string; count: number }[]
     color: string
     unit?: string
+    /** `data-testid` of the chart. */
+    testid?: string
+    /** The names in monospace (formulas, residues). */
+    mono?: boolean
   } = $props()
 
   const uid = $props.id()
   const font = "'Inter Variable', ui-sans-serif, system-ui, sans-serif"
+  const monoFont = "'Liberation Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
   // the theme's colours (app.css)
   const ink = 'var(--plot-ink)'
   const rowHeight = 28
@@ -31,7 +39,9 @@
   const maxName = 230
 
   let width = $state(520)
-  const longest = $derived(Math.max(0, ...items.map((i) => textWidth(i.file, 12))))
+  // (a monospace character is about 0.6 em)
+  const nameWidth = (name: string) => (mono ? name.length * 7.3 : textWidth(name, 12))
+  const longest = $derived(Math.max(0, ...items.map((i) => nameWidth(i.file))))
   const labelWidth = $derived(Math.min(maxName, Math.ceil(longest)))
   const max = $derived(Math.max(1, ...items.map((i) => i.count)))
   const valueWidth = $derived(textWidth(formatCount(max), 12) + 10)
@@ -49,7 +59,7 @@
 
 <div class="relative" bind:clientWidth={width}>
   <svg
-    data-testid="file-chart"
+    data-testid={testid}
     role="img"
     aria-labelledby="{uid}-title"
     aria-describedby="{uid}-desc"
@@ -67,7 +77,7 @@
     {#each items as item, i (i)}
       {@const top = 4 + i * rowHeight + (rowHeight - barHeight) / 2}
       {@const length = (item.count / max) * span}
-      <text x={labelWidth} y={px(top + barHeight / 2 + 4)} text-anchor="end" font-size="12" fill={ink} data-testid="file-name">{fitText(item.file, maxName, 12)}</text>
+      <text x={labelWidth} y={px(top + barHeight / 2 + 4)} text-anchor="end" font-size="12" fill={ink} font-family={mono ? monoFont : undefined} data-testid="file-name">{fitText(item.file, maxName, 12)}</text>
       {#if item.count > 0}<path d={hBarPath(x0, top, Math.max(2, length), barHeight, 4)} fill={color} data-testid="file-bar" />{:else}<path d="" data-testid="file-bar" />{/if}
       <text x={px(x0 + Math.max(2, length) + 6)} y={px(top + barHeight / 2 + 4)} font-size="12" fill={ink} data-testid="file-value">{formatCount(item.count)}</text>
     {/each}

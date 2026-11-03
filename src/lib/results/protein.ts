@@ -1,13 +1,12 @@
 // What the protein panel shows of one protein: the residues its peptides cover, the peptides and their
-// PSMs, the modified sites, the proteins it cannot be told apart from. Pure functions on the results
-// model. Positions are 0-based [start, end) as the engine records them, and clamped to the protein's
+// PSMs, the modified sites and the cross-linked residues. Pure functions on the results model. Positions are 0-based [start, end) as the engine records them, and clamped to the protein's
 // sequence: the engine may record a peptide beyond it (when it has no sequence or lacks the peptide).
 //
 // The coverage is computed by `markCovered`, which `buildModel` uses for the Coverage column of the
 // table: the panel cannot disagree with it.
 
 import { modTitle, peptideView, type ModInfo } from '../format/peptide'
-import type { ResultModel } from './model'
+import { psmCutoff, psmPasses, type ResultModel } from './model'
 
 /** A stretch of a protein's sequence: residues `start` to `end - 1` (0-based). */
 export type Span = { start: number; end: number }
@@ -98,8 +97,15 @@ export type ProteinDetail = {
   sequences: number
   /** Its PSMs (the table's PSMs column). */
   psms: number
-  /** The modified residues, ascending; fixed modifications are not among them. */
+  /**
+   * The modified residues, ascending; fixed modifications are not among them, nor the adduct of a cross-link,
+   * which is a modification of its peptide at the cross-linked residue (those are `xlSites`).
+   */
   sites: ModifiedSite[]
+  /** The cross-linked residues, ascending (`crossLinkedSites`). */
+  xlSites: CrossLinkedSite[]
+  /** Of `psms`, the cross-link PSMs (the table's XL PSMs column). */
+  xlPsms: number
 }
 
 /**
@@ -160,9 +166,12 @@ export function proteinDetail(m: ResultModel, p: number, fixedMods: string[]): P
     const view = peptideView(pt, e.peptide, fixedMods)
     if (!view.nTerm && !view.cTerm && !view.residues.some((r) => r.mod)) continue
     const size = pt.sequence[e.peptide].length
+    const adduct = pt.isXL[e.peptide] ? pt.adduct[e.peptide] : ''
     for (const at of starts.get(e.peptide)!) {
       const add = (position: number, mod: ModInfo | undefined) => {
         if (!mod || position < 0 || position >= length) return
+        // a cross-link's adduct: a cross-linked site, not a modified one
+        if (adduct !== '' && mod.name === adduct) return
         const site = sites.get(position)
         if (!site) sites.set(position, { position, residue: sequence[position], peptide: e.peptide, mods: [mod] })
         else if (!site.mods.some((x) => x.name === mod.name && x.unimod === mod.unimod && x.mass === mod.mass)) site.mods.push(mod)
@@ -190,7 +199,110 @@ export function proteinDetail(m: ResultModel, p: number, fixedMods: string[]): P
     sequences: distinct.size,
     psms,
     sites: [...sites.values()].sort((a, b) => a.position - b.position),
+    xlSites: crossLinkedSites(m, p),
+    xlPsms: m.protein.xlPsms[p],
   }
+}
+
+// ---- cross-linked residues
+
+/** A residue of the protein that cross-link PSMs put the nucleic acid on. */
+export type CrossLinkedSite = {
+  /** 0-based residue of the protein. */
+  position: number
+  /** Its amino acid (one letter). */
+  residue: string
+  /** Its cross-link PSMs. */
+  psms: number
+  /** The adducts of those PSMs with their PSMs, most PSMs first (equal ones by name). */
+  adducts: { adduct: string; psms: number }[]
+}
+
+/** A site as the panel names it: "K123". */
+export const siteLabel = (site: CrossLinkedSite) => `${site.residue}${site.position + 1}`
+
+/** "K123 (U-H3O4P1 ×3, UU-H2O ×1)": the site with the adducts of its PSMs. */
+export function crossLinkTitle(site: CrossLinkedSite): string {
+  return `${siteLabel(site)} (${site.adducts.map((a) => `${a.adduct || 'no adduct'} ×${a.psms}`).join(', ')})`
+}
+
+/** Per peptide: its localized cross-link PSMs within the search's cutoffs (decoys left out), once per model. */
+const localized = new WeakMap<ResultModel, Map<number, number[]>>()
+
+function localizedPsms(m: ResultModel): Map<number, number[]> {
+  let byPeptide = localized.get(m)
+  if (!byPeptide) {
+    byPeptide = new Map()
+    const ps = m.tables.psms
+    const limits = { peptide: m.psmFdr, xl: m.xlFdr }
+    for (let i = 0; i < ps.count; i++) {
+      if (!ps.xl.isXL[i] || ps.xl.site[i] < 0 || ps.decoy[i] || !psmPasses(m, i, limits)) continue
+      const rows = byPeptide.get(ps.peptide[i])
+      if (rows) rows.push(i)
+      else byPeptide.set(ps.peptide[i], [i])
+    }
+    localized.set(m, byPeptide)
+  }
+  return byPeptide
+}
+
+/**
+ * The cross-linked residues of protein `p`: where its cross-link PSMs within the search's cross-link FDR put the
+ * nucleic acid (the peptide's start in the protein plus the PSM's site, `psms.xl.site`), ascending. A PSM whose
+ * cross-link is not localized has no site; a peptide that occurs twice in the protein gives a site at each place. A
+ * peptide whose place in the protein is unknown (start = end = 0: no start in the idXML, not found in the sequence)
+ * gives no site, nor does a site beyond the protein's sequence (the search recorded the peptide there); without a
+ * sequence the residue is the peptide's.
+ */
+export function crossLinkedSites(m: ResultModel, p: number): CrossLinkedSite[] {
+  const byPeptide = localizedPsms(m)
+  if (byPeptide.size === 0) return []
+  const pt = m.tables.peptides
+  const ps = m.tables.psms
+  const sequence = m.tables.proteins.sequence[p]
+  const { offsets, peptide: members, ref } = m.protein.members
+  const sites = new Map<number, { residue: string; psms: number; adducts: Map<string, number> }>()
+  for (let r = offsets[p]; r < offsets[p + 1]; r++) {
+    const k = members[r]
+    const rows = byPeptide.get(k)
+    if (!rows) continue
+    const start = pt.start[ref[r]]
+    if (!(pt.end[ref[r]] > start)) continue
+    for (const i of rows) {
+      const at = ps.xl.site[i]
+      const position = start + at
+      if (sequence.length > 0 && position >= sequence.length) continue
+      let site = sites.get(position)
+      if (!site) sites.set(position, (site = { residue: sequence[position] ?? pt.sequence[k][at] ?? '?', psms: 0, adducts: new Map() }))
+      site.psms++
+      site.adducts.set(ps.xl.adduct[i], (site.adducts.get(ps.xl.adduct[i]) ?? 0) + 1)
+    }
+  }
+  return [...sites]
+    .sort((a, b) => a[0] - b[0])
+    .map(([position, s]) => ({
+      position,
+      residue: s.residue,
+      psms: s.psms,
+      adducts: [...s.adducts]
+        .map(([adduct, psms]) => ({ adduct, psms }))
+        .sort((a, b) => b.psms - a.psms || (a.adduct < b.adduct ? -1 : a.adduct > b.adduct ? 1 : 0)),
+    }))
+}
+
+const siteCounts = new WeakMap<ResultModel, Uint32Array>()
+
+/** Per protein: its cross-linked residues (`crossLinkedSites(m, p).length`), the table's XL sites column; once per model. */
+export function proteinXlSites(m: ResultModel): Uint32Array {
+  let counts = siteCounts.get(m)
+  if (!counts) {
+    counts = new Uint32Array(m.tables.proteins.count)
+    if (localizedPsms(m).size > 0) {
+      for (let p = 0; p < counts.length; p++) if (m.protein.xlPsms[p] > 0) counts[p] = crossLinkedSites(m, p).length
+    }
+    siteCounts.set(m, counts)
+  }
+  return counts
 }
 
 // ---- PSMs
@@ -225,11 +337,14 @@ function byQValue(q: Float64Array) {
   }
 }
 
-/** The PSMs of peptide `k` within the search's PSM FDR (those the tables count), best q-value first. */
+/**
+ * The PSMs of peptide `k` within the search's cutoff of their kind (the peptide FDR, or the cross-link FDR for a
+ * cross-link: those the tables count), best q-value first.
+ */
 export function peptidePsms(m: ResultModel, k: number): Uint32Array {
   const { offsets, psm } = psmsByPeptide(m)
   const q = m.tables.psms.qValue
-  const rows = psm.slice(offsets[k], offsets[k + 1]).filter((i) => !(q[i] > m.psmFdr))
+  const rows = psm.slice(offsets[k], offsets[k + 1]).filter((i) => !(q[i] > psmCutoff(m, i)))
   return rows.sort(byQValue(q))
 }
 
@@ -243,29 +358,4 @@ export function proteinPsms(m: ResultModel, detail: ProteinDetail): Uint32Array 
     at += part.length
   }
   return rows.sort(byQValue(m.tables.psms.qValue))
-}
-
-// ---- groups
-
-const groupMembers = new WeakMap<ResultModel, Map<number, number[]>>()
-
-/**
- * The other proteins of the protein's group of indistinguishable proteins (they share all their
- * identified peptides), ascending; none without a group (`group` -1). A decoy's mates are decoys.
- */
-export function groupMates(m: ResultModel, p: number): number[] {
-  const { group, decoy, count } = m.tables.proteins
-  if (group[p] < 0) return []
-  let groups = groupMembers.get(m)
-  if (!groups) {
-    groups = new Map()
-    for (let q = 0; q < count; q++) {
-      if (group[q] < 0) continue
-      const members = groups.get(group[q])
-      if (members) members.push(q)
-      else groups.set(group[q], [q])
-    }
-    groupMembers.set(m, groups)
-  }
-  return (groups.get(group[p]) ?? []).filter((q) => q !== p && decoy[q] === decoy[p])
 }

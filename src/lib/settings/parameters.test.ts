@@ -6,6 +6,7 @@ import {
   changedParameters,
   defaultsOf,
   dialogEntries,
+  emptyTextDefault,
   parameterSections,
   requestParameters,
   sameValue,
@@ -89,6 +90,16 @@ describe('parameters', () => {
     const sent = requestParameters(values, entries)
     ;(sent.filter as string[]).push('idfilter')
     expect(values.filter).toEqual(['autotune'])
+  })
+
+  it('sends no empty text, which runs with OpenNuXL\'s default (the shim passes nothing for it)', () => {
+    const crossLink = entry('NuXL:can_cross_link', 'U')
+    const sequence = entry('NuXL:sequence', '')
+    expect(requestParameters({ 'NuXL:can_cross_link': '', 'NuXL:sequence': '' }, [crossLink, sequence])).toEqual({})
+    expect(requestParameters({ 'NuXL:can_cross_link': 'UG' }, [crossLink])).toEqual({ 'NuXL:can_cross_link': 'UG' })
+    expect(emptyTextDefault(crossLink)).toBe('U')
+    expect(emptyTextDefault(sequence)).toBeNull()
+    expect(emptyTextDefault(entry('precursor:mass_tolerance', 6))).toBeNull()
   })
 
   it('has the FDRs of 1 % as the search\'s own settings', () => {

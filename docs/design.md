@@ -113,7 +113,8 @@ its percentages —, post-processing, FDR, Percolator). Labels as in ProSE deskt
 
 - one PSM row per spectrum's top hit of the input's `xls` and `peptides` files (targets only: the filtered
   files hold no decoys), inputs in order; `qValue` is the hit's score in those files (their score type is the
-  q-value), `score` NuXL's score (`NuXL:score`), or Percolator's (`svm_score`) when the run was rescored, `pep`
+  q-value), `score` NuXL's score (`NuXL:score`), or Percolator's (`svm_score`) when every run was rescored (with only
+  some rescored, NuXL's for all, so that the column has one scale; `SearchResult.nuxl.percolatorScores`), `pep`
   Percolator's PEP when it is there;
 - `tables.psms.xl` (see `types.ts`): per PSM row whether it is a cross-link, its adduct, nucleotide, site and
   site score, FDR group, and NuXL's fragment annotation;

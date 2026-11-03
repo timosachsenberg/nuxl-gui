@@ -307,9 +307,10 @@ describe('initialFilters', () => {
   it("starts each level at the search's cutoff, contaminants and decoys hidden", () => {
     const tables = sampleTables()
     const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, psmFdr: 0.01, proteinFdr: 0.05 })
-    expect(initialFilters(m, 'proteins')).toEqual({ ...defaultFilters(), maxQ: 0.05, hideContaminants: true })
-    expect(initialFilters(m, 'peptides')).toEqual({ ...defaultFilters(), maxQ: 0.01, hideContaminants: true })
-    expect(initialFilters(m, 'psms')).toEqual({ ...defaultFilters(), maxQ: 0.01, hideContaminants: true })
+    // (no cross-link: the cross-link FDR is the peptides', and every kind shows)
+    expect(initialFilters(m, 'proteins')).toEqual({ ...defaultFilters(), maxQ: 0.05, maxXlQ: 0.01, hideContaminants: true })
+    expect(initialFilters(m, 'peptides')).toEqual({ ...defaultFilters(), maxQ: 0.01, maxXlQ: 0.01, hideContaminants: true })
+    expect(initialFilters(m, 'psms')).toEqual({ ...defaultFilters(), maxQ: 0.01, maxXlQ: 0.01, hideContaminants: true })
     // separate objects: one filter state per level
     expect(initialFilters(m, 'psms')).not.toBe(initialFilters(m, 'psms'))
   })

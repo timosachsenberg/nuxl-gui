@@ -46,15 +46,13 @@ function sampleSpecs(m: ResultModel): ColumnSpec[] {
   )
 }
 
-/**
- * The columns of a level's table. `openSearch` (from the search's summary) shows the PSMs' mass
- * shift column by default.
- */
-export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: boolean }): ColumnSpec[] {
+/** The columns of a level's table. */
+export function columnSpecs(m: ResultModel, level: Level): ColumnSpec[] {
   const nSamples = new Set(m.columnSample).size
   const foundTitle = `Biological samples with a PSM, out of ${nSamples}. Each condition and replicate is one sample.`
   if (level === 'proteins') {
     const atSearch = `Counted at the search's PSM FDR (${formatPercent(m.psmFdr)}, ${formatQ(m.psmFdr)})`
+    const atXl = `at the search's cross-link FDR (${formatPercent(m.xlFdr)}, ${formatQ(m.xlFdr)})`
     return [
       col('accession', 'Accession', 160, 'left'),
       col('gene', 'Gene', 84, 'left', { optional: 'shown' }),
@@ -62,12 +60,12 @@ export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: 
       col('coverage', 'Coverage', 112, 'left', { title: `Residues covered by peptides with PSMs at the search's PSM FDR` }),
       col('peptides', 'Peptides', 90, 'right', { title: atSearch }),
       col('psms', 'PSMs', 84, 'right', { title: atSearch }),
+      col('xlSites', 'XL sites', 84, 'right', { optional: 'shown', title: `Cross-linked residues of the protein: where its localized cross-link PSMs put the nucleic acid, ${atXl}` }),
+      col('xlPsms', 'XL PSMs', 84, 'right', { optional: 'shown', title: `Cross-link PSMs ${atXl}` }),
       ...sampleSpecs(m).map((s) => ({ ...s, title: `${s.title}. ${atSearch}` })),
       col('foundIn', 'Found in', 84, 'left', { title: foundTitle }),
-      col('qValue', 'q-value', 90, 'right', { optional: 'hidden', title: 'Protein q-value' }),
       col('score', columnDef(m, 'proteins', 'score')!.header, 170, 'right', { optional: 'hidden' }),
       col('length', 'Length', 70, 'right', { optional: 'hidden', title: 'Residues' }),
-      col('group', 'Group', 70, 'right', { optional: 'hidden', title: 'Protein group' }),
     ]
   }
   if (level === 'peptides') {
@@ -96,7 +94,6 @@ export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: 
     col('score', columnDef(m, 'psms', 'score')!.header, 130, 'right'),
     col('qValue', 'q-value', 90, 'right'),
     col('pep', 'PEP', 70, 'right', { optional: 'hidden', title: 'Posterior error probability (Percolator)' }),
-    col('deltaMass', 'Δ mass (Da)', 104, 'right', { optional: search.openSearch ? 'shown' : 'hidden', title: 'Unassigned mass shift of an open search' }),
     col('fdrGroup', 'FDR group', 96, 'left', { optional: 'hidden', title: 'The target-decoy group of the PSM’s q-value: peptides, cross-links (short cross-links can be their own)' }),
     col('file', 'File', 160, 'left', { optional: 'hidden' }),
     col('isotopeError', 'Isotope error', 110, 'right', { optional: 'hidden' }),

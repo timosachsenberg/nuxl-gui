@@ -4,19 +4,33 @@
 
 import { columnDef } from './columns'
 import { naturalKey, parseAccession, scanNumber } from './display'
-import { passesQ, peptideCounts, qLimit, type Level, type ResultModel } from './model'
+import { passesQ, peptideCounts, psmPasses, qLimit, qLimits, type Level, type ResultModel } from './model'
+
+/** Which PSMs (peptides, proteins) a table shows: all, the cross-links (cross-linked proteins), the peptides without. */
+export type Kind = 'all' | 'xl' | 'peptide'
 
 export type FilterState = {
   /** Words that all have to match, case-insensitively, anywhere in a row (see `applyFilters`). */
   text: string
   /**
-   * The q-value limit of the level (a protein's own, a peptide's best PSM, a PSM's). It can only
-   * tighten the search: a value above the search's FDR (`ResultModel.psmFdr` / `proteinFdr`) works
-   * like the search's FDR, and so does NaN. The Peptides table shows its PSM counts at this cutoff:
-   * `sortRows` and `toCsv` take the level's filter state for that (and the cells read
-   * `peptideCounts(m, maxQ)`).
+   * The q-value limit of the level (a protein's own, a peptide's best PSM, a PSM's); on peptides and PSMs that of
+   * the peptide PSMs (not cross-links). It can only tighten the search: a value above the search's FDR
+   * (`ResultModel.psmFdr` / `proteinFdr`) works like the search's FDR, and so does NaN. The Peptides table shows its
+   * PSM counts at this cutoff and `maxXlQ`: `sortRows` and `toCsv` take the level's filter state for that (and the
+   * cells read `peptideCounts(m, maxQ, maxXlQ)`).
    */
   maxQ: number
+  /** Peptides and PSMs: the q-value limit of the cross-link PSMs (peptides: their best PSM's), limited by `xlFdr`. */
+  maxXlQ: number
+  /**
+   * Cross-links or peptides only. A PSM is one by `xl.isXL`, a peptide by `peptides.isXL`; on proteins 'xl' keeps
+   * the cross-linked ones (a cross-link PSM within the search's cutoff) and 'peptide' those without.
+   */
+  kind: Kind
+  /** Peptides and PSMs: only this adduct (`'U-H3O4P1'`); '' any. */
+  adduct: string
+  /** Peptides and PSMs: only this cross-linked nucleotide (`'U'`; a peptide: one of its PSMs'); '' any. */
+  nucleotide: string
   /** Proteins only: at least this many peptides with PSMs. 0 = any. */
   minPeptides: number
   /** Proteins only: in at least one condition, at least this many of its samples found the protein. 0 = any. */
@@ -34,13 +48,65 @@ export type FilterState = {
  * peptides and PSMs), contaminants and decoys hidden. A new object per call: one state per level.
  */
 export function initialFilters(m: ResultModel, level: Level): FilterState {
-  return { ...defaultFilters(), maxQ: level === 'proteins' ? m.proteinFdr : m.psmFdr, hideContaminants: true }
+  return {
+    ...defaultFilters(),
+    maxQ: level === 'proteins' ? m.proteinFdr : m.psmFdr,
+    maxXlQ: m.xlFdr,
+    hideContaminants: true,
+    // a cross-link search is about its cross-links: the Peptides and PSMs tables start with them, if there are any
+    kind: level !== 'proteins' && m.xlPsms > 0 ? 'xl' : 'all',
+  }
 }
 
 /** No filter, at the search's own FDR, decoys hidden. */
 export function defaultFilters(): FilterState {
-  return { text: '', maxQ: 1, minPeptides: 0, minReplicatesInCondition: 0, hideContaminants: false, showDecoys: false }
+  return {
+    text: '',
+    maxQ: 1,
+    maxXlQ: 1,
+    kind: 'all',
+    adduct: '',
+    nucleotide: '',
+    minPeptides: 0,
+    minReplicatesInCondition: 0,
+    hideContaminants: false,
+    showDecoys: false,
+  }
 }
+
+/** A choice of the adduct or nucleotide filter: the value and its target PSMs at the search's cutoffs. */
+export type Choice = { value: string; psms: number }
+
+const choiceCache = new WeakMap<ResultModel, { adducts: Choice[]; nucleotides: Choice[] }>()
+
+/**
+ * The adducts and the cross-linked nucleotides of the target PSMs within the search's cutoffs, most PSMs first
+ * (then by name): what the adduct and nucleotide filters offer. Once per model.
+ */
+export function crossLinkChoices(m: ResultModel): { adducts: Choice[]; nucleotides: Choice[] } {
+  let choices = choiceCache.get(m)
+  if (!choices) {
+    const ps = m.tables.psms
+    const adducts = new Map<string, number>()
+    const nucleotides = new Map<string, number>()
+    const limits = { peptide: m.psmFdr, xl: m.xlFdr }
+    for (let i = 0; i < ps.count; i++) {
+      if (ps.decoy[i] || !psmPasses(m, i, limits)) continue
+      const a = ps.xl.adduct[i]
+      const n = ps.xl.nucleotide[i]
+      if (a !== '') adducts.set(a, (adducts.get(a) ?? 0) + 1)
+      if (n !== '') nucleotides.set(n, (nucleotides.get(n) ?? 0) + 1)
+    }
+    const sorted = (counts: Map<string, number>) =>
+      [...counts].map(([value, psms]) => ({ value, psms })).sort((a, b) => b.psms - a.psms || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0))
+    choices = { adducts: sorted(adducts), nucleotides: sorted(nucleotides) }
+    choiceCache.set(m, choices)
+  }
+  return choices
+}
+
+/** Whether a row of kind `isXL` passes the kind filter. */
+const kindPasses = (kind: Kind, isXL: boolean) => kind === 'all' || (kind === 'xl') === isXL
 
 /**
  * What the text filters find of an accession: the ID the tables show and the UniProt entry name ("P02768",
@@ -92,8 +158,8 @@ function foundInReplicates(m: ResultModel, protein: number, need: number): boole
 }
 
 /**
- * The peptides that the text, contaminant and protein filters let through (a mask, 1 = passes); the
- * q-value and decoy filters differ between the peptide and PSM levels and are applied there.
+ * The peptides that the text, contaminant, protein and adduct filters let through (a mask, 1 = passes); the
+ * q-value, kind, nucleotide and decoy filters differ between the peptide and PSM levels and are applied there.
  */
 function peptideMask(m: ResultModel, f: FilterState): Uint8Array {
   const pt = m.tables.peptides
@@ -106,6 +172,9 @@ function peptideMask(m: ResultModel, f: FilterState): Uint8Array {
   }
   if (f.hideContaminants) {
     for (let k = 0; k < pt.count; k++) if (m.peptide.contaminant[k]) mask[k] = 0
+  }
+  if (f.adduct) {
+    for (let k = 0; k < pt.count; k++) if (pt.adduct[k] !== f.adduct) mask[k] = 0
   }
   const tokens = words(f.text)
   if (tokens.length > 0) {
@@ -130,12 +199,13 @@ function peptideMask(m: ResultModel, f: FilterState): Uint8Array {
  * The rows of `level` that pass the filters, ascending.
  *
  * - Proteins: `text` (accession as shown and entry name, description, the sequences of its peptides), `maxQ` (protein q-value, limited by `proteinFdr`),
- *   `minPeptides`, `minReplicatesInCondition`, `hideContaminants`, `showDecoys`.
- * - Peptides: `text` (sequence, ProForma, accessions of the proteins as shown), `maxQ` on the best PSM's
- *   q-value (there is no peptide-level FDR; limited by `psmFdr`), `hideContaminants` (peptides that
- *   map only to contaminants), `showDecoys`, `proteinFilter`.
- * - PSMs: `text` and `hideContaminants` through the peptide, `maxQ` (PSM q-value, limited by `psmFdr`),
- *   `showDecoys`, `proteinFilter` and `peptideFilter`.
+ *   `minPeptides`, `minReplicatesInCondition`, `hideContaminants`, `showDecoys`, `kind` (cross-linked: a
+ *   cross-link PSM within the search's cutoff).
+ * - Peptides: `text` (sequence, ProForma, accessions of the proteins as shown), `maxQ` (`maxXlQ` for a cross-link)
+ *   on the best PSM's q-value (there is no peptide-level FDR; limited by `psmFdr` / `xlFdr`), `hideContaminants`
+ *   (peptides that map only to contaminants), `showDecoys`, `proteinFilter`, `kind`, `adduct`, `nucleotide`.
+ * - PSMs: `text`, `hideContaminants` and `adduct` through the peptide, `maxQ` (`maxXlQ` for a cross-link; PSM
+ *   q-value, limited by `psmFdr` / `xlFdr`), `showDecoys`, `proteinFilter`, `peptideFilter`, `kind`, `nucleotide`.
  *
  * A row without a q-value passes `maxQ` at the search's cutoff only (`passesQ`): the search did not apply that FDR
  * to it, and a tighter cutoff cannot be shown to pass. A protein without PSMs within the PSM FDR never passes. The
@@ -156,6 +226,7 @@ export function applyFilters(m: ResultModel, level: Level, f: FilterState): Uint
       // a protein without PSMs within the PSM FDR is no identification (ProSE may list proteins that no reported
       // PSM maps to: one input without protein FDR)
       if (m.protein.psms[p] === 0) continue
+      if (!kindPasses(f.kind, m.protein.xlPsms[p] > 0)) continue
       if (m.protein.peptides[p] < f.minPeptides) continue
       if (tokens.length > 0 && !matches(texts[p], tokens)) continue
       if (f.minReplicatesInCondition > 0 && !foundInReplicates(m, p, f.minReplicatesInCondition)) continue
@@ -166,22 +237,30 @@ export function applyFilters(m: ResultModel, level: Level, f: FilterState): Uint
   if (level === 'peptides') {
     const pt = m.tables.peptides
     const out = new Uint32Array(pt.count)
-    const limit = qLimit(f.maxQ, m.psmFdr)
+    const limits = qLimits(m, f.maxQ, f.maxXlQ)
     const mask = peptideMask(m, f)
+    const nucleotide = f.nucleotide
     for (let k = 0; k < pt.count; k++) {
-      if (!mask[k] || (!f.showDecoys && pt.decoy[k]) || !passesQ(m.peptide.bestQ[k], limit, m.psmFdr)) continue
+      if (!mask[k] || (!f.showDecoys && pt.decoy[k])) continue
+      const xl = pt.isXL[k] === 1
+      if (!kindPasses(f.kind, xl)) continue
+      if (!(xl ? passesQ(m.peptide.bestQ[k], limits.xl, m.xlFdr) : passesQ(m.peptide.bestQ[k], limits.peptide, m.psmFdr))) continue
+      if (nucleotide && !m.peptide.nucleotides[k].split(',').includes(nucleotide)) continue
       out[kept++] = k
     }
     return out.slice(0, kept)
   }
   const ps = m.tables.psms
   const out = new Uint32Array(ps.count)
-  const limit = qLimit(f.maxQ, m.psmFdr)
+  const limits = qLimits(m, f.maxQ, f.maxXlQ)
   const mask = peptideMask(m, f)
   const only = f.peptideFilter
+  const { isXL, nucleotide } = ps.xl
   for (let i = 0; i < ps.count; i++) {
     const k = ps.peptide[i]
-    if (!mask[k] || (!f.showDecoys && ps.decoy[i]) || !passesQ(ps.qValue[i], limit, m.psmFdr)) continue
+    if (!mask[k] || (!f.showDecoys && ps.decoy[i]) || !psmPasses(m, i, limits)) continue
+    if (!kindPasses(f.kind, isXL[i] === 1)) continue
+    if (f.nucleotide && nucleotide[i] !== f.nucleotide) continue
     if (only !== undefined && k !== only) continue // an index that is no peptide matches nothing
     out[kept++] = i
   }
@@ -209,7 +288,7 @@ export function sortRows(
 ): Uint32Array {
   const def = columnDef(m, level, key)
   if (!def) throw new Error(`Cannot sort the ${level} table by "${key}"`)
-  const counts = peptideCounts(m, level === 'peptides' ? filters.maxQ : NaN)
+  const counts = peptideCounts(m, level === 'peptides' ? filters.maxQ : NaN, level === 'peptides' ? filters.maxXlQ : NaN)
   const n = rows.length
   const order = new Uint32Array(n)
   for (let i = 0; i < n; i++) order[i] = i

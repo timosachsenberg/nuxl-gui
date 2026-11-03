@@ -57,6 +57,74 @@ function techResult(): OpenResult {
   return { ...r, design, outcome: { ...r.outcome, tables } }
 }
 
+/** The sample's two files: PSM 0 a linear peptide (q 0.005), PSMs 1 (q 0.03) and 2 (q 0.08) cross-links with U-H3O4P1, PSM 3 with C. */
+function xlResult(xlFdr = 0.05): OpenResult {
+  const r = result(0.01, 1)
+  const tables = makeTables({
+    files: r.outcome.tables.files,
+    proteins: [{ accession: 'P1', sequence: 'AAAKCCCKEEEK' }],
+    peptides: [
+      { sequence: 'AAAK', proteins: [0] },
+      { sequence: 'CCCK', adduct: 'U-H3O4P1', proteins: [0] },
+      { sequence: 'EEEK', adduct: 'C', proteins: [0] },
+    ],
+    psms: [
+      { peptide: 0, qValue: 0.005 },
+      { peptide: 1, qValue: 0.03 },
+      { peptide: 1, qValue: 0.08 },
+      { peptide: 2, qValue: 0.01, file: 1 },
+    ],
+  })
+  return { ...r, settings: { ...r.settings, xlFdr }, outcome: { ...r.outcome, tables, nuxl: { ...r.outcome.nuxl, xlFdr } } }
+}
+
+describe('ResultsView of cross-links', () => {
+  it('filters the cross-link PSMs at the cross-link FDR and starts with them', () => {
+    releaseResultsView()
+    const view = resultsViewFor(xlResult(0.05))
+    expect(view.model.xlFdr).toBe(0.05)
+    expect(view.psms.filters).toMatchObject({ kind: 'xl', maxQ: 0.01, maxXlQ: 0.05 })
+    expect(Array.from(view.psms.rows)).toEqual([3, 1]) // by q-value; PSM 2 is above 5 %
+    expect(view.psms.total).toBe(3)
+    expect(view.proteins.filters.kind).toBe('all')
+    view.psms.filters.kind = 'all'
+    expect(Array.from(view.psms.rows)).toEqual([0, 3, 1])
+    releaseResultsView()
+  })
+
+  it('lifts the kind and adduct filters that hide an opened PSM, and opens a protein\'s PSMs of every kind', () => {
+    releaseResultsView()
+    const view = resultsViewFor(xlResult(0.05))
+    view.psms.filters.adduct = 'C'
+    view.openPsm(1) // U-H3O4P1
+    expect(view.psms.filters).toMatchObject({ kind: 'xl', adduct: '' })
+    view.openPsm(0) // the linear peptide
+    expect(view.psms.filters.kind).toBe('all')
+    expect(view.psms.rows.includes(0)).toBe(true)
+    view.closePsm()
+    view.psms.filters = { ...view.psms.filters, kind: 'xl', nucleotide: 'C', maxXlQ: 0.02 }
+    view.filterBy({ protein: 0 })
+    expect(view.psms.filters).toMatchObject({ kind: 'all', nucleotide: '', adduct: '', maxXlQ: 0.05 })
+    expect(Array.from(view.psms.rows)).toEqual([0, 3, 1])
+    releaseResultsView()
+  })
+
+  it('names both cutoffs when no PSM passes them', () => {
+    releaseResultsView()
+    const r = xlResult(0.001)
+    const view = resultsViewFor({ ...r, psmFdr: 0.001 })
+    expect(view.psms.emptyText).toBe(
+      "No PSMs pass the search's FDR (0.1 %, q ≤ 0.001). The database may not match the organism of the sample.",
+    )
+    releaseResultsView()
+    const two = resultsViewFor({ ...xlResult(0.002), psmFdr: 0.001 })
+    expect(two.psms.emptyText).toBe(
+      "No PSMs pass the search's peptide FDR (0.1 %, q ≤ 0.001) and cross-link FDR (0.2 %, q ≤ 0.002). The database may not match the organism of the sample.",
+    )
+    releaseResultsView()
+  })
+})
+
 describe('ResultsView', () => {
   it('is kept while the same result is open, and new for another one', () => {
     const r = result()
@@ -105,33 +173,45 @@ describe('ResultsView', () => {
     const view = resultsViewFor(result(1, 1))
     const p = view.proteins
     p.toggleColumn('samples', false)
-    p.toggleColumn('qValue', true)
+    p.toggleColumn('xlSites', false)
+    p.toggleColumn('length', true)
     p.filters.text = 'albumin'
     expect(csvLines(p.csv())).toEqual([
-      'Accession,Description,Coverage (%),Peptides,PSMs,Found in,q-value',
-      'sp|P02768|ALBU_HUMAN,"Serum albumin, mature chain",50.0,2,4,2,0.001',
+      'Accession,Description,Coverage (%),Peptides,PSMs,XL PSMs,Found in,Length',
+      'sp|P02768|ALBU_HUMAN,"Serum albumin, mature chain",50.0,2,4,0,2,20',
     ])
   })
 
   it('says why a table is empty', () => {
     const view = resultsViewFor(result(0.01, 0.0001)) // no protein is at q ≤ 0.0001
     expect(view.proteins.rows.length).toBe(0)
-    expect(view.proteins.emptyText).toBe("No proteins pass the search's protein FDR (0.01 %, q ≤ 0.0001).")
+    // OpenNuXL has no protein FDR: the PSMs' cutoff is named
+    expect(view.proteins.emptyText).toBe("No proteins pass the search's FDR (1 %, q ≤ 0.01).")
     view.psms.filters.text = 'nothing like this'
     expect(view.psms.emptyText).toBe('No PSMs match the filters.')
   })
 
-  it('says on every level that no PSM passed the PSM FDR, with the likely cause, and names a protein FDR only if applied', () => {
-    const noPsm = "No PSMs pass the search's PSM FDR (0.01 %, q ≤ 0.0001). The database may not match the organism of the sample."
-    for (const applied of [true, false]) {
-      releaseResultsView()
-      const view = resultsViewFor(result(0.0001, 0.0001, false, applied)) // no PSM and no protein is at q ≤ 0.0001
-      expect([view.proteins.emptyText, view.peptides.emptyText, view.psms.emptyText]).toEqual([noPsm, noPsm, noPsm])
-    }
-    // PSMs pass, no protein does, and no protein FDR was applied: the PSM FDR is the cutoff
+  it('says on every level that no PSM passed the PSM FDR, with the likely cause', () => {
+    const noPsm = "No PSMs pass the search's FDR (0.01 %, q ≤ 0.0001). The database may not match the organism of the sample."
+    const view = resultsViewFor(result(0.0001, 0.0001)) // no PSM and no protein is at q ≤ 0.0001
+    expect([view.proteins.emptyText, view.peptides.emptyText, view.psms.emptyText]).toEqual([noPsm, noPsm, noPsm])
+  })
+
+  it("names the score Percolator's only when every file was rescored", () => {
+    const all = result(0.01, 0.01, true)
+    expect(resultsViewFor(all).rescored).toBe(true)
     releaseResultsView()
-    const view = resultsViewFor(result(0.01, 0.0001, false, false))
-    expect(view.proteins.emptyText).toBe("No proteins pass the search's PSM FDR (1 %, q ≤ 0.01).")
+    // one file rescored, the other not: the reader gave every PSM NuXL's score
+    const some = result(0.01, 0.01, true)
+    const nuxl = { ...some.outcome.nuxl!, percolator: [true, false], percolatorScores: false }
+    const view = resultsViewFor({ ...some, outcome: { ...some.outcome, nuxl } })
+    expect(view.rescored).toBe(false)
+    expect(view.psms.specs.find((s) => s.id === 'score')!.header).toBe('NuXL score')
+    releaseResultsView()
+    // without the reader's word: as the files say
+    const files = some.outcome.summary.files.map((f, k) => ({ ...f, percolator: k === 0 ? { applied: true } : null }))
+    const old = { ...some, outcome: { ...some.outcome, nuxl: undefined, summary: { ...some.outcome.summary, files } } } as unknown as OpenResult
+    expect(resultsViewFor(old).rescored).toBe(false)
   })
 
   it('keeps sorting by the same sample when technical replicates are split or merged', () => {
@@ -373,7 +453,7 @@ describe('the PSM view', () => {
 
   it('keeps the options of the spectrum from one PSM to the next', () => {
     const view = resultsViewFor(result(1, 1))
-    expect(view.psmOptions).toEqual({ ions: ['b', 'y'], charges: null, losses: null, precursor: false, bottom: null })
+    expect(view.psmOptions).toEqual({ ions: ['b', 'y'], charges: null, losses: null, precursor: false })
     view.openPsm(1)
     view.psmOptions.ions = ['a', 'b', 'y']
     view.stepPsm(1)

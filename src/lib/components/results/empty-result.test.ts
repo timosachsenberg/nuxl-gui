@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 /// <reference types="node" />
-// The tables of a search in which no PSM passes the FDR, rendered from ProSE's real output (fixtures/empty: two inputs,
-// protein FDR asked for but not applied, as ProSE reports for an empty result). Every table says why it is empty and
-// names no protein FDR.
+// The tables of a search in which no PSM passes the FDR, rendered from a search folder of OpenNuXL's outputs
+// (fixtures/empty: two inputs whose filtered idXML files hold no hit; OpenNuXL has no protein FDR). Every table says
+// why it is empty and names no protein FDR.
 import { readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { flushSync, mount, unmount } from 'svelte'
@@ -37,13 +37,15 @@ async function openEmpty(): Promise<OpenResult> {
     createdAt: '2026-10-21T00:00:00Z',
     design: resolveDesign(read.tables.files.map((f, i) => input(basename(f), { condition: 'control', replicate: i + 1 }))),
     psmFdr: 0.01,
-    proteinFdr: 0.01,
-    settings: { parameters: {}, fixedMods: [], database: 'ProSE_empty.fasta', rescore: true, peptdeep: false, contaminants: false },
+    proteinFdr: 1,
+    settings: { parameters: {}, fixedMods: [], database: 'empty.fasta', rescore: true, contaminants: false, peptideFdr: 0.01, xlFdr: 0.01 },
     outcome: { ...read, seconds: 1 },
   }
 }
 
-const EMPTY = 'No PSMs pass the search\'s PSM FDR (1 %, q ≤ 0.01). The database may not match the organism of the sample.'
+const EMPTY = "No PSMs pass the search's FDR (1 %, q ≤ 0.01). The database may not match the organism of the sample."
+const EMPTY_TWO =
+  "No PSMs pass the search's peptide FDR (1 %, q ≤ 0.01) and cross-link FDR (5 %, q ≤ 0.05). The database may not match the organism of the sample."
 
 describe('the tables of a search without PSMs', () => {
   let shown: Record<string, unknown> | null = null
@@ -54,7 +56,7 @@ describe('the tables of a search without PSMs', () => {
     document.body.innerHTML = ''
   })
 
-  it('say that no PSM passed the PSM FDR, on every level, and name no protein FDR', async () => {
+  it('say that no PSM passed the FDR, on every level, and name no protein FDR', async () => {
     const result = await openEmpty()
     expect(result.outcome.summary.proteinFdrApplied).toBe(false)
     const view = resultsViewFor(result)
@@ -74,5 +76,12 @@ describe('the tables of a search without PSMs', () => {
       shown = null
       target.remove()
     }
+  })
+
+  it('name both cutoffs when the cross-links have their own', async () => {
+    const empty = await openEmpty()
+    const result = { ...empty, settings: { ...empty.settings, xlFdr: 0.05 } }
+    const view = resultsViewFor(result)
+    expect([view.proteins.emptyText, view.peptides.emptyText, view.psms.emptyText]).toEqual([EMPTY_TWO, EMPTY_TWO, EMPTY_TWO])
   })
 })

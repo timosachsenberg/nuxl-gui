@@ -2,7 +2,7 @@
   // All PSMs of the protein in a table of their own (virtualized: a protein can have thousands),
   // best q-value first; a click opens the PSM in the PSM table.
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
-  import { massShift, peptideView } from '$lib/format/peptide'
+  import { peptideView } from '$lib/format/peptide'
   import { formatQValue, spectrumLabel } from '$lib/results/display'
   import { defaultFilters, sortRows } from '$lib/results/filters'
   import { proteinPsms, type ProteinDetail } from '$lib/results/protein'
@@ -37,9 +37,8 @@
 </script>
 
 {#snippet peptideCell(i: number)}
-  {@const shift = massShift(ps.deltaMass[i])}
-  {#if shift !== null}<span class="font-mono text-[12.5px] text-muted-foreground" title="Unassigned mass shift in Da. Its position on the peptide is not known.">[{shift}]?</span>{/if}<PeptideSequence
+  <PeptideSequence
     view={peptideView(m.tables.peptides, ps.peptide[i], fixedMods)} />
 {/snippet}
 
-<DataTable {label} {rows} {columns} {sort} {onSort} onRowClick={onOpenPsm} autoMinWidth={170} empty="No PSM of this protein passes the search's PSM FDR." />
+<DataTable {label} {rows} {columns} {sort} {onSort} onRowClick={onOpenPsm} autoMinWidth={170} empty="No PSM of this protein passes the search's FDRs." />

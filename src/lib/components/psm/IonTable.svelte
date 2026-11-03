@@ -1,30 +1,34 @@
 <script lang="ts">
-  // The ion table (mockup 3): per residue the theoretical m/z of the N-terminal ions of its number
-  // (left of the residue) and of the C-terminal ions counted from the other end (right of it), for the
-  // series and charges shown; matched ions marked by a tint of their series' colour, bold, and for
-  // screen readers in words. A real table: it is the spectrum's table view too.
+  // The ion table (mockup 3): per residue the theoretical m/z of the linear peptide's N-terminal ions of its
+  // number (left of the residue) and of its C-terminal ions counted from the other end (right of it), for the series
+  // and charges shown; the ions NuXL annotated marked by a tint of their series' colour, bold, and for screen readers
+  // in words. Beside a series with ions shifted by the nucleotide, a column of those NuXL annotated (their m/z as
+  // observed, in the cross-link's colour; the shifts in the tooltip). A real table: it is the spectrum's table view too.
   import { modTitle, type PeptideView } from '$lib/format/peptide'
-  import type { IonTable } from '$lib/psm/psm'
+  import { isNTerminal } from '$lib/psm/psm'
+  import type { NuxlIonColumn, NuxlIonTable } from './nuxl-psm'
 
-  let { table, peptide, label }: { table: IonTable; peptide: PeptideView; label: string } = $props()
+  let { table, peptide, label }: { table: NuxlIonTable; peptide: PeptideView; label: string } = $props()
 
   const n = $derived(peptide.residues.length)
 
-  function cellClass(type: string, matched: boolean): string {
+  function cellClass(col: NuxlIonColumn, matched: boolean): string {
     if (!matched) return 'text-muted-foreground'
-    return type === 'b' ? 'matched mb' : type === 'y' ? 'matched my' : 'matched mo'
+    return col.shifted ? 'matched ms' : isNTerminal(col.type) ? 'matched mb' : 'matched my'
   }
 </script>
 
 <div class="overflow-x-auto">
   <table class="ions w-full border-separate border-spacing-0 text-xs tabular-nums" data-testid="ion-table">
-    <caption class="sr-only">Fragment ions of {label}: theoretical m/z, the matched ones marked</caption>
+    <caption class="sr-only">Fragment ions of {label}: theoretical m/z, those NuXL annotated marked; shifted ions as annotated</caption>
     <thead>
       <tr>
         <th scope="col" class="text-muted-foreground">#</th>
-        {#each table.n as col (col.header)}<th scope="col" aria-label={col.header}>{col.type}<sup>{col.charge === 1 ? '+' : `${col.charge}+`}</sup></th>{/each}
+        {#each table.n as col (col.header)}<th scope="col" aria-label={col.header} class:sh={col.shifted} title={col.shifted ? 'Ions shifted by the nucleotide, as NuXL annotated them' : undefined}
+            >{col.type}<sup>{col.charge === 1 ? '+' : `${col.charge}+`}</sup>{#if col.shifted}<span class="sh-mark" aria-hidden="true">*</span>{/if}</th>{/each}
         <th scope="col" class="text-center">AA</th>
-        {#each table.c as col (col.header)}<th scope="col" aria-label={col.header}>{col.type}<sup>{col.charge === 1 ? '+' : `${col.charge}+`}</sup></th>{/each}
+        {#each table.c as col (col.header)}<th scope="col" aria-label={col.header} class:sh={col.shifted} title={col.shifted ? 'Ions shifted by the nucleotide, as NuXL annotated them' : undefined}
+            >{col.type}<sup>{col.charge === 1 ? '+' : `${col.charge}+`}</sup>{#if col.shifted}<span class="sh-mark" aria-hidden="true">*</span>{/if}</th>{/each}
         <th scope="col" class="text-muted-foreground">#</th>
       </tr>
     </thead>
@@ -38,8 +42,10 @@
               data-type={table.n[j].type}
               data-ion={cell?.ion}
               data-matched={cell ? String(cell.matched) : undefined}
-              class={cell ? cellClass(table.n[j].type, cell.matched) : ''}
-              >{#if cell}{cell.mz.toFixed(4)}{#if cell.matched}<span class="sr-only"> matched</span>{/if}{/if}</td>
+              data-shifted={table.n[j].shifted ? '' : undefined}
+              title={cell?.title}
+              class={cell ? cellClass(table.n[j], cell.matched) : ''}
+              >{#if cell}{cell.mz.toFixed(4)}{#if table.n[j].shifted}<span class="sr-only"> {cell.ion}</span>{:else if cell.matched}<span class="sr-only"> annotated</span>{/if}{/if}</td>
           {/each}
           <th scope="row" class="aa" title={r.mod ? modTitle(r.mod) : undefined}
             >{#if r.mod}<span class="m">{r.residue}<sup>{r.mod.label}</sup></span>{:else}{r.residue}{/if}</th>
@@ -48,14 +54,21 @@
               data-type={table.c[j].type}
               data-ion={cell?.ion}
               data-matched={cell ? String(cell.matched) : undefined}
-              class={cell ? cellClass(table.c[j].type, cell.matched) : ''}
-              >{#if cell}{cell.mz.toFixed(4)}{#if cell.matched}<span class="sr-only"> matched</span>{/if}{/if}</td>
+              data-shifted={table.c[j].shifted ? '' : undefined}
+              title={cell?.title}
+              class={cell ? cellClass(table.c[j], cell.matched) : ''}
+              >{#if cell}{cell.mz.toFixed(4)}{#if table.c[j].shifted}<span class="sr-only"> {cell.ion}</span>{:else if cell.matched}<span class="sr-only"> annotated</span>{/if}{/if}</td>
           {/each}
           <td class="text-muted-foreground">{n - row.index}</td>
         </tr>
       {/each}
     </tbody>
   </table>
+  {#if table.n.some((c) => c.shifted) || table.c.some((c) => c.shifted)}
+    <p class="px-[7px] pt-1.5 text-[11px] text-muted-foreground" data-testid="shifted-note">
+      * Ions shifted by a fragment of the cross-linked nucleotide, at the m/z NuXL annotated (the shifts in their tooltips).
+    </p>
+  {/if}
 </div>
 
 <style>
@@ -72,6 +85,12 @@
   }
   .ions thead sup {
     font-size: 9px;
+    margin-left: 1px;
+  }
+  .ions thead th.sh {
+    color: var(--mod-fg);
+  }
+  .sh-mark {
     margin-left: 1px;
   }
   .ions .aa {
@@ -91,9 +110,9 @@
     color: var(--ion-y-fg);
     background: var(--ion-y-bg);
   }
-  .mo {
-    color: var(--ion-other-fg);
-    background: var(--ion-other-bg);
+  .ms {
+    color: var(--mod-fg);
+    background: var(--mod-bg);
   }
   .m {
     background: var(--mod-bg);

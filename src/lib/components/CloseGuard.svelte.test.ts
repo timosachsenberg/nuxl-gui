@@ -37,19 +37,19 @@ const click = (text: string) => {
 }
 
 describe('the close guard', () => {
-  it('asks while ProSE runs, and answers with the button', () => {
+  it('asks while OpenNuXL runs, and answers with the button', () => {
     shim.ask!()
     flushSync()
     expect(guard()?.textContent).toMatch(/A search is running.*nothing from it is kept/s)
     expect(buttons()).toContain('Keep searching')
-    click('Close ProSE')
+    click('Close NuXL')
     expect(shim.answers).toEqual([true])
   })
 
   it('when the search finishes while it asks, answers "keep" at once and says that the search is saved', () => {
     shim.ask!()
     flushSync()
-    // ProSE ends; its results are read
+    // OpenNuXL ends; its results are read
     searchRun.toolEnded = true
     flushSync()
     expect(shim.answers).toEqual([false])
@@ -60,7 +60,7 @@ describe('the close guard', () => {
     flushSync()
     expect(shim.answers).toEqual([false])
     // the user still wants to close
-    click('Close ProSE')
+    click('Close NuXL')
     expect(shim.answers).toEqual([false, true])
   })
 
@@ -71,7 +71,7 @@ describe('the close guard', () => {
     flushSync()
     expect(shim.answers).toEqual([false])
     expect(guard()?.textContent).toMatch(/The search has ended/)
-    click('Keep ProSE open')
+    click('Keep NuXL open')
     expect(shim.answers).toEqual([false, false])
   })
 })

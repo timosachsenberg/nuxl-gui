@@ -114,7 +114,7 @@ export interface SearchResult {
    * write proteins.fasta for this search (it does when this is false: history.ts, `openSearch`).
    */
   proteinsSaved: boolean
-  /** NuXL's values of the search: its two FDRs, per file Percolator and OpenNuXL's notes, the preset */
+  /** NuXL's values of the search: its two FDRs, per file Percolator and OpenNuXL's notes, the scores' kind, the preset */
   nuxl: NuxlSummary
 }
 
@@ -479,6 +479,11 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     end: [] as number[],
   }
   const peptideBest: number[] = []
+  // one scale in psms.score: Percolator's (svm_score) when every run was rescored, else NuXL's (NuXL:score) for all,
+  // also those of a rescored run (OpenNuXL skips Percolator below 1000 PSMs, so a search can have both kinds)
+  const rescored = (part: Part) => part.id.hits.params.has(P.svmScore) || part.id.hits.params.has(P.percolatorScore)
+  const withHits = parts.filter((part) => part.id.hits.count > 0)
+  const percolatorScores = withHits.length > 0 && withHits.every(rescored)
   const clampInt8 = (v: number) => (Number.isNaN(v) ? 0 : Math.max(-128, Math.min(127, Math.round(v))))
 
   let i = 0
@@ -488,7 +493,7 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     const num = (name: string) => numberColumn(hits.params, name, n)
     const txt = (name: string) => textColumn(hits.params, name, n)
     const nuxlScore = num(P.nuxlScore)
-    const svm = hits.params.has(P.svmScore) ? num(P.svmScore) : num(P.percolatorScore)
+    const svm = !percolatorScores ? null : hits.params.has(P.svmScore) ? num(P.svmScore) : num(P.percolatorScore)
     const pepOf = hits.params.has(P.pep) ? num(P.pep) : num(P.pepScore)
     const givenPpm = num(P.precursorErrorPpm)
     const calcMass = num(P.calcMass)
@@ -521,7 +526,7 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
       const z = hits.charge[h]
       charge[i] = z
       decoy[i] = 0
-      const s = Number.isNaN(svm[h]) ? nuxlScore[h] : svm[h]
+      const s = svm === null || Number.isNaN(svm[h]) ? nuxlScore[h] : svm[h]
       score[i] = s
       qValue[i] = qValues && isQValueType(ids.scoreType[identification]) ? hits.score[h] : NaN
       pep[i] = pepOf[h]
@@ -713,6 +718,7 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     xlFdr,
     peptideFdr,
     percolator: runs.map((r) => r?.percolator ?? false),
+    percolatorScores,
     notes: runs.map((r) => r?.notes ?? []),
     ...(preset !== undefined ? { preset } : {}),
   }

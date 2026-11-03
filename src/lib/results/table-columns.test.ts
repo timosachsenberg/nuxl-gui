@@ -6,16 +6,16 @@ import { buildModel } from './model'
 import { makeTables } from './synthetic'
 import { columnSpecs, csvColumns, defaultHidden, visibleSpecs } from './table-columns'
 
-const model = (opts: { rescored?: boolean; psmFdr?: number } = {}) =>
+const model = (opts: { rescored?: boolean; psmFdr?: number; xlFdr?: number } = {}) =>
   buildModel(sampleTables(), sampleDesign(), { showTechReplicates: false, ...cutoffs, ...opts })
 const ids = (specs: { id: string }[]) => specs.map((s) => s.id)
 
 describe('columnSpecs', () => {
   it('proteins: per-sample counts grouped by condition, then "Found in"', () => {
-    const specs = columnSpecs(model(), 'proteins', { openSearch: false })
+    const specs = columnSpecs(model(), 'proteins')
     expect(ids(specs)).toEqual([
-      'accession', 'gene', 'description', 'coverage', 'peptides', 'psms',
-      'sample:0', 'sample:1', 'foundIn', 'qValue', 'score', 'length', 'group',
+      'accession', 'gene', 'description', 'coverage', 'peptides', 'psms', 'xlSites', 'xlPsms',
+      'sample:0', 'sample:1', 'foundIn', 'score', 'length',
     ])
     const samples = specs.filter((s) => s.id.startsWith('sample:'))
     expect(samples.map((s) => [s.group, s.header, s.ariaLabel, s.sortKey, s.csv])).toEqual([
@@ -27,80 +27,81 @@ describe('columnSpecs', () => {
     expect([gene.sortKey, gene.csv]).toEqual(['gene', ['gene']])
   })
 
-  it('says that the protein counts are at the search PSM FDR', () => {
-    const specs = columnSpecs(model({ psmFdr: 0.01 }), 'proteins', { openSearch: false })
+  it('says that the protein counts are at the search PSM FDR, the cross-link ones at its cross-link FDR', () => {
+    const specs = columnSpecs(model({ psmFdr: 0.01, xlFdr: 0.05 }), 'proteins')
     for (const id of ['peptides', 'psms']) {
       expect(specs.find((s) => s.id === id)!.title).toBe("Counted at the search's PSM FDR (1 %, q ≤ 0.01)")
     }
     expect(specs.find((s) => s.id === 'sample:0')!.title).toBe("control 1. Counted at the search's PSM FDR (1 %, q ≤ 0.01)")
+    expect(specs.find((s) => s.id === 'xlPsms')!.title).toBe("Cross-link PSMs at the search's cross-link FDR (5 %, q ≤ 0.05)")
+    expect(specs.find((s) => s.id === 'xlSites')!.title).toMatch(/cross-link FDR \(5 %, q ≤ 0\.05\)$/)
   })
 
   it('names the score after the rescoring', () => {
-    const score = (rescored: boolean) => columnSpecs(model({ rescored }), 'psms', { openSearch: false }).find((s) => s.id === 'score')!
+    const score = (rescored: boolean) => columnSpecs(model({ rescored }), 'psms').find((s) => s.id === 'score')!
     expect(score(true).header).toBe('Percolator score')
     expect(score(false).header).toBe('NuXL score')
   })
 
   it('peptides: the best PSM q-value, counts per sample; PSMs: no sample counts', () => {
-    expect(ids(columnSpecs(model(), 'peptides', { openSearch: false }))).toEqual([
+    expect(ids(columnSpecs(model(), 'peptides'))).toEqual([
       'peptide', 'adduct', 'proteins', 'psms', 'sample:0', 'sample:1', 'foundIn', 'bestQ', 'length',
     ])
-    expect(ids(columnSpecs(model(), 'psms', { openSearch: false }))).toEqual([
+    expect(ids(columnSpecs(model(), 'psms'))).toEqual([
       'peptide', 'adduct', 'site', 'proteins', 'sample', 'scan', 'charge', 'mz', 'rt', 'precursorError', 'score', 'qValue',
-      'pep', 'deltaMass', 'fdrGroup', 'file', 'isotopeError',
+      'pep', 'fdrGroup', 'file', 'isotopeError',
     ])
   })
 
   it('NuXL: the adduct and the site export the cross-link columns', () => {
-    const specs = columnSpecs(model(), 'psms', { openSearch: false })
+    const specs = columnSpecs(model(), 'psms')
     expect(specs.find((s) => s.id === 'adduct')!.csv).toEqual(['crossLink', 'adduct', 'adductMass', 'nucleotide'])
     expect(specs.find((s) => s.id === 'site')!.csv).toEqual(['site', 'siteScore'])
-    expect(columnSpecs(model(), 'peptides', { openSearch: false }).find((s) => s.id === 'adduct')!.csv).toEqual(['adduct', 'crossLink'])
+    expect(columnSpecs(model(), 'peptides').find((s) => s.id === 'adduct')!.csv).toEqual(['adduct', 'crossLink'])
   })
 
   it('samples without a condition have no group', () => {
     const design = resolveDesign([input('a.mzML'), input('b.mzML')])
     const tables = makeTables({ files: ['a.mzML', 'b.mzML'], proteins: [], peptides: [], psms: [] })
     const m = buildModel(tables, design, { showTechReplicates: false, ...cutoffs })
-    const samples = columnSpecs(m, 'peptides', { openSearch: false }).filter((s) => s.id.startsWith('sample:'))
+    const samples = columnSpecs(m, 'peptides').filter((s) => s.id.startsWith('sample:'))
     expect(samples.map((s) => [s.group, s.header])).toEqual([[undefined, 'a'], [undefined, 'b']])
   })
 })
 
 describe('defaultHidden', () => {
-  it('hides the less common columns, and the mass shift of a closed search', () => {
+  it('hides the less common columns', () => {
     const m = model()
-    expect(defaultHidden(columnSpecs(m, 'proteins', { openSearch: false }), m)).toEqual(['gene', 'qValue', 'score', 'length', 'group'])
-    expect(defaultHidden(columnSpecs(m, 'psms', { openSearch: false }), m)).toEqual(['pep', 'deltaMass', 'fdrGroup', 'file', 'isotopeError'])
-    expect(defaultHidden(columnSpecs(m, 'psms', { openSearch: true }), m)).toEqual(['pep', 'fdrGroup', 'file', 'isotopeError'])
+    expect(defaultHidden(columnSpecs(m, 'proteins'), m)).toEqual(['gene', 'score', 'length'])
+    expect(defaultHidden(columnSpecs(m, 'psms'), m)).toEqual(['pep', 'fdrGroup', 'file', 'isotopeError'])
   })
 
   it('shows the gene when the descriptions name one', () => {
     const tables = sampleTables()
     tables.proteins.description[0] = 'Serum albumin OS=Homo sapiens GN=ALB'
     const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, ...cutoffs })
-    expect(defaultHidden(columnSpecs(m, 'proteins', { openSearch: false }), m)).toEqual(['qValue', 'score', 'length', 'group'])
+    expect(defaultHidden(columnSpecs(m, 'proteins'), m)).toEqual(['score', 'length'])
   })
 })
 
 describe('visibleSpecs and csvColumns', () => {
   it('leave out hidden columns; "samples" hides all per-sample columns', () => {
-    const specs = columnSpecs(model(), 'proteins', { openSearch: false })
-    expect(ids(visibleSpecs(specs, ['gene', 'samples', 'qValue', 'score', 'length', 'group']))).toEqual([
-      'accession', 'description', 'coverage', 'peptides', 'psms', 'foundIn',
+    const specs = columnSpecs(model(), 'proteins')
+    expect(ids(visibleSpecs(specs, ['gene', 'samples', 'score', 'length']))).toEqual([
+      'accession', 'description', 'coverage', 'peptides', 'psms', 'xlSites', 'xlPsms', 'foundIn',
     ])
-    expect(csvColumns(visibleSpecs(specs, ['gene', 'qValue', 'score', 'length', 'group']))).toEqual([
-      'accession', 'description', 'coverage', 'peptides', 'psms', 'sample:0', 'sample:1', 'foundIn',
+    expect(csvColumns(visibleSpecs(specs, ['gene', 'score', 'length']))).toEqual([
+      'accession', 'description', 'coverage', 'peptides', 'psms', 'xlSites', 'xlPsms', 'sample:0', 'sample:1', 'foundIn',
     ])
     // every visible column is exported
     expect(csvColumns(visibleSpecs(specs, []))).toEqual(ids(specs))
   })
 
   it('write what a PSM column shows: the scan as the native ID, RT in seconds, the file', () => {
-    const specs = columnSpecs(model(), 'psms', { openSearch: true })
+    const specs = columnSpecs(model(), 'psms')
     expect(csvColumns(visibleSpecs(specs, []))).toEqual([
       'peptide', 'crossLink', 'adduct', 'adductMass', 'nucleotide', 'site', 'siteScore', 'proteins', 'sample', 'nativeId',
-      'charge', 'mz', 'rt', 'precursorErrorPpm', 'score', 'qValue', 'pep', 'deltaMass', 'fdrGroup', 'file', 'isotopeError',
+      'charge', 'mz', 'rt', 'precursorErrorPpm', 'score', 'qValue', 'pep', 'fdrGroup', 'file', 'isotopeError',
     ])
   })
 })

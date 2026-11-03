@@ -1,9 +1,10 @@
 <script lang="ts">
-  // The results of the open search: key figures, the tabs of the three levels, one filter row and a
-  // virtualized table per level, the column settings and "Export CSV · n rows". A protein opens its
-  // panel beside the Proteins table; a PSM opens the PSM view beside the PSM table, which then narrows
-  // to the list that "Previous" and "Next" go through. The Overview (files, and the mass shifts of an
-  // open search), Samples and QC tabs show the search as a whole; Proteins stays the first view.
+  // The results of the open search: key figures, the tabs of the three levels (each with its cross-links: the
+  // tab counts them, its filter row shows cross-links, peptides or all, the Peptides and PSMs tables start with
+  // the cross-links), one filter row and a virtualized table per level, the column settings and "Export CSV · n
+  // rows". A protein opens its panel beside the Proteins table; a PSM opens the PSM view beside the PSM table,
+  // which then narrows to the list that "Previous" and "Next" go through. The Overview (the files and OpenNuXL's
+  // notes), Samples and QC tabs show the search as a whole; Proteins stays the first view.
   import SaveNotice from '$lib/components/history/SaveNotice.svelte'
   import ColumnsMenu from '$lib/components/results/ColumnsMenu.svelte'
   import FilterBar from '$lib/components/results/FilterBar.svelte'
@@ -12,7 +13,6 @@
   import ProteinPanel from '$lib/components/protein/ProteinPanel.svelte'
   import PsmView from '$lib/components/psm/PsmView.svelte'
   import PeptidesTable from '$lib/components/results/PeptidesTable.svelte'
-  import ProteinsEmpty from '$lib/components/results/ProteinsEmpty.svelte'
   import ProteinsTable from '$lib/components/results/ProteinsTable.svelte'
   import PsmsTable from '$lib/components/results/PsmsTable.svelte'
   import QcTab from '$lib/components/results/QcTab.svelte'
@@ -23,7 +23,6 @@
   import { formatCount } from '$lib/results/display'
   import { exportCsv } from '$lib/results/exports'
   import { keyFigures, levelTotal } from '$lib/results/figures'
-  import { psmFdrAppliedToNone, psmFdrNotice } from '$lib/results/overview'
   import { restoreFromHistory } from '$lib/history/history.svelte'
   import { resultsViewFor, type Tab } from '$lib/results/view.svelte'
   import { openResult } from '$lib/search/session.svelte'
@@ -54,31 +53,25 @@
   // at the search's cutoffs, without decoys: the key figures and the tabs' counts
   const figures = $derived(view ? keyFigures(view.model, view.result.outcome.summary) : null)
   const peptideTotal = $derived(view ? levelTotal(view.model, 'peptides', false) : 0)
-  // the PSM FDR was requested but not applied to some file (no decoy PSM): its PSMs are not FDR-controlled
-  const fdrNotice = $derived(view ? psmFdrNotice(view.result.outcome.summary) : null)
   const proteinTotal = $derived(view ? levelTotal(view.model, 'proteins', false) : 0)
+  /** The search has cross-link PSMs within its cutoff: the tabs count them too. */
+  const hasXl = $derived((figures?.xlPsms ?? 0) > 0)
 
-  const tabs = $derived<{ value: Tab; label: string; count?: number }[]>([
+  const tabs = $derived<{ value: Tab; label: string; count?: number; xl?: number; xlTitle?: string }[]>([
     { value: 'overview', label: 'Overview' },
-    { value: 'proteins', label: 'Proteins', count: proteinTotal },
-    { value: 'peptides', label: 'Peptides', count: peptideTotal },
-    { value: 'psms', label: 'PSMs', count: figures?.psms ?? 0 },
+    { value: 'proteins', label: 'Proteins', count: proteinTotal, xl: figures?.xlProteins, xlTitle: 'cross-linked proteins' },
+    { value: 'peptides', label: 'Peptides', count: peptideTotal, xl: figures?.xlPeptides, xlTitle: 'cross-linked peptides' },
+    { value: 'psms', label: 'PSMs', count: figures?.psms ?? 0, xl: figures?.xlPsms, xlTitle: 'cross-link PSMs' },
     { value: 'samples', label: 'Samples' },
     { value: 'qc', label: 'QC' },
   ])
-
-  // no protein passed the search's protein FDR, but there are identifications: say why
-  const noProteins = $derived(
-    view !== null && figures !== null && view.result.outcome.summary.proteinFdrApplied && figures.psms > 0 &&
-      levelTotal(view.model, 'proteins', true) === 0,
-  )
 
   const fixedMods = $derived(view?.result.settings.fixedMods ?? [])
   const fixedText = $derived(fixedMods.length > 0 ? fixedMods.join(', ') : 'none')
 
   // The protein panel stands beside the Proteins table (the key figures give way to it, as in the
   // mockup). It opens with focus inside and closes with focus back on the protein's row.
-  const panelOpen = $derived(view !== null && view.tab === 'proteins' && view.panel !== null && !noProteins)
+  const panelOpen = $derived(view !== null && view.tab === 'proteins' && view.panel !== null)
   // The PSM view stands beside the PSM table, which narrows to a list (its filter row stays)
   const psmOpen = $derived(view !== null && view.tab === 'psms' && view.psm !== null)
 
@@ -167,14 +160,11 @@
       style:width={psmOpen ? 'clamp(320px, 27vw, 400px)' : undefined}>
       <h1 class="sr-only">Results</h1>
       <SaveNotice id={view.result.id} />
-      {#if fdrNotice}
-        <p class="text-xs text-amber-700" data-testid="psm-fdr-notice">{fdrNotice}</p>
-      {/if}
       {#if view.result.outcome.warnings.length > 0}
         <p class="text-xs text-amber-700 dark:text-amber-400" data-testid="results-warnings">{view.result.outcome.warnings.join(' ')}</p>
       {/if}
       {#if !panelOpen && !psmOpen}
-        <KeyFigures {figures} proteinFdr={view.result.proteinFdr} proteinFdrApplied={view.result.outcome.summary.proteinFdrApplied} />
+        <KeyFigures {figures} />
       {/if}
 
       <Tabs.Root bind:value={view.tab} class="flex min-h-0 flex-1 flex-col gap-3">
@@ -185,6 +175,9 @@
               <Tabs.Trigger value={t.value} class="px-3 text-[13px]">
                 {t.label}{#if t.count !== undefined}<span class="ml-1 text-xs font-normal text-muted-foreground tabular-nums"
                     >{formatCount(t.count)}</span
+                  >{/if}{#if hasXl && t.xl !== undefined}<span
+                    class="ml-1 text-xs font-normal text-muted-foreground tabular-nums"
+                    title="{formatCount(t.xl)} {t.xlTitle}">· {formatCount(t.xl)} XL</span
                   >{/if}
               </Tabs.Trigger>
             {/each}
@@ -207,15 +200,9 @@
         {#if level}
           <Tabs.Content value={view.tab} tabindex={-1} class="flex min-h-0 flex-1 flex-col gap-3" data-testid="results-table">
             {#key level}
-              <FilterBar
-                {view}
-                {level}
-                proteinFdrApplied={view.result.outcome.summary.proteinFdrApplied}
-                psmFdrApplied={!psmFdrAppliedToNone(view.result.outcome.summary)} />
+              <FilterBar {view} {level} />
             {/key}
-            {#if level.level === 'proteins' && noProteins}
-              <ProteinsEmpty {view} peptides={peptideTotal} psms={figures.psms} />
-            {:else if level.level === 'proteins'}
+            {#if level.level === 'proteins'}
               <ProteinsTable bind:this={proteinsTable} {view} {level} onOpen={openProtein} />
             {:else if level.level === 'peptides'}
               <PeptidesTable {view} {level} />

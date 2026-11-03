@@ -99,12 +99,12 @@ export function formatScore(score: number, q: number): string {
   return signedNumber(score, 3, { plus: false })
 }
 
-const fallbackName = 'prose-results'
+const fallbackName = 'nuxl-results'
 
 /**
  * A name for the files of a result (exports are called `<name>-proteins.csv`, `<name>.idXML`): the
  * one file's stem, or what the stems of several files start with ("EGF_time" for EGF_time_1 and
- * EGF_time_2), reduced to letters (of any script), digits, "-", "_" and "." (`fileSafe`). Otherwise "prose-results".
+ * EGF_time_2), reduced to letters (of any script), digits, "-", "_" and "." (`fileSafe`). Otherwise "nuxl-results".
  */
 export function resultName(files: string[]): string {
   if (files.length === 0) return fallbackName
@@ -121,7 +121,7 @@ export function resultName(files: string[]): string {
 
 /**
  * The longest piece `fileSafe` returns, in UTF-8 bytes (file systems count bytes, ext4 255 per name, or
- * UTF-16 units, NTFS 255): room for a suffix such as "-proteins.csv" or ".prose".
+ * UTF-16 units, NTFS 255): room for a suffix such as "-proteins.csv" or ".nuxl".
  */
 export const fileSafeMaxBytes = 200
 

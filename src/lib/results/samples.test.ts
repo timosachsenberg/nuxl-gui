@@ -3,7 +3,7 @@ import { input } from '../design/fixtures'
 import { resolveDesign } from '../design/model'
 import { sampleDesign, sampleTables } from './fixtures'
 import { buildModel } from './model'
-import { makeTables } from './synthetic'
+import { makeTables, syntheticDesign } from './synthetic'
 import { sampleTable } from './samples'
 
 const model = (opts: { psmFdr: number; proteinFdr: number }, edit?: (t: ReturnType<typeof sampleTables>) => void) => {
@@ -20,10 +20,10 @@ describe('sampleTable', () => {
     expect(t.groups.map((g) => g.name)).toEqual(['control', 'EGF'])
     const [control, egf] = t.groups
     expect(control.samples.map((s) => s.label)).toEqual(['control 1'])
-    expect(control.samples[0].counts).toEqual({ psms: 3, peptides: 2, proteins: 1 }) // MKWVTF, TFISLL; ALBU
-    expect(egf.samples[0].counts).toEqual({ psms: 4, peptides: 2, proteins: 2 }) // GDAHKSEVAH, IVGGYT; A1AT, trypsin
-    expect(control.counts).toEqual({ psms: 3, peptides: 2, proteins: 1 })
-    expect(t.total).toEqual({ psms: 7, peptides: 4, proteins: 3 })
+    expect(control.samples[0].counts).toEqual({ psms: 3, xlPsms: 0, peptides: 2, proteins: 1 }) // MKWVTF, TFISLL; ALBU
+    expect(egf.samples[0].counts).toEqual({ psms: 4, xlPsms: 0, peptides: 2, proteins: 2 }) // GDAHKSEVAH, IVGGYT; A1AT, trypsin
+    expect(control.counts).toEqual({ psms: 3, xlPsms: 0, peptides: 2, proteins: 1 })
+    expect(t.total).toEqual({ psms: 7, xlPsms: 0, peptides: 4, proteins: 3 })
     expect(control.samples[0].files).toBe(1)
   })
 
@@ -70,9 +70,9 @@ describe('sampleTable', () => {
     })
     const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, psmFdr: 1, proteinFdr: 1 })
     const t = sampleTable(m)
-    expect(t.groups[0].samples[0].counts).toEqual({ psms: 2, peptides: 1, proteins: 1 })
-    expect(t.groups[1].samples[0].counts).toEqual({ psms: 1, peptides: 1, proteins: 1 })
-    expect(t.total).toEqual({ psms: 3, peptides: 1, proteins: 1 }) // one sequence, in both samples: counted once
+    expect(t.groups[0].samples[0].counts).toEqual({ psms: 2, xlPsms: 0, peptides: 1, proteins: 1 })
+    expect(t.groups[1].samples[0].counts).toEqual({ psms: 1, xlPsms: 0, peptides: 1, proteins: 1 })
+    expect(t.total).toEqual({ psms: 3, xlPsms: 0, peptides: 1, proteins: 1 }) // one sequence, in both samples: counted once
   })
 
   describe('technical replicates', () => {
@@ -104,7 +104,7 @@ describe('sampleTable', () => {
       expect(egf.samples).toHaveLength(1)
       expect(egf.samples[0].label).toBe('EGF 1')
       expect(egf.samples[0].files).toBe(2)
-      expect(egf.samples[0].counts).toEqual({ psms: 3, peptides: 2, proteins: 1 })
+      expect(egf.samples[0].counts).toEqual({ psms: 3, xlPsms: 0, peptides: 2, proteins: 1 })
     })
 
     it('counts the samples of a condition, not its measurements (a split sample is still one sample)', () => {
@@ -121,12 +121,12 @@ describe('sampleTable', () => {
       const egf = t.groups[0]
       expect(egf.samples.map((s) => s.label)).toEqual(['EGF 1 · TR1', 'EGF 1 · TR2'])
       expect(egf.samples.map((s) => s.counts)).toEqual([
-        { psms: 1, peptides: 1, proteins: 1 },
-        { psms: 2, peptides: 2, proteins: 1 },
+        { psms: 1, xlPsms: 0, peptides: 1, proteins: 1 },
+        { psms: 2, xlPsms: 0, peptides: 2, proteins: 1 },
       ])
-      expect(egf.counts).toEqual({ psms: 3, peptides: 2, proteins: 1 }) // distinct in the condition, not the sum
+      expect(egf.counts).toEqual({ psms: 3, xlPsms: 0, peptides: 2, proteins: 1 }) // distinct in the condition, not the sum
       expect(egf.samples.map((s) => s.files)).toEqual([1, 1])
-      expect(t.total).toEqual({ psms: 4, peptides: 2, proteins: 1 })
+      expect(t.total).toEqual({ psms: 4, xlPsms: 0, peptides: 2, proteins: 1 })
     })
   })
 
@@ -145,3 +145,30 @@ describe('sampleTable', () => {
     expect(t.groups[0].samples.map((s) => s.label)).toEqual(['a', 'b'])
   })
 })
+
+describe('sampleTable: cross-links', () => {
+  it('counts the cross-link PSMs of each sample at the cross-link FDR', () => {
+    const tables = makeTables({
+      files: ['a.mzML', 'b.mzML'],
+      proteins: [{ accession: 'P1', sequence: 'AAAKCCCK', qValue: NaN }],
+      peptides: [
+        { sequence: 'AAAK', proteins: [0] },
+        { sequence: 'CCCK', adduct: 'U-H3O4P1', proteins: [{ protein: 0, start: 4 }] },
+      ],
+      psms: [
+        { peptide: 0, file: 0, qValue: 0.001 },
+        { peptide: 1, file: 0, qValue: 0.03 },
+        { peptide: 1, file: 1, qValue: 0.04 },
+        { peptide: 1, file: 1, qValue: 0.2 }, // above the cross-link FDR
+      ],
+    })
+    const m = buildModel(tables, syntheticDesign(['a.mzML', 'b.mzML']), { showTechReplicates: false, psmFdr: 0.01, xlFdr: 0.05, proteinFdr: 1 })
+    const t = sampleTable(m)
+    expect(t.groups.flatMap((g) => g.samples.map((s) => [s.counts.psms, s.counts.xlPsms]))).toEqual([
+      [2, 1],
+      [1, 1],
+    ])
+    expect(t.total).toMatchObject({ psms: 3, xlPsms: 2 })
+  })
+})
+

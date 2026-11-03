@@ -6,8 +6,8 @@
 //
 //   search.json     the record below, written as soon as the OpenNuXL runs have ended (before the results are
 //                   read, from the request and the runs' filtered files): a folder with it is a saved search
-//   proteins.fasta  every protein of the result's protein table (accession, description, sequence;
-//                   generated decoys as searched), written once the results are read, so that the search
+//   proteins.fasta  every protein of the result's protein table (accession, description, sequence; no decoys:
+//                   the filtered files have none), written once the results are read, so that the search
 //                   opens when the FASTA it was searched with has moved, or on another computer; the
 //                   folder's database.fasta (the FASTA with the contaminants) goes then
 //
@@ -276,8 +276,8 @@ export function resultFromRecord(record: SearchRecord, outcome: OpenResult['outc
 }
 
 /**
- * `proteins.fasta`: every protein of the result's protein table, as searched (decoys included; those
- * OpenNuXL generated with their sequences). The reader looks here first.
+ * `proteins.fasta`: every protein of the result's protein table, with its sequence as searched (targets only: the
+ * reader takes the PSMs from OpenNuXL's filtered files, which hold no decoys). The reader looks here first.
  */
 export function proteinsFasta(tables: ResultTables): string {
   const { count, accession, description, sequence } = tables.proteins

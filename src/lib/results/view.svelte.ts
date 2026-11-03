@@ -1,10 +1,9 @@
 // The state of the Results view for the open result: the active tab, and per level (proteins,
 // peptides, PSMs) one filter state, the sort order, the selected row and the hidden columns. The
 // rows of a level are derived from these: the table cells, the sort order and the CSV all read the
-// same filter state (one cutoff). Kept outside the view, so that it survives a visit to New search.
+// same filter state (the same cutoffs: one for the peptide PSMs, one for the cross-links). Kept outside the view, so that it survives a visit to New search.
 
 import { formatPercent, formatQ } from '../format/fdr'
-import { psmFdrOff } from './overview'
 import type { PsmOptionState } from '../psm/psm'
 import type { OpenResult } from '../search/session.svelte'
 import { columnDef } from './columns'
@@ -53,7 +52,7 @@ export class LevelState {
     this.level = level
     this.filters = initialFilters(view.model, level)
     this.sort = { ...defaultSort[level] }
-    this.hidden = defaultHidden(columnSpecs(view.model, level, view.search), view.model)
+    this.hidden = defaultHidden(columnSpecs(view.model, level), view.model)
   }
 
   /** The rows that pass the filters, in table order. */
@@ -71,33 +70,33 @@ export class LevelState {
 
   /** The peptide counts the cells show (at the peptide cutoff on the Peptides level). */
   readonly counts = $derived.by(() =>
-    peptideCounts(this.#view.model, this.level === 'peptides' ? this.filters.maxQ : NaN),
+    this.level === 'peptides' ? peptideCounts(this.#view.model, this.filters.maxQ, this.filters.maxXlQ) : peptideCounts(this.#view.model, NaN),
   )
 
   /** The rows at the search's cutoff, before the user's filters ("n of total"). */
   readonly total = $derived.by(() => levelTotal(this.#view.model, this.level, this.filters.showDecoys))
 
   /**
-   * What the table says without rows: the filters hide everything, or nothing passed the search's cutoff. A search
-   * without a target PSM says so on every level, with the likely cause; the protein FDR is named only if it was applied.
+   * What the table says without rows: the filters hide everything, or nothing passed the search's cutoffs. A search
+   * without a target PSM says so on every level, with the likely cause.
    */
   readonly emptyText = $derived.by(() => {
     const what = { proteins: 'proteins', peptides: 'peptides', psms: 'PSMs' }[this.level]
     if (this.total > 0) return `No ${what} match the filters.`
     const m = this.#view.model
-    const cutoff = (fdr: string, q: number) => `the search's ${fdr} (${formatPercent(q)}, ${formatQ(q)})`
-    // a search without decoys has no FDR: nothing to pass
-    if (psmFdrOff(this.#view.result.outcome.summary)) return levelTotal(m, 'psms', false) === 0 ? 'The search found no PSMs.' : `No ${what}.`
+    const q = (q: number) => `${formatPercent(q)}, ${formatQ(q)}`
+    // the peptide PSMs and the cross-links have their own cutoffs: one when they are the same
+    const psmCutoffs =
+      m.psmFdr === m.xlFdr
+        ? `the search's FDR (${q(m.psmFdr)})`
+        : `the search's peptide FDR (${q(m.psmFdr)}) and cross-link FDR (${q(m.xlFdr)})`
     if (levelTotal(m, 'psms', false) === 0) {
-      return `No PSMs pass ${cutoff('PSM FDR', m.psmFdr)}. The database may not match the organism of the sample.`
+      return `No PSMs pass ${psmCutoffs}. The database may not match the organism of the sample.`
     }
-    if (this.level === 'proteins' && this.#view.result.outcome.summary.proteinFdrApplied) {
-      return `No proteins pass ${cutoff('protein FDR', m.proteinFdr)}.`
-    }
-    return `No ${what} pass ${cutoff('PSM FDR', m.psmFdr)}.`
+    return `No ${what} pass ${psmCutoffs}.`
   })
 
-  readonly specs = $derived.by(() => columnSpecs(this.#view.model, this.level, this.#view.search))
+  readonly specs = $derived.by(() => columnSpecs(this.#view.model, this.level))
   readonly visible = $derived.by(() => visibleSpecs(this.specs, this.hidden))
 
   /** Sorts by `key`: a new column starts descending for numbers and ascending for text; the same column flips. */
@@ -143,19 +142,27 @@ export class ResultsView {
    */
   psm = $state.raw<OpenPsm | null>(null)
   /** The toggles of the PSM view's spectrum, kept from one PSM to the next. */
-  psmOptions = $state<PsmOptionState>({ ions: ['b', 'y'], charges: null, losses: null, precursor: false, bottom: null })
+  psmOptions = $state<PsmOptionState>({ ions: ['b', 'y'], charges: null, losses: null, precursor: false })
   /** Saves the spectrum of the open PSM as SVG: set by the PSM view while it shows a spectrum (the Export menu's item). */
   spectrumExporter: (() => void) | null = null
 
-  readonly search: { openSearch: boolean }
-
-  /** The search rescored its PSMs with Percolator (some file did). */
+  /**
+   * The PSMs' scores are Percolator's: every file was rescored (the reader's `nuxl.percolatorScores`). With only
+   * some rescored, the reader gives every PSM NuXL's score, so that one column has one scale.
+   */
   readonly rescored: boolean
+
+  /**
+   * The cross-link PSMs' cutoff (OpenNuXL's XL FDR): the request's, else the runs' (`outcome.nuxl`), else the
+   * peptide PSMs'.
+   */
+  readonly xlFdr: number
 
   readonly model: ResultModel = $derived.by(() =>
     buildModel(this.result.outcome.tables, this.result.design, {
       showTechReplicates: this.showTechReplicates,
       psmFdr: this.result.psmFdr,
+      xlFdr: this.xlFdr,
       proteinFdr: this.result.proteinFdr,
       rescored: this.rescored,
     }),
@@ -168,8 +175,10 @@ export class ResultsView {
   constructor(result: OpenResult) {
     this.result = result
     const summary = result.outcome.summary
-    this.search = { openSearch: summary.openSearch }
-    this.rescored = summary.files.some((f) => f.percolator?.applied === true)
+    this.rescored =
+      result.outcome.nuxl?.percolatorScores ?? (summary.files.length > 0 && summary.files.every((f) => f.percolator?.applied === true))
+    const fdr = (x: unknown): x is number => typeof x === 'number' && x > 0 && x <= 1
+    this.xlFdr = [result.settings?.xlFdr, result.outcome.nuxl?.xlFdr].find(fdr) ?? result.psmFdr
     this.proteins = new LevelState(this, 'proteins')
     this.peptides = new LevelState(this, 'peptides')
     this.psms = new LevelState(this, 'psms')
@@ -217,8 +226,9 @@ export class ResultsView {
   /**
    * "Open in PSM table": the PSM table shows the PSMs of one `protein`, or of one `peptide` (a row of
    * `tables.peptides`: "All n in the PSM table"), and only those. A chip ("Protein: <accession>",
-   * "Peptide: <ProForma>") says so and removes the filter. The table is at the search's cutoff, without
-   * text filter or the other restriction, and shows contaminants or decoys if the protein or peptide is one.
+   * "Peptide: <ProForma>") says so and removes the filter. The table is at the search's cutoffs, of all kinds and
+   * adducts, without text filter or the other restriction, and shows contaminants or decoys if the protein or
+   * peptide is one.
    */
   filterBy(what: { protein: number } | { peptide: number }): void {
     const m = this.model
@@ -233,6 +243,10 @@ export class ResultsView {
       ...f,
       text: '',
       maxQ: m.psmFdr,
+      maxXlQ: m.xlFdr,
+      kind: 'all',
+      adduct: '',
+      nucleotide: '',
       proteinFilter: 'protein' in what ? index : undefined,
       peptideFilter: 'peptide' in what ? index : undefined,
       hideContaminants: contaminant ? false : f.hideContaminants,
@@ -243,8 +257,9 @@ export class ResultsView {
 
   /**
    * Opens PSM `i` (a row of `tables.psms`) in the PSM view, from the PSM table: the PSMs tab with the
-   * PSM selected. A filter that hides it is lifted (text, protein and peptide filters, the cutoff,
-   * contaminants or decoys as far as it is one), so that it is a row of the list beside the view.
+   * PSM selected. A filter that hides it is lifted (text, protein and peptide filters, the cutoffs,
+   * the kind, adduct and nucleotide filters that exclude it, contaminants or decoys as far as it is one), so that
+   * it is a row of the list beside the view.
    */
   openPsm(i: number): void {
     if (!this.#isPsm(i)) return
@@ -253,10 +268,15 @@ export class ResultsView {
     const level = this.psms
     if (!level.kept.includes(i)) {
       const f = level.filters
+      const xl = ps.xl.isXL[i] === 1
       level.filters = {
         ...f,
         text: '',
         maxQ: m.psmFdr,
+        maxXlQ: m.xlFdr,
+        kind: f.kind === 'all' || (f.kind === 'xl') === xl ? f.kind : 'all',
+        adduct: f.adduct === ps.xl.adduct[i] ? f.adduct : '',
+        nucleotide: f.nucleotide === ps.xl.nucleotide[i] ? f.nucleotide : '',
         proteinFilter: undefined,
         peptideFilter: undefined,
         hideContaminants: m.peptide.contaminant[ps.peptide[i]] ? false : f.hideContaminants,
@@ -273,7 +293,7 @@ export class ResultsView {
    * Opens PSM `i` from the protein panel: a PSM of the open protein's peptide `peptide` (the Peptides
    * tab), or of the protein (`peptide` null: the PSMs tab). The list beside the view is the PSM table
    * with the protein and the peptide as filters (as "Open in PSM table" makes it), at the search's
-   * cutoff; the table gets its filters back when the PSM closes.
+   * cutoffs and of all kinds; the table gets its filters back when the PSM closes.
    */
   openPsmFromPanel(i: number, peptide: number | null): void {
     const protein = this.panel
@@ -286,6 +306,10 @@ export class ResultsView {
       ...restore,
       text: '',
       maxQ: m.psmFdr,
+      maxXlQ: m.xlFdr,
+      kind: 'all',
+      adduct: '',
+      nucleotide: '',
       proteinFilter: protein,
       peptideFilter: peptide ?? undefined,
       hideContaminants: m.peptide.contaminant[ps.peptide[i]] ? false : restore.hideContaminants,

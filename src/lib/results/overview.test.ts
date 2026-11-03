@@ -3,16 +3,18 @@ import type { ProSEFileSummary, ProSEMultiSummary } from '../results/types'
 import { sampleDesign, sampleTables } from './fixtures'
 import { buildModel } from './model'
 import {
+  adductCounts,
+  cutoffText,
   engineNote,
+  fdrFacts,
   fileRows,
   fileStatus,
   formatSeconds,
   percolatorStatus,
-  psmFdrAppliedToNone,
-  psmFdrFact,
-  psmFdrNotice,
+  residueCounts,
   totalsOf,
 } from './overview'
+import { makeTables, syntheticDesign } from './synthetic'
 
 const file = (path: string, more: Partial<ProSEFileSummary> = {}): ProSEFileSummary => ({
   path,
@@ -65,13 +67,14 @@ describe('percolatorStatus', () => {
     expect(percolatorStatus({ applied: true, skipped: null, warning: 'Few decoys' }).warning).toEqual({ short: 'Few decoys', full: 'Few decoys' })
   })
 
-  it("puts ProSE's long texts in short plain words, the full text kept for the tooltip", () => {
+  it("puts the engines' long texts in short plain words, the full text kept for the tooltip", () => {
     const sanity =
       "Percolator's sanity check rejected the learned model (on the held-out folds it found no target PSM at q < 0.01, or fewer than the best single feature; typical for blank runs and runs with few confident PSMs), so the PSMs are scored with that feature alone."
     expect(engineNote(sanity)).toEqual({ short: 'Too few confident PSMs, so scored by the best single feature', full: sanity })
     expect(engineNote('Only 42 PSMs, Percolator rescoring needs at least 100.')?.short).toBe('Only 42 PSMs, at least 100 needed')
     expect(engineNote("No decoy PSMs for the target/decoy competition of Percolator. A search without decoys needs …")?.short).toBe('No decoy PSMs to learn from')
     expect(engineNote('Percolator failed: out of memory')?.short).toBe('Percolator failed')
+    expect(engineNote('Too few PSMs for score recalibration. Skipped.')?.short).toBe('Too few PSMs (Percolator needs 1000)')
     // an unknown one: its first sentence, at most 80 characters
     expect(engineNote('Something new happened. More text follows here.')?.short).toBe('Something new happened')
     expect(engineNote('x'.repeat(200))!.short).toHaveLength(80)
@@ -100,69 +103,119 @@ describe('formatSeconds', () => {
   })
 })
 
+/**
+ * Two files; peptide 0 linear, 1 a U-H3O4P1 cross-link on its K (site 3), 2 a UU-H2O cross-link (not localized), 3 a
+ * U-H3O4P1 cross-link on its first residue (Y). Peptide FDR 1 %, cross-link FDR 5 %.
+ */
+function crossLinked() {
+  const tables = makeTables({
+    files: ['a.mzML', 'b.mzML'],
+    proteins: [{ accession: 'P1', sequence: 'AAAKCCCKDDDKYEEK', qValue: NaN }],
+    peptides: [
+      { sequence: 'AAAK', proteins: [0] },
+      { sequence: 'CCCK', adduct: 'U-H3O4P1', proteins: [{ protein: 0, start: 4 }] },
+      { sequence: 'DDDK', adduct: 'UU-H2O', proteins: [{ protein: 0, start: 8 }] },
+      { sequence: 'YEEK', adduct: 'U-H3O4P1', proteins: [{ protein: 0, start: 12 }] },
+    ],
+    psms: [
+      { peptide: 0, file: 0, qValue: 0.005 },
+      { peptide: 0, file: 1, qValue: 0.02 }, // above the peptide FDR
+      { peptide: 1, file: 0, qValue: 0.01, site: 3 },
+      { peptide: 1, file: 1, qValue: 0.03, site: 3 },
+      { peptide: 1, file: 1, qValue: 0.2, site: 3 }, // above the cross-link FDR
+      { peptide: 2, file: 1, qValue: 0.04 },
+      { peptide: 3, file: 1, qValue: 0.01, site: 0 },
+    ],
+  })
+  return buildModel(tables, syntheticDesign(['a.mzML', 'b.mzML']), { showTechReplicates: false, psmFdr: 0.01, xlFdr: 0.05, proteinFdr: 1 })
+}
+
 describe('fileRows', () => {
   const m = buildModel(sampleTables(), sampleDesign(), { showTechReplicates: false, psmFdr: 0.01, proteinFdr: 0.01 })
 
   it('lists every searched file, with its sample and what the search says of it', () => {
-    const rows = fileRows(m, summary([file('/input/0/ctrl_a.mzML'), file('/input/1/egf_a.mzML', { percolator: null, peptdeepNce: 28.6, ms2Spectra: 700 })]))
+    const rows = fileRows(m, summary([file('/input/0/ctrl_a.mzML'), file('/input/1/egf_a.mzML', { percolator: null, ms2Spectra: 700 })]))
     expect(rows.map((r) => r.file)).toEqual(['ctrl_a.mzML', 'egf_a.mzML'])
     expect(rows.map((r) => r.sample)).toEqual(['control 1', 'EGF 1'])
-    expect(rows[0]).toMatchObject({ ms2: 1000, targets: 400, decoys: 4, nce: null, seconds: 12.34 })
+    expect(rows[0]).toMatchObject({ ms2: 1000, seconds: 12.34, notes: [] })
     expect(rows[0].percolator.kind).toBe('applied')
-    expect(rows[1]).toMatchObject({ ms2: 700, nce: 28.6 })
+    expect(rows[1]).toMatchObject({ ms2: 700 })
     expect(rows[1].percolator.kind).toBe('off')
+  })
+
+  it('has no MS2 count where the summary has none (OpenNuXL does not report it)', () => {
+    expect(fileRows(m, summary([file('/input/0/ctrl_a.mzML', { ms2Spectra: 0 })]))[0].ms2).toBeNull()
   })
 
   it('keeps the order of the search and tolerates a missing summary file', () => {
     expect(fileRows(m, summary([file('/input/0/ctrl_a.mzML')])).map((r) => r.file)).toEqual(['ctrl_a.mzML', 'egf_a.mzML'])
     expect(fileRows(m, summary([file('/input/0/ctrl_a.mzML')]))[1].ms2).toBeNull()
   })
+
+  it('counts the peptide PSMs and the cross-link PSMs of each file at their cutoffs', () => {
+    const x = crossLinked()
+    const rows = fileRows(x, summary([file('a.mzML'), file('b.mzML')]))
+    expect(rows.map((r) => [r.peptidePsms, r.xlPsms])).toEqual([
+      [1, 1],
+      [0, 3],
+    ])
+  })
+
+  it("says why OpenNuXL skipped Percolator, and lists its other notes", () => {
+    const x = crossLinked()
+    const skipped = 'Too few PSMs for score recalibration. Skipped.'
+    const rows = fileRows(x, summary([file('a.mzML', { percolator: { applied: false, skipped, warning: null } }), file('b.mzML', { percolator: null })]), {
+      xlFdr: 0.05,
+      peptideFdr: 0.01,
+      percolator: [false, true],
+      notes: [[skipped, 'The database had decoys of its own. They were left out.'], []],
+    })
+    expect(rows[0].percolator).toMatchObject({ kind: 'skipped', detail: { short: 'Too few PSMs (Percolator needs 1000)', full: skipped } })
+    expect(rows[0].notes.map((n) => n.short)).toEqual(['The database had decoys of its own'])
+    // the summary says nothing of file 2, OpenNuXL's record says it was rescored
+    expect(rows[1].percolator.kind).toBe('applied')
+  })
 })
 
 describe('totalsOf', () => {
   it('adds up the files', () => {
-    const m = buildModel(sampleTables(), sampleDesign(), { showTechReplicates: false, psmFdr: 0.01, proteinFdr: 0.01 })
-    const rows = fileRows(m, summary([file('/input/0/ctrl_a.mzML'), file('/input/1/egf_a.mzML', { ms2Spectra: 500, targetPSMs: 100, decoyPSMs: 1, secondsSearch: 1 })]))
-    expect(totalsOf(rows)).toEqual({ ms2: 1500, targets: 500, decoys: 5, seconds: 13.34 })
+    const x = crossLinked()
+    const rows = fileRows(x, summary([file('a.mzML', { ms2Spectra: 0 }), file('b.mzML', { ms2Spectra: 500, secondsSearch: 1 })]))
+    expect(totalsOf(rows)).toEqual({ ms2: 500, peptidePsms: 1, xlPsms: 4, seconds: 13.34 })
+    expect(totalsOf(fileRows(x, summary([file('a.mzML', { ms2Spectra: 0 })]))).ms2).toBeNull()
   })
 })
 
-describe('the PSM FDR that ProSE skipped', () => {
-  const skipped = { psmFdrApplied: false, decoyPSMs: 0 }
-  const a = file('/input/0/ctrl_a.mzML', { psmFdrApplied: true })
-  const b = file('/input/1/egf_a.mzML', skipped)
-
-  it('is the cutoff where it was applied (or a summary says nothing of it: the web app)', () => {
-    for (const s of [summary([a, file('/input/1/egf_a.mzML')]), summary([file('/x.mzML', { psmFdrApplied: null })])]) {
-      expect(psmFdrFact(s).value).toBe('1 % (q ≤ 0.01)')
-      expect(psmFdrNotice(s)).toBeNull()
-      expect(psmFdrAppliedToNone(s)).toBe(false)
-    }
+describe('the cross-links of the overview', () => {
+  it('counts the cross-link PSMs per adduct at the cross-link FDR, most first', () => {
+    expect(adductCounts(crossLinked())).toEqual([
+      { name: 'U-H3O4P1', count: 3 },
+      { name: 'UU-H2O', count: 1 },
+    ])
   })
 
-  it('says it was not applied, to which files, and that their PSMs are not FDR-controlled', () => {
-    const some = summary([a, b])
-    expect(psmFdrFact(some).value).toBe('1 % (q ≤ 0.01), not applied to 1 of 2 files')
-    expect(psmFdrFact(some).title).toContain('Not applied to egf_a.mzML.')
-    expect(psmFdrNotice(some)).toBe(
-      'The PSM FDR of 1 % was not applied to egf_a.mzML: no PSM matched a decoy, so ProSE could not estimate the FDR. ' +
-        'Their PSMs have no q-value and are not FDR-controlled: treat them with care, or search with decoys (and more spectra).',
-    )
-    expect(psmFdrAppliedToNone(some)).toBe(false)
-    const m = buildModel(sampleTables(), sampleDesign(), { showTechReplicates: false, psmFdr: 0.01, proteinFdr: 0.01 })
-    expect(fileRows(m, some).map((r) => r.psmFdrSkipped)).toEqual([false, true])
-
-    const none = summary([file('/input/0/ctrl_a.mzML', skipped), b])
-    expect(psmFdrFact(none).value).toBe('not applied (no decoy PSMs)')
-    expect(psmFdrNotice(none)).toMatch(/^The PSM FDR of 1 % was not applied to the search: .* The PSMs have no q-value/)
-    expect(psmFdrAppliedToNone(none)).toBe(true)
+  it('counts the cross-linked amino acids, and the PSMs whose cross-link is not localized', () => {
+    expect(residueCounts(crossLinked())).toEqual({
+      residues: [
+        { name: 'K', count: 2 },
+        { name: 'Y', count: 1 },
+      ],
+      unlocalized: 1,
+    })
   })
 
-  it('needs no notice for a file without PSMs, which has nothing the FDR could have filtered', () => {
-    const empty = summary([a, file('/input/1/egf_a.mzML', { ...skipped, targetPSMs: 0 })])
-    expect(psmFdrNotice(empty)).toBeNull()
-    // a file without any PSM does not count for "applied to none"
-    expect(psmFdrAppliedToNone(summary([file('/a.mzML', skipped), file('/b.mzML', { psmFdrApplied: false, targetPSMs: 0, decoyPSMs: 0 })]))).toBe(true)
-    expect(psmFdrAppliedToNone(summary([file('/a.mzML', { psmFdrApplied: false, targetPSMs: 0, decoyPSMs: 0 })]))).toBe(false)
+  it('has none without cross-links', () => {
+    expect(adductCounts(buildModel(sampleTables(), sampleDesign(), { showTechReplicates: false, psmFdr: 1, proteinFdr: 1 }))).toEqual([])
+  })
+})
+
+describe('the FDRs of the overview', () => {
+  it('names the peptide FDR and the cross-link FDR', () => {
+    const facts = fdrFacts({ psmFdr: 0.01, xlFdr: 0.05 })
+    expect(facts.map((f) => [f.name, f.value])).toEqual([
+      ['Peptide FDR', '1 % (q ≤ 0.01)'],
+      ['Cross-link FDR', '5 % (q ≤ 0.05)'],
+    ])
+    expect(cutoffText(1)).toMatch(/^none/)
   })
 })

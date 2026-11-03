@@ -3,7 +3,7 @@ import { input } from '../design/fixtures'
 import { resolveDesign } from '../design/model'
 import { cutoffs, sampleDesign, sampleTables } from './fixtures'
 import { buildModel, type ResultModel } from './model'
-import { groupMates, peptidePsms, proteinDetail, proteinPsms, siteTitle } from './protein'
+import { crossLinkedSites, crossLinkTitle, peptidePsms, proteinDetail, proteinPsms, proteinXlSites, siteLabel, siteTitle } from './protein'
 import { makeLargeTables, makeTables } from './synthetic'
 
 const model = (tables = sampleTables(), opts: Partial<{ psmFdr: number; proteinFdr: number }> = {}) =>
@@ -284,29 +284,106 @@ describe('the PSMs of a peptide and of a protein', () => {
   })
 })
 
-describe('groupMates', () => {
-  it('lists the other proteins of an indistinguishable group', () => {
-    const tables = sampleTables()
-    tables.proteins.group.set([7, 7, 2, 7])
-    const m = model(tables)
-    expect(groupMates(m, 0)).toEqual([1]) // the decoy of the same group is not its mate
-    expect(groupMates(m, 1)).toEqual([0])
-    expect(groupMates(m, 3)).toEqual([]) // a decoy's mates are decoys
-    expect(groupMates(m, 2)).toEqual([])
+describe('cross-linked sites', () => {
+  /**
+   * P1 AAAKCCCKDDDKCCCK (16): peptide 0 AAAK linear; 1 CCCK with U-H3O4P1 (at 4 and 12, twice in P1); 2 DDDK with
+   * UU-H2O. P2 has DDDK too. Cross-link FDR 5 %, peptide FDR 1 %.
+   */
+  function crossLinked() {
+    const tables = makeTables({
+      files: ['a.mzML'],
+      proteins: [
+        { accession: 'P1', sequence: 'AAAKCCCKDDDKCCCK', qValue: NaN },
+        { accession: 'P2', sequence: 'DDDKEEEK', qValue: NaN },
+      ],
+      peptides: [
+        { sequence: 'AAAK', proteins: [0] },
+        {
+          sequence: 'CCCK',
+          adduct: 'U-H3O4P1',
+          mods: [{ position: 1, name: 'U-H3O4P1', unimod: -1, mass: 226.059 }],
+          proteins: [
+            { protein: 0, start: 4 },
+            { protein: 0, start: 12 },
+          ],
+        },
+        {
+          sequence: 'DDDK',
+          adduct: 'UU-H2O',
+          proteins: [
+            { protein: 0, start: 8 },
+            { protein: 1, start: 0 },
+          ],
+        },
+      ],
+      psms: [
+        { peptide: 0, qValue: 0.005 },
+        { peptide: 1, qValue: 0.01, site: 1 },
+        { peptide: 1, qValue: 0.02, site: 1 },
+        { peptide: 1, qValue: 0.2, site: 1 }, // above the cross-link FDR
+        { peptide: 1, qValue: 0.03 }, // not localized
+        { peptide: 2, qValue: 0.04, site: 3 },
+        { peptide: 2, qValue: 0.01, site: 1 },
+      ],
+    })
+    // a U-H3O4P1 PSM on DDDK's K too
+    tables.psms.xl.adduct[5] = 'U-H3O4P1'
+    const design = resolveDesign([input('a.mzML', { condition: 'control', replicate: 1 })])
+    return buildModel(tables, design, { showTechReplicates: false, psmFdr: 0.01, xlFdr: 0.05, proteinFdr: 1 })
+  }
+
+  it('puts each localized cross-link PSM at its residue of the protein, with its adducts', () => {
+    const m = crossLinked()
+    const sites = crossLinkedSites(m, 0)
+    expect(sites.map(siteLabel)).toEqual(['C6', 'D10', 'K12', 'C14'])
+    expect(sites.map(crossLinkTitle)).toEqual(['C6 (U-H3O4P1 ×2)', 'D10 (UU-H2O ×1)', 'K12 (U-H3O4P1 ×1)', 'C14 (U-H3O4P1 ×2)'])
+    expect(sites.map((s) => s.psms)).toEqual([2, 1, 1, 2])
+    // the shared peptide's sites in P2
+    expect(crossLinkedSites(m, 1).map(crossLinkTitle)).toEqual(['D2 (UU-H2O ×1)', 'K4 (U-H3O4P1 ×1)'])
   })
 
-  it('has none without a group', () => {
-    const tables = sampleTables()
-    tables.proteins.group.fill(-1)
-    const m = model(tables)
-    for (let p = 0; p < 4; p++) expect(groupMates(m, p)).toEqual([])
+  it('lists the adducts of a site by their PSMs', () => {
+    const m = crossLinked()
+    m.tables.psms.xl.site[5] = 1 // the U-H3O4P1 PSM of DDDK on D10, with the UU-H2O one
+    const m2 = buildModel(m.tables, m.design, { showTechReplicates: false, psmFdr: 0.01, xlFdr: 0.05, proteinFdr: 1 })
+    expect(crossLinkedSites(m2, 0).find((s) => s.position === 9)?.adducts).toEqual([
+      { adduct: 'U-H3O4P1', psms: 1 },
+      { adduct: 'UU-H2O', psms: 1 },
+    ])
   })
 
-  it('lists the contaminant that shares its peptides', () => {
-    const tables = sampleTables()
-    tables.proteins.group.set([0, 1, 1, 3]) // A1AT and the contaminant trypsin
-    const m = model(tables)
-    expect(groupMates(m, 1)).toEqual([2])
-    expect(groupMates(m, 2)).toEqual([1])
+  it('puts no site where the peptide\'s place in the protein is unknown', () => {
+    const m = crossLinked()
+    const pt = m.tables.peptides
+    const second = pt.proteinOffsets[1] + 1 // CCCK at 12 of P1
+    pt.start[second] = 0
+    pt.end[second] = 0
+    const m2 = buildModel(m.tables, m.design, { showTechReplicates: false, psmFdr: 0.01, xlFdr: 0.05, proteinFdr: 1 })
+    expect(crossLinkedSites(m2, 0).map(siteLabel)).toEqual(['C6', 'D10', 'K12'])
+    expect(proteinXlSites(m2)[0]).toBe(3)
+  })
+
+  it('counts the sites of every protein for the table, and the cross-link PSMs', () => {
+    const m = crossLinked()
+    expect(Array.from(proteinXlSites(m))).toEqual([4, 2])
+    const d = proteinDetail(m, 0, [])
+    expect(d.xlSites).toEqual(crossLinkedSites(m, 0))
+    expect(d.xlPsms).toBe(m.protein.xlPsms[0])
+  })
+
+  it('does not count the adduct of a cross-link as a modified site', () => {
+    const m = crossLinked()
+    expect(proteinDetail(m, 0, []).sites).toEqual([])
+  })
+
+  it('has none without cross-links', () => {
+    const m = model()
+    expect(crossLinkedSites(m, 0)).toEqual([])
+    expect(Array.from(proteinXlSites(m))).toEqual([0, 0, 0, 0])
+  })
+
+  it('lists the cross-link PSMs of a peptide at the cross-link FDR', () => {
+    const m = crossLinked()
+    expect(Array.from(peptidePsms(m, 1))).toEqual([1, 2, 4])
   })
 })

@@ -278,7 +278,7 @@ function enzymes() {
     const names = [...readFileSync(xml, 'utf8').matchAll(/<ITEM name="Name" value="([^"]+)"/g)].map((m) => m[1])
     if (names.length > 0) return names
   }
-  for (const file of ['nuxl-parameters.json', 'prose-parameters.json']) {
+  for (const file of ['nuxl-parameters.json']) {
     const path = join(root, 'src/lib/settings', file)
     if (!existsSync(path)) continue
     const list = JSON.parse(readFileSync(path, 'utf8')).find((e) => e.name === 'peptide:enzyme' || e.name === 'enzyme')?.validStrings

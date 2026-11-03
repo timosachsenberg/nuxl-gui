@@ -1,7 +1,7 @@
-// The numbers behind the QC tab: the score distribution of targets and decoys, the precursor-error
-// histogram and the PSMs per file. Everything is counted at the search's cutoffs (`levelRows`).
+// The numbers behind the QC tab: the score distribution of the peptide PSMs and the cross-link PSMs, the
+// precursor-error histogram and the PSMs per file. Everything is counted at the search's cutoffs (`levelRows`:
+// peptide PSMs at the peptide FDR, cross-link PSMs at the cross-link FDR; OpenNuXL's filtered files hold no decoys).
 
-import { UNMODIFIED_SHIFT_DA } from '../format/peptide'
 import { levelRows } from './figures'
 import { baseName, type ResultModel } from './model'
 
@@ -73,31 +73,31 @@ export function countInBins(values: ArrayLike<number>, edges: number[]): number[
 }
 
 export type ScoreDistribution = {
-  /** The score on the x axis: "Percolator score" when the search rescored, else "ln(hyperscore)". */
+  /** The score on the x axis: "Percolator score" when the search rescored, else "NuXL score". */
   scoreName: string
   edges: number[]
-  /** Per bin. */
-  targets: number[]
-  decoys: number[]
-  nTargets: number
-  nDecoys: number
-  /** PSMs at the cutoff without a score to plot (Percolator could not rescore them). */
+  /** Per bin: the target PSMs without a cross-link, and the cross-link PSMs. */
+  peptides: number[]
+  crossLinks: number[]
+  nPeptides: number
+  nCrossLinks: number
+  /** PSMs at the cutoffs without a score to plot (Percolator could not rescore them). */
   unscored: number
 }
 
 /**
- * The scores of the PSMs at the search's PSM FDR, targets and decoys apart (decoys that pass the
- * cutoff are kept, contaminants count as targets), in shared bins. The engine filters at the PSM
- * FDR, so this shows what passed, not the whole distribution. `null` without a PSM to plot.
+ * The scores of the target PSMs at the search's cutoffs, the peptide PSMs and the cross-link PSMs apart
+ * (contaminants count), in shared bins. This shows what passed, not the whole distribution. `null` without a PSM
+ * to plot.
  */
 export function scoreDistribution(m: ResultModel): ScoreDistribution | null {
   const ps = m.tables.psms
-  const targets: number[] = []
-  const decoys: number[] = []
+  const peptides: number[] = []
+  const crossLinks: number[] = []
   let unscored = 0
   let min = Infinity
   let max = -Infinity
-  for (const i of levelRows(m, 'psms', true)) {
+  for (const i of levelRows(m, 'psms', false)) {
     const s = ps.score[i]
     // a hit Percolator could not rescore has -100 with q-value 1
     if (!Number.isFinite(s) || (s === -100 && !(ps.qValue[i] < 1))) {
@@ -106,17 +106,17 @@ export function scoreDistribution(m: ResultModel): ScoreDistribution | null {
     }
     if (s < min) min = s
     if (s > max) max = s
-    ;(ps.decoy[i] ? decoys : targets).push(s)
+    ;(ps.xl.isXL[i] ? crossLinks : peptides).push(s)
   }
-  if (targets.length + decoys.length === 0) return null
+  if (peptides.length + crossLinks.length === 0) return null
   const edges = binEdges(min, max)
   return {
-    scoreName: m.rescored ? 'Percolator score' : 'ln(hyperscore)',
+    scoreName: m.rescored ? 'Percolator score' : 'NuXL score',
     edges,
-    targets: countInBins(targets, edges),
-    decoys: countInBins(decoys, edges),
-    nTargets: targets.length,
-    nDecoys: decoys.length,
+    peptides: countInBins(peptides, edges),
+    crossLinks: countInBins(crossLinks, edges),
+    nPeptides: peptides.length,
+    nCrossLinks: crossLinks.length,
     unscored,
   }
 }
@@ -127,30 +127,22 @@ export type PrecursorErrors = {
   counts: number[]
   /** The PSMs in the histogram. */
   n: number
-  /** The target PSMs at the cutoff (the histogram leaves out those without an error, and in an open search the shifted ones). */
+  /** The target PSMs at the cutoff (the histogram leaves out those without an error). */
   considered: number
-  /** Open search: the PSMs left out because they carry a mass shift (|Δ| above 0.05 Da). */
-  shifted: number
   /** The median error (signed, ppm): the search's calibration. */
   median: number
 }
 
 /**
- * The precursor mass errors (ppm) of the target PSMs at the search's PSM FDR. In an open search a
- * PSM's error includes its mass shift, so only the unmodified PSMs (|Δ| ≤ 0.05 Da, as ProSE counts
- * them) are used. `null` without an error to plot.
+ * The precursor mass errors (ppm) of the target PSMs at the search's cutoffs (a cross-link's with its adduct's
+ * mass). `null` without an error to plot.
  */
-export function precursorErrors(m: ResultModel, openSearch: boolean): PrecursorErrors | null {
+export function precursorErrors(m: ResultModel): PrecursorErrors | null {
   const ps = m.tables.psms
   const rows = levelRows(m, 'psms', false)
   const errors: number[] = []
-  let shifted = 0
   let maxAbs = 0
   for (const i of rows) {
-    if (openSearch && !(Math.abs(ps.deltaMass[i]) <= UNMODIFIED_SHIFT_DA)) {
-      shifted++ // a shift, or no delta mass to say there is none
-      continue
-    }
     let e = ps.precursorErrorPpm[i]
     if (!Number.isFinite(e)) continue
     if (Math.abs(e) < EXACT_PPM) e = 0 // an exact mass: the sign of rounding noise is no information
@@ -166,14 +158,13 @@ export function precursorErrors(m: ResultModel, openSearch: boolean): PrecursorE
     counts: countInBins(errors, edges),
     n,
     considered: rows.length,
-    shifted,
     median: n % 2 === 1 ? sorted[n >> 1] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2,
   }
 }
 
 export type FileCount = { file: string; count: number }
 
-/** The target PSMs at the search's PSM FDR in each searched file, in the order of the search. */
+/** The target PSMs at the search's cutoffs in each searched file, in the order of the search. */
 export function psmsPerFile(m: ResultModel): FileCount[] {
   const counts = new Array<number>(m.tables.files.length).fill(0)
   const file = m.tables.psms.file

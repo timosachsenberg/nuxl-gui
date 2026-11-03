@@ -139,7 +139,7 @@ describe('toCsv', () => {
       ],
       psms: [{ peptide: 0, score: -12.5 }, { peptide: 1 }],
     })
-    tables.psms.deltaMass[0] = -0.002
+    tables.psms.precursorErrorPpm[0] = -0.002
     const m = buildModel(tables, design, { showTechReplicates: false, ...cutoffs })
     expect(lines(toCsv(m, 'proteins', rows(0, 1, 2), ['accession', 'description', 'score', 'samples'], all))).toEqual([
       "Accession,Description,Best NuXL score,'=evil 1",
@@ -148,7 +148,7 @@ describe('toCsv', () => {
       "'\tTab,'-1 is text here,1,0", // a tab needs no quotes
     ])
     // numbers keep their sign
-    expect(lines(toCsv(m, 'psms', rows(0), ['score', 'deltaMass', 'peptide'], all))).toEqual(['NuXL score,Delta mass (Da),Peptide', '-12.5,-0.002,AAAAAK'])
+    expect(lines(toCsv(m, 'psms', rows(0), ['score', 'precursorErrorPpm', 'peptide'], all))).toEqual(['NuXL score,Precursor error (ppm),Peptide', '-12.5,-0.002,AAAAAK'])
   })
 
   it('writes and sorts the gene of a UniProt description', () => {
@@ -172,20 +172,17 @@ describe('toCsv', () => {
     expect(lines(toCsv(m, 'psms', rows(0, 2), ['file'], all))).toEqual(['File', 'ctrl_a.mzML', 'egf_a.mzML'])
   })
 
-  it("writes an open search's mass shift as an unlocalized ProForma mass, above 0.05 Da", () => {
+  it("writes and sorts a protein's cross-linked sites and cross-link PSMs", () => {
     const m = model()
-    const { deltaMass } = m.tables.psms
-    deltaMass.fill(NaN) // a closed search
-    deltaMass[1] = 15.99491
-    deltaMass[2] = -57.02146
-    deltaMass[3] = 0.05 // counts as unmodified
-    expect(lines(toCsv(m, 'psms', rows(0, 1, 2, 3), ['peptide'], all))).toEqual([
-      'Peptide',
-      'M[Oxidation]KWVTF',
-      '[+15.9949]?M[Oxidation]KWVTF',
-      '[-57.0215]?M[Oxidation]KWVTF',
-      'TFISLL',
+    expect(lines(toCsv(m, 'proteins', rows(0, 1, 2), ['accession', 'xlSites', 'xlPsms'], all))).toEqual([
+      'Accession,XL sites,XL PSMs',
+      'sp|P02768|ALBU_HUMAN,0,0',
+      'sp|P01009|A1AT_HUMAN,0,0',
+      'CON__P00761,0,0',
     ])
+    expect(sortRows(m, 'proteins', rows(0, 1, 2), 'xlSites', 'desc', all)).toHaveLength(3)
+    expect(() => toCsv(m, 'proteins', rows(0), ['qValue'], all)).toThrow('Unknown column')
+    expect(() => toCsv(m, 'proteins', rows(0), ['group'], all)).toThrow('Unknown column')
   })
 
   it('names the score after what the search used: Percolator or NuXL score', () => {

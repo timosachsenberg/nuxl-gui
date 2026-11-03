@@ -28,6 +28,7 @@ import {
   unpackProject,
 } from './history'
 import { exampleFolder, exampleResult } from './fixtures'
+import { makeTables } from '../results/synthetic'
 import { MemoryBackend, unframe } from './memory-backend'
 
 let fixture: Record<string, Uint8Array>
@@ -72,6 +73,28 @@ describe('the record', () => {
     const stored = recordOf({ ...result, stored: { name: 'x', appVersion: '0.0.9', moduleVersion: '3.5.0' } }, 'y', '3.6.0')
     expect([stored.appVersion, stored.toolVersion]).toEqual(['0.0.9', '3.5.0'])
     expect(parseRecord(JSON.stringify(record))).toEqual(JSON.parse(JSON.stringify(record)))
+  })
+
+  test('counts the cross-link PSMs at the cross-link FDR, the peptide PSMs at the peptide FDR', () => {
+    // peptide FDR 1 %, cross-link FDR 5 %: the cross-link at q 0.03 counts, the peptide PSM at q 0.03 does not
+    const tables = makeTables({
+      files: ['a.mzML'],
+      proteins: [{ accession: 'P1', sequence: 'AAAKCCCK' }],
+      peptides: [
+        { sequence: 'AAAK', proteins: [0] },
+        { sequence: 'CCCK', adduct: 'U-H3O4P1', proteins: [{ protein: 0, start: 4 }] },
+      ],
+      psms: [
+        { peptide: 0, qValue: 0.005 },
+        { peptide: 0, qValue: 0.03 },
+        { peptide: 1, qValue: 0.03 },
+        { peptide: 1, qValue: 0.08 },
+      ],
+    })
+    expect(countPsms(tables, 0.01, 0.05)).toBe(2)
+    expect(countPsms(tables, 0.01)).toBe(1) // without the cross-link FDR: all at the peptide FDR
+    const xl = { ...result, psmFdr: 0.01, settings: { ...result.settings, peptideFdr: 0.01, xlFdr: 0.05 }, outcome: { ...result.outcome, tables } }
+    expect(recordOf(xl, 'XL', '3.6.0').psms).toBe(2)
   })
 
   test('a record that is incomplete or of another kind is refused with a message', () => {

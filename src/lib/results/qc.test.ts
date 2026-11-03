@@ -47,27 +47,27 @@ describe('bins', () => {
 })
 
 describe('scoreDistribution', () => {
-  it("shows the PSMs at the search's cutoff, targets and decoys, in shared bins", () => {
-    // PSM FDR 5 %: PSMs 0–7 (q ≤ 0.05, scores 40 50 30 45 42 41 40 48) and the decoy PSM 8 (q 0.03, score 20)
-    const d = scoreDistribution(model({ psmFdr: 0.05 }))!
-    expect(d.scoreName).toBe('ln(hyperscore)')
-    expect(d.nTargets).toBe(8)
-    expect(d.nDecoys).toBe(1)
-    expect(d.edges[0]).toBe(20)
+  it("shows the target PSMs at the search's cutoffs, peptides and cross-links, in shared bins", () => {
+    // PSM FDR 5 %: PSMs 0–7 (q ≤ 0.05, scores 40 50 30 45 42 41 40 48); the decoy PSM 8 is left out.
+    // PSMs 4–6 (peptide 2) are cross-links here.
+    const d = scoreDistribution(model({ psmFdr: 0.05 }, (t) => t.psms.xl.isXL.set([1, 1, 1], 4)))!
+    expect(d.scoreName).toBe('NuXL score')
+    expect(d.nPeptides).toBe(5)
+    expect(d.nCrossLinks).toBe(3)
+    expect(d.edges[0]).toBe(30)
     expect(d.edges.at(-1)).toBe(50)
-    expect(d.targets).toHaveLength(d.edges.length - 1)
-    expect(d.targets.reduce((a, b) => a + b, 0)).toBe(8)
-    expect(d.decoys.reduce((a, b) => a + b, 0)).toBe(1)
-    expect(d.decoys[0]).toBe(1) // score 20
-    expect(d.targets.at(-1)).toBe(1) // score 50 is in the last, closed bin
+    expect(d.peptides).toHaveLength(d.edges.length - 1)
+    expect(d.peptides.reduce((a, b) => a + b, 0)).toBe(5)
+    expect(d.crossLinks.reduce((a, b) => a + b, 0)).toBe(3)
+    expect(d.peptides.at(-1)).toBe(1) // score 50 is in the last, closed bin
     expect(d.unscored).toBe(0)
   })
 
-  it('leaves the PSMs above the search FDR out, decoys included', () => {
-    const d = scoreDistribution(model({ psmFdr: 0.01 }))! // the decoy has q 0.03
-    expect(d.nTargets).toBe(7)
-    expect(d.nDecoys).toBe(0)
-    expect(d.decoys.every((c) => c === 0)).toBe(true)
+  it('leaves the PSMs above the search FDR out', () => {
+    const d = scoreDistribution(model({ psmFdr: 0.01 }))!
+    expect(d.nPeptides).toBe(7)
+    expect(d.nCrossLinks).toBe(0)
+    expect(d.crossLinks.every((c) => c === 0)).toBe(true)
   })
 
   it('names the score after the rescoring and leaves unscored PSMs out', () => {
@@ -75,13 +75,12 @@ describe('scoreDistribution', () => {
       model({ psmFdr: 1, rescored: true }, (t) => {
         t.psms.score[2] = -100 // Percolator could not rescore it: q-value 1
         t.psms.qValue[2] = 1
-        t.psms.score[8] = NaN
+        t.psms.score[3] = NaN
       }),
     )!
     expect(d.scoreName).toBe('Percolator score')
     expect(d.unscored).toBe(2)
-    expect(d.nTargets).toBe(7)
-    expect(d.nDecoys).toBe(0)
+    expect(d.nPeptides).toBe(6)
   })
 
   it('is null without PSMs at the cutoff', () => {
@@ -94,40 +93,17 @@ describe('precursorErrors', () => {
 
   it('bins the target PSMs at the cutoff around zero, and gives the median', () => {
     // PSM FDR 1 %: PSMs 0 1 3 4 5 6 7 with errors 1 -2 3 -4 5 NaN 0.5 (the decoy and PSM 2 are out)
-    const e = precursorErrors(model({ psmFdr: 0.01 }, errors), false)!
+    const e = precursorErrors(model({ psmFdr: 0.01 }, errors))!
     expect(e.considered).toBe(7)
     expect(e.n).toBe(6)
-    expect(e.shifted).toBe(0)
     expect(e.counts.reduce((a, b) => a + b, 0)).toBe(6)
     expect(e.edges[0]).toBe(-e.edges.at(-1)!)
     expect(e.edges).toContain(0)
     expect(e.median).toBeCloseTo(0.75) // -4 -2 0.5 1 3 5
   })
 
-  it('takes only the unmodified PSMs (|Δ| ≤ 0.05 Da) of an open search', () => {
-    const m = model({ psmFdr: 0.01 }, (t) => {
-      errors(t)
-      t.psms.deltaMass.set([15.99, 0.001, 0, 0.02, -0.01, 79.96, 0.04, 0.0, 0.0])
-    })
-    const e = precursorErrors(m, true)!
-    // PSMs 0 and 5 carry a mass shift; PSM 6 has no error
-    expect(e.considered).toBe(7)
-    expect(e.shifted).toBe(2)
-    expect(e.n).toBe(4) // -2 3 -4 0.5
-    expect(e.median).toBeCloseTo(-0.75)
-  })
-
-  it('counts a PSM of an open search without a delta mass as not unmodified', () => {
-    const m = model({ psmFdr: 0.01 }, (t) => {
-      errors(t)
-      t.psms.deltaMass.fill(NaN)
-    })
-    const e = precursorErrors(m, true)
-    expect(e?.n ?? 0).toBe(0)
-  })
-
   it('keeps the axis at ±1 ppm at least: masses that are exact (the example) are one tall bar, not numerical noise stretched over the axis', () => {
-    const e = precursorErrors(model({ psmFdr: 0.01 }, (t) => t.psms.precursorErrorPpm.set([1.2e-9, -1.2e-9, 3e-10, -4e-10, 1e-9, -2e-9, 5e-10, 0, 0])), false)!
+    const e = precursorErrors(model({ psmFdr: 0.01 }, (t) => t.psms.precursorErrorPpm.set([1.2e-9, -1.2e-9, 3e-10, -4e-10, 1e-9, -2e-9, 5e-10, 0, 0])))!
     expect(e.edges[0]).toBe(-1)
     expect(e.edges.at(-1)).toBe(1)
     expect(e.n).toBe(7)
@@ -137,7 +113,7 @@ describe('precursorErrors', () => {
   })
 
   it('is null without a precursor error', () => {
-    expect(precursorErrors(model({ psmFdr: 0.01 }, (t) => t.psms.precursorErrorPpm.fill(NaN)), false)).toBeNull()
+    expect(precursorErrors(model({ psmFdr: 0.01 }, (t) => t.psms.precursorErrorPpm.fill(NaN)))).toBeNull()
   })
 })
 

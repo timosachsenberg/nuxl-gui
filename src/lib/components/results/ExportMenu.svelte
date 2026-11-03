@@ -3,7 +3,7 @@
   import { buttonVariants } from '$lib/components/ui/button'
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import { saveProjectFile } from '$lib/history/history.svelte'
-  import { exportCsv, exportDesign, exportIdXML, idXMLFile } from '$lib/results/exports'
+  import { exportCsv, exportDesign, exportIdXML, idXMLFiles } from '$lib/results/exports'
   import type { ResultsView } from '$lib/results/view.svelte'
   import { cn } from '$lib/utils'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
@@ -57,11 +57,11 @@
     }
   }
 
-  async function idXML() {
+  async function idXML(input: number) {
     busy = true
     error = null
     try {
-      await exportIdXML(view.result)
+      await exportIdXML(view.result, input)
     } catch (e) {
       error = `idXML: ${String((e as Error)?.message ?? e)}`
     } finally {
@@ -88,9 +88,13 @@
       onSelect={() => guard(() => view.spectrumExporter?.())}>Spectrum (SVG)</DropdownMenu.Item>
     <DropdownMenu.Item
       disabled={view.exporting}
-      title="Saves the search's results as one file that you can open in ProSE elsewhere. It contains ProSE's outputs, which name folders on this computer, such as those of the database and the search. The mzML files and the log are not included."
-      onSelect={project}>Project (.prose)</DropdownMenu.Item>
+      title="Saves the search's results as one file that you can open in NuXL desktop elsewhere. It contains OpenNuXL's outputs, which name folders on this computer, such as those of the database and the search. The mzML files and the log are not included."
+      onSelect={project}>Project (.nuxl)</DropdownMenu.Item>
     <DropdownMenu.Separator />
-    <DropdownMenu.Item onSelect={idXML}>{idXMLFile(view.result).label}</DropdownMenu.Item>
+    {#each idXMLFiles(view.result) as f (f.input)}
+      <DropdownMenu.Item
+        title="Every PSM of OpenNuXL's run of this file, targets and decoys, before the FDR filter"
+        onSelect={() => idXML(f.input)}>{f.label}</DropdownMenu.Item>
+    {/each}
   </DropdownMenu.Content>
 </DropdownMenu.Root>

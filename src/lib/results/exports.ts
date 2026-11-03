@@ -1,8 +1,9 @@
-// The exports of the Export menu: the current view as CSV, the design, the search's idXML; each saved
+// The exports of the Export menu: the current view as CSV, the design, the idXML of a searched file; each saved
 // where the user chooses (the system's save dialog).
 
 import { writeDesignTsv } from '../design/design-tsv'
-import { saveSearchFile } from '../desktop'
+import { errorText, saveSearchFile, searchFiles } from '../desktop'
+import type { SearchFiles } from './read'
 import { download } from '../download'
 import type { OpenResult } from '../search/session.svelte'
 import { resultName } from './display'
@@ -38,16 +39,31 @@ export async function exportDesign(result: OpenResult): Promise<void> {
   await download(`${exportName(result)}_design.tsv`, writeDesignTsv(result.design), 'text/tab-separated-values')
 }
 
-/**
- * The idXML of a search in its folder (src-tauri/src/args.rs): the merged one of several files
- * (`-out_merged`), the file's own of one (`-out_idxml`; a search of one file saved by an earlier build has
- * none, and the export says so).
- */
-export function idXMLFile(result: OpenResult): { name: string; label: string } {
-  return result.design.rows.length > 1 ? { name: 'merged.idXML', label: 'idXML (merged)' } : { name: 'search.idXML', label: 'idXML' }
+/** The idXML exports of a result: one per searched file (OpenNuXL runs once per input), by its position. */
+export function idXMLFiles(result: OpenResult): { input: number; label: string }[] {
+  const rows = result.design.rows
+  return rows.map((r, k) => ({ input: k, label: rows.length > 1 ? `idXML: ${r.fileName}` : 'idXML' }))
 }
 
-/** The search's idXML, saved as `<name>.idXML`. */
-export async function exportIdXML(result: OpenResult): Promise<void> {
-  await saveSearchFile(result.id, idXMLFile(result).name, `${exportName(result)}.idXML`)
+/** The name of a file without its directories and its extension(s) (`.mzML`, `.mzML.gz`). */
+const stemOf = (name: string) => name.slice(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1).replace(/\.mzML(\.gz)?$/i, '')
+
+/**
+ * The idXML of input `input` (every PSM of its OpenNuXL run, targets and decoys, before the FDR filter:
+ * `nuxl/<stem>.idXML`, docs/design.md §2), saved as `<file>.idXML`. The stem is the one of the folder's inputs.json
+ * (`files` reads the folder; default: the desktop's).
+ */
+export async function exportIdXML(result: OpenResult, input = 0, files: SearchFiles = searchFiles(result.id)): Promise<void> {
+  let records: unknown
+  try {
+    records = JSON.parse(new TextDecoder().decode(await files('inputs.json')))
+  } catch (e) {
+    throw new Error(`The search's inputs.json cannot be read (${errorText(e)}).`, { cause: e })
+  }
+  const record = Array.isArray(records)
+    ? (records as { index?: number; stem?: unknown }[]).find((r, k) => (typeof r.index === 'number' ? r.index : k) === input)
+    : undefined
+  if (!record || typeof record.stem !== 'string' || record.stem === '') throw new Error(`The search has no input ${input + 1}.`)
+  const name = result.design.rows[input]?.fileName ?? record.stem
+  await saveSearchFile(result.id, `nuxl/${record.stem}.idXML`, `${stemOf(name)}.idXML`)
 }

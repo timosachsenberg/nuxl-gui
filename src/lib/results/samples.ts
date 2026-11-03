@@ -1,10 +1,11 @@
-// The Samples tab: samples × (PSMs, peptides, proteins), grouped by condition. Counted as the tables
-// count, at the search's cutoffs:
-// - PSMs: target PSMs at the PSM FDR (contaminants included, as in the key figures);
+// The Samples tab: samples × (PSMs, cross-link PSMs, peptides, proteins), grouped by condition. Counted as the
+// tables count, at the search's cutoffs:
+// - PSMs: target PSMs, peptide PSMs at the peptide FDR and cross-link PSMs at the cross-link FDR (contaminants
+//   included, as in the key figures); of them, the cross-link PSMs;
 // - peptides: distinct plain sequences (a sequence and its modified forms count once, as the protein
 //   counts do; the Peptides tab lists modified forms as rows of their own);
-// - proteins: protein groups at the protein FDR with a PSM in the sample (proteins that cannot be told
-//   apart count once, as in the key figures; a protein without a group is a group of its own).
+// - proteins: proteins with a PSM in the sample (OpenNuXL has no protein FDR and no protein groups: the reader
+//   gives each protein a group of its own, and a group counts once).
 // A condition's and the total's peptides and proteins are the distinct ones in all its samples, not the sum.
 // Technical replicates follow the "Show technical replicates" setting: merged, a sample is one row;
 // separate, each measurement has a row.
@@ -12,7 +13,7 @@
 import { levelRows } from './figures'
 import type { ResultModel } from './model'
 
-export type SampleCounts = { psms: number; peptides: number; proteins: number }
+export type SampleCounts = { psms: number; xlPsms: number; peptides: number; proteins: number }
 
 export type SampleRow = {
   /** The column of `ResultModel.samples`. */
@@ -64,17 +65,19 @@ export function sampleTable(m: ResultModel): SamplesTable {
   const groupSequences = newSets(nG)
   const allSequences = new Set<number>()
   const psms = new Uint32Array(nS)
+  const xlPsms = new Uint32Array(nS)
   const ps = m.tables.psms
   for (const i of levelRows(m, 'psms', false)) {
     const c = m.psmSample[i]
     const id = sequenceId[ps.peptide[i]]
     psms[c]++
+    if (ps.xl.isXL[i]) xlPsms[c]++
     colSequences[c].add(id)
     groupSequences[groupOf[c]].add(id)
     allSequences.add(id)
   }
 
-  // protein groups
+  // proteins (by group: one each)
   const colProteins = newSets(nS)
   const groupProteins = newSets(nG)
   const allProteins = new Set<number>()
@@ -107,10 +110,11 @@ export function sampleTable(m: ResultModel): SamplesTable {
         column: c,
         label: m.samples[c].label,
         files: files[c],
-        counts: { psms: psms[c], peptides: colSequences[c].size, proteins: colProteins[c].size },
+        counts: { psms: psms[c], xlPsms: xlPsms[c], peptides: colSequences[c].size, proteins: colProteins[c].size },
       })),
       counts: {
         psms: columns.reduce((n, c) => n + psms[c], 0),
+        xlPsms: columns.reduce((n, c) => n + xlPsms[c], 0),
         peptides: groupSequences[gi].size,
         proteins: groupProteins[gi].size,
       },
@@ -118,7 +122,11 @@ export function sampleTable(m: ResultModel): SamplesTable {
   })
   return {
     groups,
-    total: { psms: groups.reduce((n, g) => n + g.counts.psms, 0), peptides: allSequences.size, proteins: allProteins.size },
+    total: {
+      psms: groups.reduce((n, g) => n + g.counts.psms, 0),
+      xlPsms: groups.reduce((n, g) => n + g.counts.xlPsms, 0),
+      peptides: allSequences.size, proteins: allProteins.size,
+    },
     grouped: m.design.conditions.length > 0,
   }
 }

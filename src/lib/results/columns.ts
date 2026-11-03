@@ -6,9 +6,9 @@
 // The peptide counts ("psms", "foundIn", "sample:<n>") depend on the cutoff of the Peptides table
 // (see `peptideCounts`): the getters get the counts to read as their third argument.
 
-import { psmProforma } from '../format/peptide'
 import { parseAccession, parseDescription } from './display'
 import { baseName, type Level, type PeptideCounts, type ResultModel } from './model'
+import { proteinXlSites } from './protein'
 
 type Get<T> = (m: ResultModel, row: number, peptideCounts: PeptideCounts) => T
 
@@ -51,13 +51,14 @@ const proteins: Record<string, ColumnDef> = {
   description: str('Description', (m, p) => m.tables.proteins.description[p]),
   // the best PSM score; the header names it (see `columnDef`)
   score: num('Score', (m, p) => m.tables.proteins.score[p]),
-  qValue: num('q-value', (m, p) => m.tables.proteins.qValue[p]),
   length: num('Length', (m, p) => m.tables.proteins.sequence[p].length),
   coverage: num('Coverage (%)', (m, p) => m.protein.coverage[p], (m, p) => (m.protein.coverage[p] * 100).toFixed(1)),
   peptides: num('Peptides', (m, p) => m.protein.peptides[p]),
   psms: num('PSMs', (m, p) => m.protein.psms[p]),
+  // NuXL: the cross-linked residues and the cross-link PSMs, at the search's cross-link FDR
+  xlSites: num('XL sites', (m, p) => proteinXlSites(m)[p]),
+  xlPsms: num('XL PSMs', (m, p) => m.protein.xlPsms[p]),
   foundIn: num('Found in', (m, p) => m.protein.foundIn[p]),
-  group: num('Group', (m, p) => m.tables.proteins.group[p]),
   contaminant: num('Contaminant', (m, p) => m.protein.contaminant[p]),
   decoy: num('Decoy', (m, p) => m.tables.proteins.decoy[p]),
 }
@@ -86,21 +87,20 @@ const psms: Record<string, ColumnDef> = {
   rt: num('RT (s)', (m, i) => m.tables.psms.rt[i]),
   mz: num('m/z', (m, i) => m.tables.psms.mz[i]),
   charge: num('Charge', (m, i) => m.tables.psms.charge[i]),
-  // ProForma, with an open search's unlocalized mass shift above 0.05 Da ("[+15.9949]?PEPTIDE")
-  peptide: str('Peptide', (m, i) => psmProforma(m.tables.peptides.proforma[m.tables.psms.peptide[i]], m.tables.psms.deltaMass[i])),
+  // ProForma, as the peptide's (a localized adduct as its mass delta)
+  peptide: str('Peptide', (m, i) => m.tables.peptides.proforma[m.tables.psms.peptide[i]]),
   sequence: str('Sequence', (m, i) => m.tables.peptides.sequence[m.tables.psms.peptide[i]]),
   proteins: str(
     'Proteins',
     (m, i) => shown(accessions(m, m.tables.psms.peptide[i])[0]),
     (m, i) => accessions(m, m.tables.psms.peptide[i]).join(';'),
   ),
-  // Percolator's score when rescored, else ln(hyperscore); the header names it (see `columnDef`)
+  // Percolator's score when every file was rescored, else NuXL's (NuXL:score); the header names it (see `columnDef`)
   score: num('Score', (m, i) => m.tables.psms.score[i]),
   qValue: num('q-value', (m, i) => m.tables.psms.qValue[i]),
   pep: num('PEP', (m, i) => m.tables.psms.pep[i]),
   precursorErrorPpm: num('Precursor error (ppm)', (m, i) => m.tables.psms.precursorErrorPpm[i]),
   isotopeError: num('Isotope error', (m, i) => m.tables.psms.isotopeError[i]),
-  deltaMass: num('Delta mass (Da)', (m, i) => m.tables.psms.deltaMass[i]),
   decoy: num('Decoy', (m, i) => m.tables.psms.decoy[i]),
   // NuXL: the cross-link facts of the PSM (psms.xl)
   crossLink: num('Cross-link', (m, i) => m.tables.psms.xl.isXL[i]),

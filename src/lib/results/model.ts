@@ -53,17 +53,21 @@ export type ResultModel = {
    */
   samples: ResultSample[]
   showTechReplicates: boolean
-  /** The search rescored its PSMs with Percolator: `psms.score` is Percolator's, else NuXL's (NuXL:score). */
+  /** `psms.score` is Percolator's (every file was rescored), else NuXL's (NuXL:score) for every PSM. */
   rescored: boolean
   /**
-   * The search's cutoffs. PSMs above `psmFdr` are no evidence: they are not counted anywhere, and
-   * the filters can only tighten both values.
+   * The search's cutoffs. Each PSM has that of its kind (`psmCutoff`): a peptide PSM `psmFdr` (OpenNuXL's peptide
+   * FDR), a cross-link PSM (`tables.psms.xl.isXL`) `xlFdr`. A PSM above its cutoff is no evidence: it is not counted
+   * anywhere, and the filters can only tighten the values.
    */
   psmFdr: number
+  xlFdr: number
   proteinFdr: number
   conditionColumns: ConditionColumns[]
   /** Per PSM row: its column in `samples`. */
   psmSample: Uint16Array
+  /** The cross-link PSMs within `xlFdr` (any, the key figures count them); 0: a search without cross-links. */
+  xlPsms: number
   /**
    * The peptide (peptidoform) rows. `psms`, `perSample` and `foundIn` count the PSMs within `psmFdr`;
    * the Peptides table shows the counts at its own cutoff, which `peptideCounts` gives.
@@ -75,6 +79,10 @@ export type ResultModel = {
     proteins: Uint32Array[]
     /** Per peptide: 1 if it maps only to contaminants (`CON__` accessions). */
     contaminant: Uint8Array
+    /** Per peptide: the mass of its adduct (Da, from its PSMs); NaN: none. */
+    adductMass: Float64Array
+    /** Per peptide: the cross-linked nucleotides of its PSMs, distinct, in the order met ('U', 'U,C'); '' none. */
+    nucleotides: string[]
   }
   /** All protein counts are at the search's `psmFdr`: the protein filter is the protein q-value. */
   protein: {
@@ -87,6 +95,8 @@ export type ResultModel = {
     peptides: Uint32Array
     /** Their PSMs (a peptide shared by proteins counts for each of them). */
     psms: Uint32Array
+    /** Of `psms`, the cross-link PSMs: a protein with any is cross-linked. */
+    xlPsms: Uint32Array
     /** `count × samples.length`. */
     perSample: Uint32Array
     contaminant: Uint8Array
@@ -109,6 +119,27 @@ export const contaminantPrefix = 'CON__'
 /** The q-value limit that applies: `maxQ`, but never above the search's cutoff (NaN or missing: the cutoff). */
 export function qLimit(maxQ: number, cutoff: number): number {
   return maxQ <= cutoff ? maxQ : cutoff // false for NaN, too
+}
+
+/** The search's cutoff of PSM `i`: `xlFdr` for a cross-link, else `psmFdr` (the peptide FDR). */
+export function psmCutoff(m: Pick<ResultModel, 'tables' | 'psmFdr' | 'xlFdr'>, i: number): number {
+  return m.tables.psms.xl.isXL[i] ? m.xlFdr : m.psmFdr
+}
+
+/**
+ * The q-value limits of a level's filter by kind: the peptide PSMs' (`maxQ`) and the cross-link PSMs' (`maxXlQ`),
+ * each limited by its search cutoff (`qLimit`).
+ */
+export type QLimits = { peptide: number; xl: number }
+
+export function qLimits(m: Pick<ResultModel, 'psmFdr' | 'xlFdr'>, maxQ: number, maxXlQ: number): QLimits {
+  return { peptide: qLimit(maxQ, m.psmFdr), xl: qLimit(maxXlQ, m.xlFdr) }
+}
+
+/** Whether PSM `i` passes the limits of its kind (`passesQ` at its search cutoff). */
+export function psmPasses(m: Pick<ResultModel, 'tables' | 'psmFdr' | 'xlFdr'>, i: number, limits: QLimits): boolean {
+  const ps = m.tables.psms
+  return ps.xl.isXL[i] ? passesQ(ps.qValue[i], limits.xl, m.xlFdr) : passesQ(ps.qValue[i], limits.peptide, m.psmFdr)
 }
 
 /**
@@ -135,17 +166,22 @@ function samplesFound(counts: Uint32Array, base: number, nS: number, columnSampl
 }
 
 /**
- * The peptides' PSMs at q ≤ `limit` (a missing q-value counts at the search's cutoff `cutoff` only: `passesQ`), in
- * total, per column and as samples found.
+ * The peptides' PSMs within the limits of their kind (`psmPasses`: a missing q-value counts at the search's cutoff
+ * only), in total, per column and as samples found.
  */
-function countPsms(t: ResultTables, psmSample: Uint16Array, columnSample: Uint16Array, limit: number, cutoff: number): PeptideCounts {
+function countPsms(
+  c: Pick<ResultModel, 'tables' | 'psmFdr' | 'xlFdr' | 'psmSample' | 'columnSample'>,
+  limits: QLimits,
+): PeptideCounts {
+  const t = c.tables
+  const { psmSample, columnSample } = c
   const nPep = t.peptides.count
   const nS = columnSample.length
   const psms = new Uint32Array(nPep)
   const perSample = new Uint32Array(nPep * nS)
-  const { peptide, qValue } = t.psms
+  const { peptide } = t.psms
   for (let i = 0; i < t.psms.count; i++) {
-    if (!passesQ(qValue[i], limit, cutoff)) continue
+    if (!psmPasses(c, i, limits)) continue
     const k = peptide[i]
     psms[k]++
     perSample[k * nS + psmSample[i]]++
@@ -155,26 +191,27 @@ function countPsms(t: ResultTables, psmSample: Uint16Array, columnSample: Uint16
   return { psms, perSample, foundIn }
 }
 
-const countsCache = new WeakMap<ResultModel, Map<number, PeptideCounts>>()
+const countsCache = new WeakMap<ResultModel, Map<string, PeptideCounts>>()
 const cachedCutoffs = 8
 
 /**
- * The peptides' PSM counts for a Peptides table whose "best PSM q-value" filter is `maxQ`: the PSMs
- * counted are those with q ≤ min(`maxQ`, `psmFdr`), so the numbers agree with the PSM table behind
- * the same cutoff. At or above `psmFdr` (and for NaN) this is `m.peptide`; other cutoffs are counted
- * once (one pass over the PSMs) and the last few are kept. Use these arrays for the peptide columns
- * (`psms`, `sample:<n>`, `foundIn`) of that table, its sorting and its CSV.
+ * The peptides' PSM counts for a Peptides table whose "best PSM q-value" filters are `maxQ` (peptide PSMs) and
+ * `maxXlQ` (cross-link PSMs; default: `maxQ`): the PSMs counted are those within min(limit, cutoff) of their kind,
+ * so the numbers agree with the PSM table behind the same cutoffs. At or above the search's cutoffs (and for NaN)
+ * this is `m.peptide`; other cutoffs are counted once (one pass over the PSMs) and the last few are kept. Use these
+ * arrays for the peptide columns (`psms`, `sample:<n>`, `foundIn`) of that table, its sorting and its CSV.
  */
-export function peptideCounts(m: ResultModel, maxQ: number): PeptideCounts {
-  const limit = qLimit(maxQ, m.psmFdr)
-  if (limit >= m.psmFdr) return m.peptide
+export function peptideCounts(m: ResultModel, maxQ: number, maxXlQ = maxQ): PeptideCounts {
+  const limits = qLimits(m, maxQ, maxXlQ)
+  if (limits.peptide >= m.psmFdr && limits.xl >= m.xlFdr) return m.peptide
   let cache = countsCache.get(m)
   if (!cache) countsCache.set(m, (cache = new Map()))
-  let counts = cache.get(limit)
+  const key = `${limits.peptide} ${limits.xl}`
+  let counts = cache.get(key)
   if (!counts) {
-    counts = countPsms(m.tables, m.psmSample, m.columnSample, limit, m.psmFdr)
+    counts = countPsms(m, limits)
     if (cache.size >= cachedCutoffs) cache.delete(cache.keys().next().value!)
-    cache.set(limit, counts)
+    cache.set(key, counts)
   }
   return counts
 }
@@ -182,20 +219,21 @@ export function peptideCounts(m: ResultModel, maxQ: number): PeptideCounts {
 export const baseName = (path: string) => path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
 
 /**
- * `rescored`: the search rescored the PSMs with Percolator (it names the score columns; default false).
- * `psmFdr` and `proteinFdr` are the cutoffs of the search that made `t` (0 < q ≤ 1); they are required
- * because the counts depend on them. The design must be that of the searched files: the same number
+ * `rescored`: the PSMs' scores are Percolator's, every file rescored (it names the score columns; default false).
+ * `psmFdr` (the peptide PSMs'), `xlFdr` (the cross-link PSMs'; default `psmFdr`) and `proteinFdr` are the cutoffs
+ * of the search that made `t` (0 < q ≤ 1); the counts depend on them. The design must be that of the searched files: the same number
  * of rows, in the same order, each file named as the row says (`tables.files[i]` may carry
  * directories, e.g. `/input/<i>/<fileName>`).
  */
 export function buildModel(
   t: ResultTables,
   d: DesignResolution,
-  opts: { showTechReplicates: boolean; psmFdr: number; proteinFdr: number; rescored?: boolean },
+  opts: { showTechReplicates: boolean; psmFdr: number; xlFdr?: number; proteinFdr: number; rescored?: boolean },
 ): ResultModel {
   const { showTechReplicates, psmFdr, proteinFdr } = opts
+  const xlFdr = opts.xlFdr ?? psmFdr
   const rescored = opts.rescored ?? false
-  for (const [name, value] of [['psmFdr', psmFdr], ['proteinFdr', proteinFdr]] as const) {
+  for (const [name, value] of [['psmFdr', psmFdr], ['xlFdr', xlFdr], ['proteinFdr', proteinFdr]] as const) {
     if (!(value > 0 && value <= 1)) throw new Error(`${name} must be a q-value above 0 and at most 1, not ${value}`)
   }
 
@@ -264,8 +302,30 @@ export function buildModel(
     const q = ps.qValue[i]
     if (q === q && !(q >= bestQ[k])) bestQ[k] = q // the first q-value replaces NaN
   }
-  // a PSM above the search's cutoff is no evidence
-  const { psms: pepPsms, perSample: pepPer, foundIn: pepFoundIn } = countPsms(t, psmSample, columnSample, psmFdr, psmFdr)
+  // a PSM above the search's cutoff of its kind is no evidence
+  const atSearch = { tables: t, psmFdr, xlFdr, psmSample, columnSample }
+  const limits = { peptide: psmFdr, xl: xlFdr }
+  const { psms: pepPsms, perSample: pepPer, foundIn: pepFoundIn } = countPsms(atSearch, limits)
+  // the peptides' cross-link PSMs (a peptide's PSMs are normally all of its kind), adduct masses and nucleotides
+  const pepXlPsms = new Uint32Array(nPep)
+  const adductMass = new Float64Array(nPep).fill(NaN)
+  const nucleotideSets: (string[] | null)[] = new Array(nPep).fill(null)
+  let xlPsms = 0
+  for (let i = 0; i < ps.count; i++) {
+    const k = ps.peptide[i]
+    if (ps.xl.adduct[i] !== '' && adductMass[k] !== adductMass[k]) adductMass[k] = ps.xl.adductMass[i]
+    const nt = ps.xl.nucleotide[i]
+    if (nt !== '') {
+      const set = nucleotideSets[k]
+      if (!set) nucleotideSets[k] = [nt]
+      else if (!set.includes(nt)) set.push(nt)
+    }
+    if (ps.xl.isXL[i] && psmPasses(atSearch, i, limits)) {
+      pepXlPsms[k]++
+      if (!ps.decoy[i]) xlPsms++
+    }
+  }
+  const nucleotides = nucleotideSets.map((set) => (set ? set.join(',') : ''))
 
   const refOffsets = pt.proteinOffsets
   const nRefs = refOffsets[nPep]
@@ -311,6 +371,7 @@ export function buildModel(
   const seenPeptide = new Int32Array(nPep).fill(-1)
   const proPeptides = new Uint32Array(nProt)
   const proPsms = new Uint32Array(nProt)
+  const proXlPsms = new Uint32Array(nProt)
   const proPer = new Uint32Array(nProt * nS)
   const proFoundIn = new Uint16Array(nProt)
   for (let p = 0; p < nProt; p++) {
@@ -319,6 +380,7 @@ export function buildModel(
       if (pepPsms[k] === 0 || seenPeptide[k] === p) continue
       seenPeptide[k] = p
       proPsms[p] += pepPsms[k]
+      proXlPsms[p] += pepXlPsms[k]
       for (let s = 0; s < nS; s++) proPer[p * nS + s] += pepPer[k * nS + s]
       if (seenSequence[sequenceId[k]] !== p) {
         seenSequence[sequenceId[k]] = p
@@ -347,9 +409,11 @@ export function buildModel(
     showTechReplicates,
     rescored,
     psmFdr,
+    xlFdr,
     proteinFdr,
     conditionColumns,
     psmSample,
+    xlPsms,
     peptide: {
       bestQ,
       psms: pepPsms,
@@ -357,11 +421,14 @@ export function buildModel(
       foundIn: pepFoundIn,
       proteins: pepProteins,
       contaminant: pepContaminant,
+      adductMass,
+      nucleotides,
     },
     protein: {
       coverage,
       peptides: proPeptides,
       psms: proPsms,
+      xlPsms: proXlPsms,
       perSample: proPer,
       contaminant: proContaminant,
       foundIn: proFoundIn,

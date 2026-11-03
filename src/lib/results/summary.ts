@@ -78,6 +78,12 @@ export interface NuxlSummary {
   peptideFdr: number
   /** per input file: Percolator rescored its run */
   percolator: boolean[]
+  /**
+   * `psms.score` is Percolator's (svm_score): every run was rescored. Else it is NuXL's (NuXL:score) for every PSM,
+   * so that the scores of a search where Percolator rescored only some runs are on one scale. Missing: as `percolator`
+   * says (all rescored).
+   */
+  percolatorScores?: boolean
   /** per input file: OpenNuXL's notes of its run ([] for a run that did not finish) */
   notes: string[][]
   /** the NuXL preset of the search ('RNA-UV (U)'), if the folder says it */

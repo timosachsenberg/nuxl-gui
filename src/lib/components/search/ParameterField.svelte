@@ -2,13 +2,14 @@
   // One of OpenNuXL's parameters in the "All parameters" dialog, its control chosen by its type: a switch (a flag,
   // or a "true"/"false" choice), a select of the allowed values, a number, text, a list (one per line, or checkboxes
   // of the allowed values, or the modification picker). A parameter that does nothing with the other settings (the
-  // adducts with a protocol: `blocked`) is disabled and says why; a switch is off then.
+  // adducts with a protocol: `blocked`) is disabled and says why; a switch is off then. An empty text runs with
+  // OpenNuXL's default (the shim passes no argument for it): the field shows that default and says so.
   import { Checkbox } from '$lib/components/ui/checkbox'
   import { Input } from '$lib/components/ui/input'
   import { Switch } from '$lib/components/ui/switch'
   import { Textarea } from '$lib/components/ui/textarea'
   import { choiceLabel } from '$lib/settings/labels'
-  import type { ParamEntry } from '$lib/settings/parameters'
+  import { emptyTextDefault, type ParamEntry } from '$lib/settings/parameters'
   import ChoiceSelect from './ChoiceSelect.svelte'
   import ModificationsField from './ModificationsField.svelte'
   import NumberField from './NumberField.svelte'
@@ -36,7 +37,10 @@
   const textSwitch = $derived(
     entry.type === 'string' && entry.validStrings?.length === 2 && entry.validStrings.includes('true') && entry.validStrings.includes('false'),
   )
-  const describedBy = $derived(blocked ? `${id}-blocked` : undefined)
+  /** OpenNuXL's default of a text left empty, which then applies (null: none, or the text is not empty). */
+  const fallback = $derived(emptyTextDefault(entry))
+  const emptyText = $derived(fallback !== null && (value === '' || value === null || value === undefined))
+  const describedBy = $derived(blocked ? `${id}-blocked` : emptyText ? `${id}-default` : undefined)
 
   function fromLines(text: string) {
     const items = text.split('\n').map((s) => s.trim()).filter(Boolean)
@@ -109,6 +113,7 @@
     class="h-8 bg-background text-[13px] shadow-none md:text-[13px]"
     autocomplete="off"
     spellcheck="false"
+    placeholder={fallback ?? undefined}
     disabled={blocked !== null}
     aria-describedby={describedBy}
     value={value === null || value === undefined ? '' : String(value)}
@@ -116,4 +121,6 @@
 {/if}
 {#if blocked}
   <p id="{id}-blocked" class="text-xs text-foreground">{blocked}</p>
+{:else if emptyText && entry.type === 'string' && !entry.validStrings && !textSwitch}
+  <p id="{id}-default" class="text-xs text-muted-foreground">Left empty, OpenNuXL uses its default “{fallback}”.</p>
 {/if}
