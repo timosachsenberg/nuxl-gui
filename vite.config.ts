@@ -16,7 +16,7 @@ function fontLicences(): Plugin {
     ['assets/LiberationMono-LICENSE.txt', 'src/assets/fonts/LiberationMono-LICENSE.txt'],
   ]
   return {
-    name: 'prose-font-licences',
+    name: 'nuxl-font-licences',
     apply: 'build',
     generateBundle() {
       for (const [fileName, source] of licences) {

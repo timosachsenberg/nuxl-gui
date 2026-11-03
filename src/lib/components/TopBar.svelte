@@ -51,7 +51,7 @@
   class="flex min-h-[52px] flex-wrap items-center gap-x-6 gap-y-1.5 border-b bg-background px-5 py-2.5 *:shrink-0 max-[1101px]:gap-x-4">
   <div class="flex items-center gap-2 text-[15px] font-semibold tracking-tight whitespace-nowrap">
     <img src={openmsLogo} alt="OpenMS" width="36" height="36" class="size-9 select-none dark:rounded-md dark:bg-zinc-100 dark:p-0.5" draggable="false" data-testid="openms-logo" />
-    <span>ProSE<small class="ml-1.5 text-xs font-normal text-muted-foreground max-[1101px]:hidden">OpenMS search engine</small></span>
+    <span>NuXL<small class="ml-1.5 text-xs font-normal text-muted-foreground max-[1101px]:hidden">OpenMS protein–nucleic acid cross-links</small></span>
   </div>
   <nav aria-label="Main" class="flex gap-1">
     {#each items as item (item.view)}
