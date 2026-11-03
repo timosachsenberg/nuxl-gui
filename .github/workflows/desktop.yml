@@ -1,15 +1,15 @@
-# The ProSE desktop app on Linux (x64, arm64), macOS (arm64) and Windows (x64): the pinned OpenMS
-# (native/OPENMS_COMMIT) built and bundled, the app's unit tests and packages.
-# - linux (x64 and arm64, a matrix): the .deb and the AppImage, and the AppImage's smoke test (the example with
-#   PeptDeep through WebDriver).
-# - macos, windows: the .dmg and the NSIS installer, and their start test (start-test.sh: the bundled ProSE
-#   searches the example from the command line with PeptDeep, the packaged app starts, finds its ProSE and
-#   exits); the real_prose tests with the bundled tool.
+# The NuXL desktop app on Linux (x64, arm64), macOS (arm64) and Windows (x64): the pinned OpenMS
+# (native/OPENMS_COMMIT) built (OpenNuXL and PercolatorAdapter) and bundled, the app's unit tests and packages.
+# - linux (x64 and arm64, a matrix): the .deb and the AppImage, and the AppImage's smoke test (the example
+#   through WebDriver).
+# - macos, windows: the .dmg and the NSIS installer, and their start test (start-test.sh: the bundled OpenNuXL
+#   searches the example from the command line, the packaged app starts, finds its OpenNuXL and PercolatorAdapter
+#   and exits); the real_nuxl tests with the bundled tool.
 # - shim: the shim's tests (cargo test) on macOS and Windows, which need no OpenMS, for quick answers.
 # A tag desktop-native-v* makes a draft release with the packages of the tested main run of the tagged
 # commit (a tag run builds nothing: it releases the packages that main's run built and tested).
 #
-# Caches (actions/cache), per platform: the bundled ProSE (src-tauri/resources/prose), keyed by the pin and
+# Caches (actions/cache), per platform: the bundled OpenNuXL (src-tauri/resources/nuxl), keyed by the pin and
 # the scripts and licence files that make it, so OpenMS is built only when one of them changes; vcpkg's binary cache, keyed by
 # the pin and the triplet (plus the hash of its content when saved), so a rebuild of OpenMS does not rebuild
 # its dependencies; on macOS and Windows ccache's objects of OpenMS, so a rebuild after a change of the
@@ -49,15 +49,15 @@ jobs:
             runner: ubuntu-22.04
             arch: x64
             triplet: x64-linux-dynamic
-            artifact: prose-desktop-linux
+            artifact: nuxl-desktop-linux
           - name: Linux (arm64, ubuntu-22.04-arm)
             runner: ubuntu-22.04-arm
             arch: arm64
             # OpenMS's overlay triplet (vcpkg-overlays/triplets), as its own arm64 CI: OpenBLAS for any ARMv8
             triplet: arm64-linux-dynamic
-            artifact: prose-desktop-linux-arm64
+            artifact: nuxl-desktop-linux-arm64
     runs-on: ${{ matrix.runner }}
-    # the first run builds vcpkg's dependencies (Arrow, the AWS SDK, ONNX Runtime, ...) and OpenMS
+    # the first run builds vcpkg's dependencies (Arrow, the AWS SDK, ...) and OpenMS
     timeout-minutes: 360
     concurrency:
       group: desktop-linux-${{ matrix.arch }}-${{ github.ref }}
@@ -76,12 +76,12 @@ jobs:
           [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "native/OPENMS_COMMIT holds no commit hash" >&2; exit 1; }
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
-      - name: Restore the bundled ProSE
+      - name: Restore the bundled OpenNuXL
         id: bundle
         uses: actions/cache/restore@v6
         with:
-          path: src-tauri/resources/prose
-          key: prose-bundle-v1-${{ matrix.runner }}-${{ env.TRIPLET }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/scripts/build-openms.sh', 'native/scripts/bundle-prose.sh', 'native/licenses/**') }}
+          path: src-tauri/resources/nuxl
+          key: nuxl-bundle-v1-${{ matrix.runner }}-${{ env.TRIPLET }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/scripts/build-openms.sh', 'native/scripts/bundle-nuxl.sh', 'native/scripts/bundle_closure.py', 'native/licenses/**') }}
 
       - name: System packages
         run: |
@@ -122,36 +122,6 @@ jobs:
           free -g
           cmake --version
           gcc-13 --version
-
-      # ONNX Runtime's MLAS has AVX-NE-CONVERT code (cvtfp16Avx.S) that needs GNU as >= 2.40; Ubuntu 22.04
-      # has binutils 2.38. Only the assembler is built (2.42, as on Ubuntu 24.04) and given to GCC through
-      # COMPILER_PATH; the linker stays the system's. (x64 only: MLAS's arm64 assembly, NEON, dot product,
-      # i8mm and bf16, is within binutils 2.38.)
-      - name: GNU as 2.42
-        if: steps.bundle.outputs.cache-hit != 'true' && matrix.arch == 'x64'
-        run: |
-          cd "$RUNNER_TEMP"
-          # (ftpmirror.gnu.org redirects to a random mirror, one of which had an expired certificate: several
-          # sources in turn; the checksum decides)
-          for url in https://ftpmirror.gnu.org/binutils https://ftp.gnu.org/gnu/binutils \
-            https://sourceware.org/pub/binutils/releases https://mirrors.kernel.org/gnu/binutils; do
-            curl -sSfLO --retry 3 "$url/binutils-2.42.tar.xz" \
-              && echo "f6e4d41fd5fc778b06b7891457b3620da5ecea1006c6a4a41ae998109f85a800  binutils-2.42.tar.xz" | sha256sum -c - \
-              && break
-            rm -f binutils-2.42.tar.xz
-          done
-          [ -f binutils-2.42.tar.xz ] || { echo "::error::binutils 2.42 could not be downloaded"; exit 1; }
-          tar xf binutils-2.42.tar.xz
-          mkdir gas-build
-          cd gas-build
-          ../binutils-2.42/configure --disable-nls --disable-werror --disable-gprofng --disable-gold --disable-gdb --disable-sim > configure.log
-          make -j4 MAKEINFO=true all-gas > make.log
-          mkdir -p "$RUNNER_TEMP/gas"
-          cp gas/as-new "$RUNNER_TEMP/gas/as"
-          printf 'vcvtneeph2ps (%%rdi), %%ymm0\n' > avxneconvert.s
-          "$RUNNER_TEMP/gas/as" avxneconvert.s -o avxneconvert.o
-          echo 'int main(void) { return 0; }' > main.c
-          COMPILER_PATH="$RUNNER_TEMP/gas" gcc-13 -v -c main.c -o main.o 2>&1 | grep -F "$RUNNER_TEMP/gas/as"
 
       - name: Check out OpenMS at the pin
         if: steps.bundle.outputs.cache-hit != 'true'
@@ -194,7 +164,6 @@ jobs:
           VCPKG_TRIPLET: ${{ env.TRIPLET }}
           OPENMS_CONFIGURE_ONLY: 1
         run: |
-          [ ! -x "$RUNNER_TEMP/gas/as" ] || export COMPILER_PATH=$RUNNER_TEMP/gas PATH=$RUNNER_TEMP/gas:$PATH
           native/scripts/build-openms.sh openms openms/build
           df -h /
 
@@ -207,7 +176,7 @@ jobs:
           path: vcpkg-bincache
           key: ${{ steps.vcpkg.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-bincache/**') }}
 
-      - name: Build OpenMS (libOpenMS and ProSE)
+      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter)
         if: steps.bundle.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
         id: openms
         env:
@@ -218,21 +187,20 @@ jobs:
           VCPKG_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
           VCPKG_INSTALL_OPTIONS: --clean-after-build
           VCPKG_TRIPLET: ${{ env.TRIPLET }}
-          OPENMS_TARGETS: OpenMS ProSE
+          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter
         run: |
-          [ ! -x "$RUNNER_TEMP/gas/as" ] || export COMPILER_PATH=$RUNNER_TEMP/gas PATH=$RUNNER_TEMP/gas:$PATH
           native/scripts/build-openms.sh openms openms/build
           df -h /
 
-      - name: Bundle ProSE
+      - name: Bundle OpenNuXL
         if: steps.bundle.outputs.cache-hit != 'true'
-        run: native/scripts/bundle-prose.sh openms/build src-tauri/resources/prose
+        run: native/scripts/bundle-nuxl.sh openms/build src-tauri/resources/nuxl
 
-      - name: Save the bundled ProSE
+      - name: Save the bundled OpenNuXL
         if: steps.bundle.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
-          path: src-tauri/resources/prose
+          path: src-tauri/resources/nuxl
           key: ${{ steps.bundle.outputs.cache-primary-key }}
 
       # --- the app ----------------------------------------------------------------------------------------
@@ -252,35 +220,23 @@ jobs:
           npm ci
           command -v tauri-driver || cargo install tauri-driver --locked
 
-      - name: The bundled ProSE
+      - name: The bundled OpenNuXL
         run: |
-          cat src-tauri/resources/prose/build.json
-          src-tauri/resources/prose/bin/ProSE --help 2>&1 | grep -m1 'Version:'
-          du -sh src-tauri/resources/prose src-tauri/resources/prose/lib src-tauri/resources/prose/share
+          cat src-tauri/resources/nuxl/build.json
+          src-tauri/resources/nuxl/bin/OpenNuXL --help 2>&1 | grep -m1 'Version:'
+          src-tauri/resources/nuxl/bin/PercolatorAdapter --help 2>&1 | grep -m1 'Version:'
+          du -sh src-tauri/resources/nuxl src-tauri/resources/nuxl/lib src-tauri/resources/nuxl/share
 
       - name: Unit tests (svelte-check, vitest)
         run: |
           npm run check
           npm test
 
-      # Every QPX view ProSE writes passes bigbio/qpx's own validator: the reader's fixtures (made with the pin) and a
-      # search of the example by the ProSE just built, as the app runs it.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: QPX views pass bigbio/qpx's validator
-        run: |
-          python -m venv "$RUNNER_TEMP/qpx"
-          "$RUNNER_TEMP/qpx/bin/pip" install --quiet "qpx @ git+https://github.com/bigbio/qpx@0dd22d2f2bcba3cd82fee745dc3559b328a95875"
-          # (the example as the app bundles it: src-tauri/resources/{example,fasta})
-          OUT="$RUNNER_TEMP/qpx-example" node scripts/results-fixture-native.mjs example src-tauri/resources/prose/bin/ProSE
-          "$RUNNER_TEMP/qpx/bin/python" -I scripts/qpx-validate.py src/lib/results/fixtures/*/qpx "$RUNNER_TEMP/qpx-example/qpx"
-
-      - name: Unit tests (cargo test, with the bundled ProSE)
+      - name: Unit tests (cargo test, with the bundled OpenNuXL)
         working-directory: src-tauri
         env:
-          PROSE_BIN: ${{ github.workspace }}/src-tauri/resources/prose/bin/ProSE
-          PROSE_EXAMPLE_DIR: ${{ github.workspace }}/src-tauri/resources/example
+          NUXL_TOOL: ${{ github.workspace }}/src-tauri/resources/nuxl/bin/OpenNuXL
+          NUXL_EXAMPLE_DIR: ${{ github.workspace }}/src-tauri/resources/example
         run: cargo test --locked
 
       - name: Packages (.deb, AppImage)
@@ -303,8 +259,8 @@ jobs:
             for f in src-tauri/target/release/bundle/appimage/*.AppImage src-tauri/target/release/bundle/deb/*.deb; do
               if [ -f "$f" ]; then echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"; fi
             done
-            if [ -f src-tauri/resources/prose/build.json ]; then
-              echo "| (bundled ProSE, unpacked) | $(du -sh src-tauri/resources/prose | cut -f1) |"
+            if [ -f src-tauri/resources/nuxl/build.json ]; then
+              echo "| (bundled OpenNuXL, unpacked) | $(du -sh src-tauri/resources/nuxl | cut -f1) |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -349,7 +305,7 @@ jobs:
           # (its own: the debug test build; the long jobs' cache holds their release build)
           shared-key: desktop-shim
 
-      - name: cargo test (examples/fake_prose.rs stands in for ProSE)
+      - name: cargo test (examples/fake_nuxl.rs stands in for OpenNuXL)
         working-directory: src-tauri
         run: |
           cargo test --locked --no-fail-fast
@@ -387,12 +343,12 @@ jobs:
           [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "native/OPENMS_COMMIT holds no commit hash" >&2; exit 1; }
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
-      - name: Restore the bundled ProSE
+      - name: Restore the bundled OpenNuXL
         id: bundle
         uses: actions/cache/restore@v6
         with:
-          path: src-tauri/resources/prose
-          key: prose-bundle-v1-macos-15-${{ env.TRIPLET }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/scripts/build-openms.sh', 'native/scripts/bundle-prose.sh', 'native/scripts/bundle_closure.py', 'native/licenses/**') }}
+          path: src-tauri/resources/nuxl
+          key: nuxl-bundle-v1-macos-15-${{ env.TRIPLET }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/scripts/build-openms.sh', 'native/scripts/bundle-nuxl.sh', 'native/scripts/bundle_closure.py', 'native/licenses/**') }}
 
       # --- OpenMS (only without a bundle in the cache) ------------------------------------------------
       - name: Build tools for OpenMS
@@ -463,7 +419,7 @@ jobs:
           path: vcpkg-bincache
           key: ${{ steps.vcpkg.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-bincache/**') }}
 
-      - name: Build OpenMS (libOpenMS and ProSE)
+      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter)
         if: steps.bundle.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
         id: openms
         env:
@@ -472,7 +428,7 @@ jobs:
           VCPKG_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
           VCPKG_INSTALL_OPTIONS: --clean-after-build
           VCPKG_TRIPLET: ${{ env.TRIPLET }}
-          OPENMS_TARGETS: OpenMS ProSE
+          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
           CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -492,19 +448,19 @@ jobs:
           path: .ccache
           key: ${{ steps.ccache.outputs.cache-primary-key }}
 
-      - name: Bundle ProSE
+      - name: Bundle OpenNuXL
         if: steps.bundle.outputs.cache-hit != 'true'
-        run: native/scripts/bundle-prose.sh openms/build src-tauri/resources/prose
+        run: native/scripts/bundle-nuxl.sh openms/build src-tauri/resources/nuxl
 
-      - name: Save the bundled ProSE
+      - name: Save the bundled OpenNuXL
         if: steps.bundle.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
-          path: src-tauri/resources/prose
+          path: src-tauri/resources/nuxl
           key: ${{ steps.bundle.outputs.cache-primary-key }}
 
-      # the build machine's OpenMS (its share/OpenMS, models and tool registry are compiled into the bundle
-      # as paths) goes, so that the tests below see the bundle as a user's machine does
+      # the build machine's OpenMS (its share/OpenMS and tool registry are compiled into the bundle as paths)
+      # goes, so that the tests below see the bundle as a user's machine does
       - name: Remove the OpenMS build
         if: steps.bundle.outputs.cache-hit != 'true'
         run: rm -rf openms vcpkg-bincache .ccache
@@ -524,18 +480,19 @@ jobs:
 
       - run: npm ci
 
-      - name: The bundled ProSE
+      - name: The bundled OpenNuXL
         run: |
-          cat src-tauri/resources/prose/build.json
-          src-tauri/resources/prose/bin/ProSE --help 2>&1 | grep -m1 'Version:'
-          du -sh src-tauri/resources/prose src-tauri/resources/prose/lib src-tauri/resources/prose/share
+          cat src-tauri/resources/nuxl/build.json
+          src-tauri/resources/nuxl/bin/OpenNuXL --help 2>&1 | grep -m1 'Version:'
+          src-tauri/resources/nuxl/bin/PercolatorAdapter --help 2>&1 | grep -m1 'Version:'
+          du -sh src-tauri/resources/nuxl src-tauri/resources/nuxl/lib src-tauri/resources/nuxl/share
 
-      - name: The shim with the bundled ProSE (real_prose)
+      - name: The shim with the bundled OpenNuXL (real_nuxl)
         working-directory: src-tauri
         env:
-          PROSE_BIN: ${{ github.workspace }}/src-tauri/resources/prose/bin/ProSE
-          PROSE_EXAMPLE_DIR: ${{ github.workspace }}/src-tauri/resources/example
-        run: cargo test --locked --test real_prose -- --nocapture --test-threads 1
+          NUXL_TOOL: ${{ github.workspace }}/src-tauri/resources/nuxl/bin/OpenNuXL
+          NUXL_EXAMPLE_DIR: ${{ github.workspace }}/src-tauri/resources/example
+        run: cargo test --locked --test real_nuxl -- --nocapture --test-threads 1
 
       - name: Packages (.app, .dmg)
         run: native/scripts/package-macos.sh
@@ -554,20 +511,20 @@ jobs:
             for f in src-tauri/target/release/bundle/dmg/*.dmg; do
               if [ -f "$f" ]; then echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"; fi
             done
-            if [ -f src-tauri/resources/prose/build.json ]; then
-              echo "| (bundled ProSE, unpacked) | $(du -sh src-tauri/resources/prose | cut -f1) |"
+            if [ -f src-tauri/resources/nuxl/build.json ]; then
+              echo "| (bundled OpenNuXL, unpacked) | $(du -sh src-tauri/resources/nuxl | cut -f1) |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: prose-desktop-macos
+          name: nuxl-desktop-macos
           path: src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 14
 
   # Windows x64 with MSVC (Visual Studio's developer environment) and vcpkg's x64-windows-static-md-release, as
-  # OpenMS's own CI: the dependencies are static, so ProSE's closure is OpenMS's DLLs and the Visual C++ runtime.
+  # OpenMS's own CI: the dependencies are static, so the tools' closure is OpenMS's DLLs and the Visual C++ runtime.
   windows:
     name: Windows (x64, windows-2025)
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
@@ -598,12 +555,12 @@ jobs:
           [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "native/OPENMS_COMMIT holds no commit hash" >&2; exit 1; }
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
-      - name: Restore the bundled ProSE
+      - name: Restore the bundled OpenNuXL
         id: bundle
         uses: actions/cache/restore@v6
         with:
-          path: src-tauri/resources/prose
-          key: prose-bundle-v1-windows-2025-${{ env.TRIPLET }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/scripts/build-openms.sh', 'native/scripts/bundle-prose.sh', 'native/scripts/bundle_closure.py', 'native/licenses/**') }}
+          path: src-tauri/resources/nuxl
+          key: nuxl-bundle-v1-windows-2025-${{ env.TRIPLET }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/scripts/build-openms.sh', 'native/scripts/bundle-nuxl.sh', 'native/scripts/bundle_closure.py', 'native/licenses/**') }}
 
       # cl, the Windows SDK and VCToolsRedistDir (the Visual C++ runtime the bundle takes) for every step below
       - uses: ilammy/msvc-dev-cmd@v1
@@ -672,8 +629,7 @@ jobs:
           VCPKG_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
           VCPKG_INSTALL_OPTIONS: --clean-after-build;--x-buildtrees-root=D:/vb;--x-packages-root=D:/vp
           VCPKG_TRIPLET: ${{ env.TRIPLET }}
-          # (the static ONNX Runtime's CMake config imports nlohmann_json: OpenMS takes vcpkg's too, as its CI)
-          OPENMS_CMAKE_ARGS: -DMT_REQUIRE_OPENMP=ON -DUSE_EXTERNAL_JSON=ON -DVCPKG_MANIFEST_FEATURES=onnxruntime;nlohmann-json
+          OPENMS_CMAKE_ARGS: -DMT_REQUIRE_OPENMP=ON
           OPENMS_CONFIGURE_ONLY: 1
         run: |
           native/scripts/build-openms.sh openms openms/build
@@ -686,7 +642,7 @@ jobs:
           path: vcpkg-bincache
           key: ${{ steps.vcpkg.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-bincache/**') }}
 
-      - name: Build OpenMS (libOpenMS and ProSE)
+      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter)
         if: steps.bundle.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
         id: openms
         env:
@@ -697,9 +653,8 @@ jobs:
           VCPKG_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
           VCPKG_INSTALL_OPTIONS: --clean-after-build;--x-buildtrees-root=D:/vb;--x-packages-root=D:/vp
           VCPKG_TRIPLET: ${{ env.TRIPLET }}
-          # (the static ONNX Runtime's CMake config imports nlohmann_json: OpenMS takes vcpkg's too, as its CI)
-          OPENMS_CMAKE_ARGS: -DMT_REQUIRE_OPENMP=ON -DUSE_EXTERNAL_JSON=ON -DVCPKG_MANIFEST_FEATURES=onnxruntime;nlohmann-json
-          OPENMS_TARGETS: OpenMS ProSE
+          OPENMS_CMAKE_ARGS: -DMT_REQUIRE_OPENMP=ON
+          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
           CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -717,15 +672,15 @@ jobs:
           path: .ccache
           key: ${{ steps.ccache.outputs.cache-primary-key }}
 
-      - name: Bundle ProSE
+      - name: Bundle OpenNuXL
         if: steps.bundle.outputs.cache-hit != 'true'
-        run: native/scripts/bundle-prose.sh openms/build src-tauri/resources/prose
+        run: native/scripts/bundle-nuxl.sh openms/build src-tauri/resources/nuxl
 
-      - name: Save the bundled ProSE
+      - name: Save the bundled OpenNuXL
         if: steps.bundle.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
-          path: src-tauri/resources/prose
+          path: src-tauri/resources/nuxl
           key: ${{ steps.bundle.outputs.cache-primary-key }}
 
       - name: Remove the OpenMS build
@@ -747,19 +702,20 @@ jobs:
 
       - run: npm ci
 
-      - name: The bundled ProSE
+      - name: The bundled OpenNuXL
         run: |
-          cat src-tauri/resources/prose/build.json
-          src-tauri/resources/prose/bin/ProSE.exe --help 2>&1 | grep -m1 'Version:'
-          ls src-tauri/resources/prose/bin
-          du -sh src-tauri/resources/prose src-tauri/resources/prose/bin src-tauri/resources/prose/share
+          cat src-tauri/resources/nuxl/build.json
+          src-tauri/resources/nuxl/bin/OpenNuXL.exe --help 2>&1 | grep -m1 'Version:'
+          src-tauri/resources/nuxl/bin/PercolatorAdapter.exe --help 2>&1 | grep -m1 'Version:'
+          ls src-tauri/resources/nuxl/bin
+          du -sh src-tauri/resources/nuxl src-tauri/resources/nuxl/bin src-tauri/resources/nuxl/share
 
-      - name: The shim with the bundled ProSE (real_prose)
+      - name: The shim with the bundled OpenNuXL (real_nuxl)
         working-directory: src-tauri
         env:
-          PROSE_BIN: ${{ github.workspace }}\src-tauri\resources\prose\bin\ProSE.exe
-          PROSE_EXAMPLE_DIR: ${{ github.workspace }}\src-tauri\resources\example
-        run: cargo test --locked --test real_prose -- --nocapture --test-threads 1
+          NUXL_TOOL: ${{ github.workspace }}\src-tauri\resources\nuxl\bin\OpenNuXL.exe
+          NUXL_EXAMPLE_DIR: ${{ github.workspace }}\src-tauri\resources\example
+        run: cargo test --locked --test real_nuxl -- --nocapture --test-threads 1
 
       - name: Package (NSIS installer)
         run: native/scripts/package-windows.sh
@@ -778,14 +734,14 @@ jobs:
             for f in src-tauri/target/release/bundle/nsis/*-setup.exe; do
               if [ -f "$f" ]; then echo "| $(basename "$f") | $(du -h "$f" | cut -f1) |"; fi
             done
-            if [ -f src-tauri/resources/prose/build.json ]; then
-              echo "| (bundled ProSE, unpacked) | $(du -sh src-tauri/resources/prose | cut -f1) |"
+            if [ -f src-tauri/resources/nuxl/build.json ]; then
+              echo "| (bundled OpenNuXL, unpacked) | $(du -sh src-tauri/resources/nuxl | cut -f1) |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: prose-desktop-windows
+          name: nuxl-desktop-windows
           path: src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
           retention-days: 14
@@ -834,8 +790,8 @@ jobs:
           fi
           echo "packages of run $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$run"
           for platform in linux linux-arm64 macos windows; do
-            if ! gh run download "$run" --name "prose-desktop-$platform" --dir "packages/$platform"; then
-              echo "::error::Run $run has no artifact prose-desktop-$platform (expired after 14 days?): re-run it with 'gh run rerun $run', then this job."
+            if ! gh run download "$run" --name "nuxl-desktop-$platform" --dir "packages/$platform"; then
+              echo "::error::Run $run has no artifact nuxl-desktop-$platform (expired after 14 days?): re-run it with 'gh run rerun $run', then this job."
               exit 1
             fi
           done
@@ -845,7 +801,7 @@ jobs:
             'macos *.dmg' 'windows *-setup.exe'; do
             read -r platform pattern <<<"$want"
             [ "$(find "packages/$platform" -type f -name "$pattern" | wc -l)" -eq 1 ] \
-              || { echo "::error::run $run's artifact prose-desktop-$platform does not hold exactly one $pattern package"; exit 1; }
+              || { echo "::error::run $run's artifact nuxl-desktop-$platform does not hold exactly one $pattern package"; exit 1; }
           done
       - name: Draft release
         env:
@@ -854,17 +810,17 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           cat > notes.md <<'NOTES'
-          **macOS** 15 or later on Apple silicon (arm64): the .dmg. Drag ProSE to Applications, then, once, in
+          **macOS** 15 or later on Apple silicon (arm64): the .dmg. Drag NuXL to Applications, then, once, in
           Terminal:
 
-              xattr -dr com.apple.quarantine /Applications/ProSE.app
+              xattr -dr com.apple.quarantine /Applications/NuXL.app
 
           The app is not signed with a Developer ID nor notarized, so macOS refuses to open it until then
           (System Settings > Privacy & Security > "Open Anyway" also works after a first attempt).
 
           **Linux** x64 and arm64 (Ubuntu 22.04 or later, or another distribution with glibc 2.35 or later; arm64:
           for example a Raspberry Pi 5 with a 64-bit system, ARM servers and laptops): the AppImage runs as is, the
-          .deb (package `prose`) installs with apt; the file names say the architecture (x64: amd64;
+          .deb (package `nuxl`) installs with apt; the file names say the architecture (x64: amd64;
           arm64: aarch64 for the AppImage, arm64 for the .deb). The AppImage needs the system's OpenGL ES
           library, libGLESv2.so.2 (the .deb pulls it in with WebKitGTK). Desktop installations have it; without
           it the app exits at once (exit code 127, "Couldn't open libGLESv2.so.2"). Install it with
@@ -876,8 +832,7 @@ jobs:
           files of one name can be searched together only when they are on the drive of the app's data (usually
           C:); otherwise the app asks to rename one of them.
           NOTES
-          # the packages under the names Tauri gives them, with the version (ProSE_0.1.2_x64-setup.exe, ...);
-          # the web app links to the latest release's page
-          gh release create "$TAG" --draft --verify-tag --title "ProSE desktop (native) ${TAG#desktop-native-v}" \
+          # the packages under the names Tauri gives them, with the version (NuXL_0.1.4_x64-setup.exe, ...)
+          gh release create "$TAG" --draft --verify-tag --title "NuXL desktop ${TAG#desktop-native-v}" \
             --notes-file notes.md \
             $(find packages -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' -o -name '*-setup.exe' \))

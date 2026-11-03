@@ -1,16 +1,16 @@
 // The Rust shim through the app's IPC: tool_info, start_search with its events, cancel_search.
-// Gated: runs only with PROSE_BIN set (the app inherits it) and the example data (PROSE_EXAMPLE_DIR, default the
+// Gated: runs only with NUXL_TOOL set (the app inherits it) and the example data (NUXL_EXAMPLE_DIR, default the
 // app's src-tauri/resources/example). It writes the finished search into the app data folder and removes it at the
 // end.
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EXAMPLE_DIR } from './lib.ts'
 
-const example = process.env.PROSE_EXAMPLE_DIR ?? EXAMPLE_DIR
-const mzml = join(example, 'Ecoli_MS2_small.mzML')
-const fasta = join(example, 'Ecoli_K12_proteome.fasta')
-const enabled = Boolean(process.env.PROSE_BIN) && existsSync(mzml) && existsSync(fasta)
+const example = process.env.NUXL_EXAMPLE_DIR ?? EXAMPLE_DIR
+const mzml = join(example, 'OpenNuXL_1_input.mzML')
+const fasta = join(example, 'OpenNuXL_1_input.fasta')
+const enabled = Boolean(process.env.NUXL_TOOL) && existsSync(mzml) && existsSync(fasta)
 
 type Events = { progress: any[]; done: any[]; failed: any[] }
 
@@ -28,7 +28,7 @@ async function invoke(command: string, args: object = {}): Promise<any> {
 describe('the shim', () => {
   before(async function () {
     if (!enabled) {
-      console.log('skipped: set PROSE_BIN (and PROSE_EXAMPLE_DIR) to run the shim against the real tool')
+      console.log('skipped: set NUXL_TOOL (and NUXL_EXAMPLE_DIR) to run the shim against the real tool')
       this.skip()
     }
     await (await $('header')).waitForDisplayed({ timeout: 20000 })
@@ -56,31 +56,30 @@ describe('the shim', () => {
       contaminants: true,
       settings: {
         parameters: {
-          'FDR:PSM': 0.01,
-          'FDR:protein': 0.01,
+          'precursor:mass_tolerance': 10,
+          'NuXL:presets': 'RNA-UV (U)',
           'modifications:variable': ['Oxidation (M)'],
-          'fragment:mass_tolerance': 0.5,
-          'fragment:mass_tolerance_unit': 'Da',
           ...more,
         } as Record<string, unknown>,
         rescore: true,
-        peptdeep: false,
         threads: 2,
+        peptideFdr: 0.01,
+        xlFdr: 0.01,
       },
     },
     dir,
   })
 
-  it('tool_info names the version, path and ONNX support', async () => {
+  it('tool_info names the version and path', async () => {
     const { result, failure } = await invoke('tool_info')
     expect(failure).toBeUndefined()
-    expect(result.path).toBe(process.env.PROSE_BIN)
+    expect(result.path).toBe(process.env.NUXL_TOOL)
     expect(result.version).toMatch(/^\d+\.\d+/)
-    expect(typeof result.onnx).toBe('boolean')
+    expect(Object.keys(result).sort()).toEqual(['path', 'version'])
   })
 
   it('start_search runs the example and ends with search://done', async () => {
-    const work = mkdtempSync(join(tmpdir(), 'prose-e2e-'))
+    const work = mkdtempSync(join(tmpdir(), 'nuxl-e2e-'))
     const { result, failure } = await invoke('start_search', { request: request(work).request })
     expect(failure).toBeUndefined()
     const id: string = result.searchId
@@ -94,10 +93,12 @@ describe('the shim', () => {
     expect(e.failed).toEqual([])
     expect(e.done).toHaveLength(1)
     expect(e.done[0].searchId).toBe(id)
-    expect(existsSync(join(e.done[0].folder, 'qpx', 'quantms.psm.parquet'))).toBe(true)
+    // the record of the run's outputs (docs/design.md §2), and the outputs it names
+    const outputs = JSON.parse(readFileSync(join(e.done[0].folder, 'nuxl', '1__OpenNuXL_1_input.outputs.json'), 'utf8'))
+    for (const key of ['all', 'xls', 'peptides']) expect(existsSync(join(e.done[0].folder, outputs[key]))).toBe(true)
     expect(e.progress.length).toBeGreaterThan(2)
     expect(e.progress.every((p: any) => p.searchId === id && typeof p.label === 'string' && p.fraction >= 0 && p.fraction <= 1)).toBe(true)
-    expect(e.progress.some((p: any) => p.file === 0 && p.label.startsWith('Searching Ecoli_MS2_small.mzML (1 of 1)'))).toBe(true)
+    expect(e.progress.some((p: any) => p.file === 0 && p.label.startsWith('Searching OpenNuXL_1_input.mzML (1 of 1)'))).toBe(true)
     rmSync(e.done[0].folder, { recursive: true, force: true })
     rmSync(work, { recursive: true, force: true })
   })
@@ -114,8 +115,8 @@ describe('the shim', () => {
       const e = (window as any).__events
       e.progress.length = e.done.length = e.failed.length = 0
     })
-    // (the example takes seconds; in chunks of 20 proteins it runs long enough to be cancelled)
-    const { result } = await invoke('start_search', { request: request('', { 'database:chunk_size': 20 }).request })
+    // (the example takes seconds; with adducts of up to four nucleotides it runs long enough to be cancelled)
+    const { result } = await invoke('start_search', { request: request('', { 'NuXL:length': 4 }).request })
     await browser.waitUntil(async () => (await events()).progress.some((p: any) => p.label.startsWith('Searching')), { timeout: 30000 })
     const { failure } = await invoke('cancel_search', { searchId: result.searchId })
     expect(failure).toBeUndefined()

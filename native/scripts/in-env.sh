@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run a command in the ProSE Tauri build and test environment: Rust and tauri-driver from
+# Run a command in the NuXL Tauri build and test environment: Rust and tauri-driver from
 # /scratch/sachsenb/tools/rust, Node 24.19.0, and WebKitGTK 4.1 and friends from the sysroot
 # that native/scripts/make-sysroot.sh builds.
 #

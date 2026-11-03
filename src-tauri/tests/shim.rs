@@ -1,18 +1,16 @@
-//! The shim against a fake ProSE (tests/fake-prose.sh; on Windows examples/fake_prose.rs) and fixtures of
-//! real ProSE output.
+//! The shim against a fake OpenNuXL (tests/fake-nuxl.sh; on Windows examples/fake_nuxl.rs).
 
 mod common;
 
 use common::*;
-use prose_desktop_lib::args::{
-    build_args, build_args_with, humanize, input_placements, input_records_with, input_stem,
-    is_input_link, link_name, max_stem, with_contaminants, InputLinks, Placement, SearchRequest,
-    MAX_STEM,
+use nuxl_desktop_lib::args::{
+    build_runs, build_runs_with, database_decoys, humanize, input_placements, input_records_with,
+    input_stem, is_input_link, link_name, max_stem, plan_database, stems_clash, write_database,
+    DatabasePlan, InputLinks, Placement, SearchRequest, FILTER_STEPS, MAX_STEM,
 };
-use prose_desktop_lib::decoys::DecoyRules;
-use prose_desktop_lib::progress::ProgressTracker;
-use prose_desktop_lib::run::{SearchEvent, Searches};
-use prose_desktop_lib::tool;
+use nuxl_desktop_lib::decoys::Marker;
+use nuxl_desktop_lib::run::{SearchEvent, Searches};
+use nuxl_desktop_lib::tool;
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -33,17 +31,23 @@ fn request(
         "files": files.iter().enumerate().map(|(i, p)| json!({ "id": format!("f{i}"), "path": p })).collect::<Vec<_>>(),
         "database": database,
         "contaminants": contaminants,
-        "settings": { "parameters": parameters, "rescore": true, "peptdeep": false, "threads": 2 },
+        "settings": { "parameters": parameters, "rescore": true, "threads": 2, "peptideFdr": 0.01, "xlFdr": 0.01 },
     }))
     .unwrap()
 }
 
-/// The arguments with every input as a link `<n>__<name>` (Linux, macOS; Windows below).
-fn args_of(req: &SearchRequest, out: &Path) -> Vec<OsString> {
-    build_args_with(req, out, InputLinks::Symlinks).unwrap()
+/// The runs' arguments with every input as a link `<n>__<name>` (Linux, macOS; Windows below).
+fn runs_of(req: &SearchRequest, out: &Path) -> Vec<Vec<OsString>> {
+    let plan = plan_database(req).unwrap();
+    build_runs_with(req, out, InputLinks::Symlinks, &plan).unwrap()
 }
 
-/// The values after `flag` up to the next option.
+/// The arguments of the first run.
+fn args_of(req: &SearchRequest, out: &Path) -> Vec<OsString> {
+    runs_of(req, out).remove(0)
+}
+
+/// The values after `flag` up to the next option (`-` and a letter, as TOPPBase reads it).
 fn values_of(args: &[OsString], flag: &str) -> Vec<OsString> {
     let at = args
         .iter()
@@ -52,7 +56,8 @@ fn values_of(args: &[OsString], flag: &str) -> Vec<OsString> {
     args[at + 1..]
         .iter()
         .take_while(|a| {
-            !a.to_string_lossy().starts_with('-') || a.to_string_lossy().parse::<f64>().is_ok()
+            let a = a.to_string_lossy();
+            !(a.starts_with('-') && a.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic()))
         })
         .cloned()
         .collect()
@@ -62,7 +67,11 @@ fn has(args: &[OsString], flag: &str) -> bool {
     args.iter().any(|a| a == flag)
 }
 
-/// A folder with an mzML (empty contents are enough: the shim reads nothing) and a FASTA.
+fn strings(values: &[&str]) -> Vec<OsString> {
+    values.iter().map(OsString::from).collect()
+}
+
+/// A folder with an mzML (empty contents are enough: the shim reads nothing of it) and a FASTA.
 struct Inputs {
     dir: TempDir,
     mzml: PathBuf,
@@ -82,214 +91,260 @@ fn inputs() -> Inputs {
 fn arguments_keep_paths_with_spaces_and_umlauts_intact() {
     let dir = TempDir::new("umlauts");
     let mzml = dir.write("Mäß daten/ünï cøde 1.mzML", "<mzML/>");
-    let gz = dir.write("two words/Probe ä.mzML.gz", "gz");
+    let other = dir.write("two words/Probe ä.mzML", "<mzML/>");
     let fasta = dir.write("Datenbank ö/prot ein.fasta", ">a\nMK\n");
     let out = dir.path().join("out dir ü/s.partial");
-    let args = args_of(&request(&[&mzml, &gz], &fasta, false, json!({})), &out);
-
+    let runs = runs_of(&request(&[&mzml, &other], &fasta, false, json!({})), &out);
+    assert_eq!(runs.len(), 2, "one run per input");
     assert_eq!(
-        values_of(&args, "-in"),
-        vec![
-            out.join("1__ünï cøde 1.mzML").into_os_string(),
-            out.join("2__Probe ä.mzML.gz").into_os_string()
-        ],
-        "inputs are the symlinks of the search folder, each one argument"
+        values_of(&runs[0], "-in"),
+        vec![out.join("1__ünï cøde 1.mzML").into_os_string()],
+        "the input is the link of the search folder, one argument"
     );
     assert_eq!(
-        values_of(&args, "-database"),
+        values_of(&runs[1], "-in"),
+        vec![out.join("2__Probe ä.mzML").into_os_string()]
+    );
+    assert_eq!(
+        values_of(&runs[1], "-out"),
+        vec![out.join("nuxl/2__Probe ä.idXML").into_os_string()]
+    );
+    assert_eq!(
+        values_of(&runs[0], "-database"),
         vec![fasta.clone().into_os_string()]
     );
-    assert_eq!(
-        values_of(&args, "-out_qpx"),
-        vec![out.join("qpx").into_os_string()]
-    );
-    assert!(!has(&args, "-summary_out"));
 }
 
 #[test]
-fn the_app_outputs_are_always_requested() {
+fn the_command_line_of_a_run_is_the_designs() {
     let i = inputs();
     let out = i.dir.path().join("o");
     let args = args_of(&request(&[&i.mzml], &i.fasta, false, json!({})), &out);
-    // the QPX files with the columns and the footer of -qpx_extended are all the app reads
-    assert_eq!(
-        values_of(&args, "-out_qpx"),
-        vec![out.join("qpx").into_os_string()]
-    );
-    assert!(has(&args, "-qpx_extended"));
-    assert_eq!(
-        values_of(&args, "-qpx_peak_window"),
-        vec![OsString::from("100")]
-    );
-    assert_eq!(
-        values_of(&args, "-qpx_peak_top"),
-        vec![OsString::from("100")]
-    );
-    for flag in ["-out_parquet", "-out_psm_spectra", "-summary_out"] {
+    let path = |p: &str| out.join(p).into_os_string();
+    let mut expected = vec![
+        OsString::from("-in"),
+        path("1__a.mzML"),
+        "-database".into(),
+        i.fasta.clone().into_os_string(),
+        "-out".into(),
+        path("nuxl/1__a.idXML"),
+        "-out_tsv".into(),
+        path("nuxl/1__a.tsv"),
+    ];
+    expected.extend(strings(&[
+        "-threads",
+        "2",
+        "-report:peptideFDR",
+        "0",
+        "-report:xlFDR",
+        "1.0",
+        "0.01",
+        "-report:xl_peptidelevel_FDR",
+        "1.0",
+        "1.0",
+        "-percolator_backend",
+        "builtin",
+    ]));
+    assert_eq!(args, expected);
+    // the shim's own options never come otherwise: no executable of Percolator (an empty one would turn the
+    // rescoring off), no decoys switch (OpenNuXL writes its FDR outputs only with its own decoys)
+    for flag in [
+        "-percolator_executable",
+        "-NuXL:decoys",
+        "-out_xls",
+        "-output_folder",
+        "-ini",
+    ] {
         assert!(!has(&args, flag), "{flag}");
     }
-    assert!(has(&args, "-keep_decoys"));
-    assert_eq!(values_of(&args, "-threads"), vec![OsString::from("2")]);
+    // rescoring off
+    let mut req = request(&[&i.mzml], &i.fasta, false, json!({}));
+    req.settings.rescore = false;
     assert_eq!(
-        values_of(&args, "-Search:rescore"),
-        vec![OsString::from("true")]
+        values_of(&args_of(&req, &out), "-percolator_backend"),
+        strings(&["none"])
     );
-    assert!(!has(&args, "-Search:peptdeep:enable"));
-    // one input: its own idXML (the Export menu's), no pooled output; a closed search: no modification analysis
-    assert_eq!(
-        values_of(&args, "-out_idxml"),
-        vec![out.join("search.idXML").into_os_string()]
-    );
-    assert!(!has(&args, "-out_merged"));
-    assert!(!has(&args, "-out_mod_analysis_dir"));
 }
 
 #[test]
-fn several_inputs_ask_for_the_merged_output_and_open_search_for_the_modification_tables() {
+fn the_cross_link_fdr_is_a_threshold_when_opennuxl_writes_its_protein_report_at_it() {
     let i = inputs();
-    let b = i.dir.write("other/b.mzML", "<mzML/>");
     let out = i.dir.path().join("o");
-    let open = json!({
-        "precursor:mass_tolerance_lower": 500, "precursor:mass_tolerance_upper": 500,
-        "precursor:mass_tolerance_unit": "Da",
-    });
-    let args = args_of(&request(&[&i.mzml, &b], &i.fasta, false, open), &out);
+    let with = |xl: f64, peptide: f64| {
+        let mut req = request(&[&i.mzml], &i.fasta, false, json!({}));
+        req.settings.xl_fdr = xl;
+        req.settings.peptide_fdr = peptide;
+        let args = args_of(&req, &out);
+        (
+            values_of(&args, "-report:xlFDR"),
+            values_of(&args, "-report:xl_peptidelevel_FDR"),
+            values_of(&args, "-report:peptideFDR"),
+        )
+    };
+    // up to 10 %: OpenNuXL writes the protein report at it
     assert_eq!(
-        values_of(&args, "-out_merged"),
-        vec![out.join("merged.idXML").into_os_string()]
+        with(0.05, 0.01),
+        (
+            strings(&["1.0", "0.05"]),
+            strings(&["1.0", "1.0"]),
+            strings(&["0"])
+        )
     );
-    assert!(!has(&args, "-out_idxml"));
-    assert_eq!(
-        values_of(&args, "-out_mod_analysis_dir"),
-        vec![out.join("mods").into_os_string()]
-    );
-
-    // ProSE's own rule: more than 1000 ppm or 1 Da on either side
-    let wide_ppm = json!({ "precursor:mass_tolerance_upper": 1500 });
-    assert!(has(
-        &args_of(&request(&[&i.mzml], &i.fasta, false, wide_ppm), &out),
-        "-out_mod_analysis_dir"
-    ));
-    let narrow_da = json!({ "precursor:mass_tolerance_unit": "Da", "precursor:mass_tolerance_lower": 0.5, "precursor:mass_tolerance_upper": 1 });
-    assert!(!has(
-        &args_of(&request(&[&i.mzml], &i.fasta, false, narrow_da), &out),
-        "-out_mod_analysis_dir"
-    ));
+    assert_eq!(with(0.1, 0.01).0, strings(&["1.0", "0.1"]));
+    // above: no protein report anyway; 1: no filter at all
+    for xl in [0.2, 1.0] {
+        assert_eq!(
+            with(xl, 0.05),
+            (strings(&["1.0"]), strings(&["1.0"]), strings(&["0"])),
+            "{xl}"
+        );
+    }
+    // out of (0, 1]: refused
+    for (xl, peptide) in [
+        (0.0, 0.01),
+        (-0.1, 0.01),
+        (1.5, 0.01),
+        (0.01, 0.0),
+        (0.01, 2.0),
+    ] {
+        let mut req = request(&[&i.mzml], &i.fasta, false, json!({}));
+        req.settings.xl_fdr = xl;
+        req.settings.peptide_fdr = peptide;
+        let err = build_runs(&req, &out).unwrap_err();
+        assert!(
+            err.contains("FDR") && err.contains("fraction"),
+            "{xl} {peptide}: {err}"
+        );
+    }
 }
 
 #[test]
-fn parameters_are_typed_and_use_the_search_prefix() {
+fn parameters_are_typed_and_named_as_opennuxl_names_them() {
     let i = inputs();
     let out = i.dir.path().join("o");
     let params = json!({
-        "enzyme": "Trypsin/P",
-        "peptide:missed_cleavages": 2,
-        "precursor:isotope_error_min": -1,
-        "precursor:mass_tolerance_lower": 10,
+        "precursor:mass_tolerance": 10,
+        "precursor:mass_tolerance_unit": "ppm",
+        "precursor:isotopes": [0, 1, -1],
         "fragment:mass_tolerance": 0.02,
-        "FDR:PSM": 0.01,
+        "peptide:enzyme": "Trypsin/P",
+        "peptide:missed_cleavages": 2,
+        "peptide:clip_nterm_methionine": false,
         "modifications:fixed": ["Carbamidomethyl (C)"],
-        "modifications:variable": ["Oxidation (M)", "Acetyl (Protein N-term)"],
-        "annotate:self_trained_ion_priors": false,
-        "calibration:enabled": true,
-        "ions:add_a_ions": false,
-        "database:chunk_size": 100000,
-        "peptdeep:instrument": "timsTOF",
+        "modifications:variable": ["Oxidation (M)", "Phospho (S)"],
+        "NuXL:presets": "RNA-UV (U)",
+        "NuXL:length": 3,
+        "NuXL:sequence": "",
+        "NuXL:scoring": "fast",
+        "NuXL:CysteineAdduct": true,
+        "NuXL:only_xl": false,
+        "filter": ["filter_pc_mass_error", "autotune"],
+        "window_size": 75.5,
     });
     let args = args_of(&request(&[&i.mzml], &i.fasta, false, params), &out);
     let one = |flag: &str| values_of(&args, flag);
-    assert_eq!(one("-Search:enzyme"), vec![OsString::from("Trypsin/P")]);
+    assert_eq!(one("-precursor:mass_tolerance"), strings(&["10"]));
+    assert_eq!(one("-precursor:mass_tolerance_unit"), strings(&["ppm"]));
     assert_eq!(
-        one("-Search:peptide:missed_cleavages"),
-        vec![OsString::from("2")]
+        one("-precursor:isotopes"),
+        strings(&["0", "1", "-1"]),
+        "an integer list, a negative one no option to TOPPBase"
     );
+    assert_eq!(one("-fragment:mass_tolerance"), strings(&["0.02"]));
+    assert_eq!(one("-peptide:enzyme"), strings(&["Trypsin/P"]));
     assert_eq!(
-        one("-Search:precursor:isotope_error_min"),
-        vec![OsString::from("-1")]
-    );
-    assert_eq!(
-        one("-Search:precursor:mass_tolerance_lower"),
-        vec![OsString::from("10")]
-    );
-    assert_eq!(
-        one("-Search:fragment:mass_tolerance"),
-        vec![OsString::from("0.02")]
-    );
-    assert_eq!(one("-Search:FDR:PSM"), vec![OsString::from("0.01")]);
-    assert_eq!(
-        one("-Search:modifications:fixed"),
-        vec![OsString::from("Carbamidomethyl (C)")]
-    );
-    assert_eq!(
-        one("-Search:modifications:variable"),
-        vec![
-            OsString::from("Oxidation (M)"),
-            OsString::from("Acetyl (Protein N-term)")
-        ],
-        "a list is one argument per item"
-    );
-    assert_eq!(
-        one("-Search:annotate:self_trained_ion_priors"),
-        vec![OsString::from("false")],
+        one("-peptide:clip_nterm_methionine"),
+        strings(&["false"]),
         "a true/false choice takes its value"
     );
     assert_eq!(
-        one("-Search:database:chunk_size"),
-        vec![OsString::from("100000")]
+        one("-modifications:fixed"),
+        strings(&["Carbamidomethyl (C)"])
     );
     assert_eq!(
-        one("-Search:peptdeep:instrument"),
-        vec![OsString::from("timsTOF")]
+        one("-modifications:variable"),
+        strings(&["Oxidation (M)", "Phospho (S)"]),
+        "a list is one argument per item"
     );
-    // a switch: present when on, absent when off (ProSE's flags take no value)
-    assert!(has(&args, "-Search:calibration:enabled"));
-    assert!(!has(&args, "-Search:ions:add_a_ions"));
-}
-
-#[test]
-fn an_empty_list_clears_the_default_and_peptdeep_is_a_switch() {
-    let i = inputs();
-    let out = i.dir.path().join("o");
-    let mut req = request(
-        &[&i.mzml],
-        &i.fasta,
-        false,
-        json!({ "modifications:variable": [] }),
+    assert_eq!(one("-NuXL:presets"), strings(&["RNA-UV (U)"]));
+    assert_eq!(one("-NuXL:length"), strings(&["3"]));
+    assert!(
+        !has(&args, "-NuXL:sequence"),
+        "empty text keeps the default"
     );
-    req.settings.peptdeep = true;
-    req.settings.rescore = false;
-    let args = args_of(&req, &out);
+    assert_eq!(one("-NuXL:scoring"), strings(&["fast"]));
+    assert_eq!(
+        one("-filter"),
+        strings(&["filter_pc_mass_error", "autotune"])
+    );
+    assert_eq!(one("-window_size"), strings(&["75.5"]));
+    // a flag: present when on (no value), absent when off
     let at = args
         .iter()
-        .position(|a| a == "-Search:modifications:variable")
+        .position(|a| a == "-NuXL:CysteineAdduct")
         .unwrap();
     assert!(
         args.get(at + 1)
             .is_none_or(|next| next.to_string_lossy().starts_with('-')),
-        "no value follows: {args:?}"
+        "{args:?}"
     );
-    assert!(has(&args, "-Search:peptdeep:enable"));
-    assert_eq!(
-        values_of(&args, "-Search:rescore"),
-        vec![OsString::from("false")]
-    );
+    assert!(!has(&args, "-NuXL:only_xl"));
+    // the form's parameters come after the shim's own
+    let percolator = args
+        .iter()
+        .position(|a| a == "-percolator_backend")
+        .unwrap();
+    assert!(args.iter().position(|a| a == "-NuXL:presets").unwrap() > percolator);
 }
 
 #[test]
-fn unknown_parameters_are_refused() {
+fn an_empty_list_clears_the_default() {
+    let i = inputs();
+    let out = i.dir.path().join("o");
+    let args = args_of(
+        &request(
+            &[&i.mzml],
+            &i.fasta,
+            false,
+            json!({ "modifications:variable": [], "filter": [] }),
+        ),
+        &out,
+    );
+    for flag in ["-modifications:variable", "-filter"] {
+        assert!(has(&args, flag), "{flag}");
+        assert!(
+            values_of(&args, flag).is_empty(),
+            "no value follows {flag}: {args:?}"
+        );
+    }
+}
+
+#[test]
+fn the_shims_own_options_and_unknown_ones_are_refused() {
     let i = inputs();
     let out = i.dir.path().join("o");
     for name in [
         "bogus",
-        "Search:enzyme",
         "in",
-        "out_idxml",
+        "database",
+        "out",
+        "out_tsv",
+        "out_xls",
+        "output_folder",
         "ini",
-        "peptdeep:ms2_model",
-        "rescore",
-        "peptdeep:enable",
+        "report:peptideFDR",
+        "report:xlFDR",
+        "report:xl_peptidelevel_FDR",
+        "percolator_backend",
+        "percolator_executable",
+        "NuXL:decoys",
+        "NuXL:presets_file",
+        "NET_executable",
+        "ThermoRaw_executable",
+        "presets:RNA-UV (U):mapping",
+        "-NuXL:presets",
     ] {
-        let err = build_args(
+        let err = build_runs(
             &request(&[&i.mzml], &i.fasta, false, json!({ name: "x" })),
             &out,
         )
@@ -302,6 +357,34 @@ fn unknown_parameters_are_refused() {
 }
 
 #[test]
+fn filter_steps_that_write_beside_the_input_or_need_more_tools_are_refused() {
+    let i = inputs();
+    let out = i.dir.path().join("o");
+    for step in ["pcrecalibration", "optimize", "RTpredict", "bogus"] {
+        let err = build_runs(
+            &request(
+                &[&i.mzml],
+                &i.fasta,
+                false,
+                json!({ "filter": ["autotune", step] }),
+            ),
+            &out,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains(step) && err.contains("filter"),
+            "{step}: {err}"
+        );
+    }
+    let all: Vec<&str> = FILTER_STEPS.to_vec();
+    let args = args_of(
+        &request(&[&i.mzml], &i.fasta, false, json!({ "filter": all })),
+        &out,
+    );
+    assert_eq!(values_of(&args, "-filter").len(), FILTER_STEPS.len());
+}
+
+#[test]
 fn parameter_values_of_the_wrong_type_are_refused() {
     let i = inputs();
     let out = i.dir.path().join("o");
@@ -309,36 +392,40 @@ fn parameter_values_of_the_wrong_type_are_refused() {
         json!({ "peptide:missed_cleavages": "two" }),
         json!({ "peptide:missed_cleavages": 1.5 }),
         json!({ "peptide:missed_cleavages": null }),
-        json!({ "FDR:protein": "0.01" }),
-        json!({ "enzyme": 3 }),
-        json!({ "enzyme": "-in" }),
-        json!({ "enzyme": "" }),
+        json!({ "precursor:mass_tolerance": "10" }),
+        json!({ "peptide:enzyme": 3 }),
+        json!({ "peptide:enzyme": "-in" }),
+        json!({ "peptide:enzyme": "" }),
+        json!({ "NuXL:sequence": "-database" }),
         json!({ "modifications:fixed": "Carbamidomethyl (C)" }),
         json!({ "modifications:fixed": ["-database"] }),
         json!({ "modifications:fixed": [1] }),
-        json!({ "calibration:enabled": "yes" }),
-        json!({ "enzyme": "Tryp\nsin" }),
+        json!({ "precursor:isotopes": ["1"] }),
+        json!({ "precursor:isotopes": [0.5] }),
+        json!({ "precursor:isotopes": 1 }),
+        json!({ "NuXL:CysteineAdduct": "yes" }),
+        json!({ "NuXL:presets": "RNA\nUV" }),
     ] {
         assert!(
-            build_args(&request(&[&i.mzml], &i.fasta, false, params.clone()), &out).is_err(),
+            build_runs(&request(&[&i.mzml], &i.fasta, false, params.clone()), &out).is_err(),
             "{params} is refused"
         );
     }
 }
 
 #[test]
-fn integers_beyond_proses_32_bits_and_absurd_threads_are_refused() {
+fn integers_beyond_32_bits_and_absurd_threads_are_refused() {
     let i = inputs();
     let out = i.dir.path().join("o");
-    // ProSE reads its integers as 32-bit: 3000000000 made it print its 152 KB help and stop
+    // OpenNuXL reads its integers as 32-bit: a larger one makes it print its whole help and stop
     for (params, words) in [
         (
             json!({ "precursor:max_charge": 3_000_000_000_u64 }),
             "precursor:max_charge",
         ),
         (
-            json!({ "precursor:isotope_error_min": -2_147_483_649_i64 }),
-            "precursor:isotope_error_min",
+            json!({ "precursor:isotopes": [-2_147_483_649_i64] }),
+            "precursor:isotopes",
         ),
         (
             json!({ "peptide:missed_cleavages": 9.0e15 }),
@@ -348,10 +435,10 @@ fn integers_beyond_proses_32_bits_and_absurd_threads_are_refused() {
         (json!({ "threads": 1025 }), "threads"),
     ] {
         let err =
-            build_args(&request(&[&i.mzml], &i.fasta, false, params.clone()), &out).unwrap_err();
+            build_runs(&request(&[&i.mzml], &i.fasta, false, params.clone()), &out).unwrap_err();
         assert!(err.contains(words), "{params}: {err}");
     }
-    let err = build_args(
+    let err = build_runs(
         &request(
             &[&i.mzml],
             &i.fasta,
@@ -368,137 +455,26 @@ fn integers_beyond_proses_32_bits_and_absurd_threads_are_refused() {
     // the request's own field too
     let mut req = request(&[&i.mzml], &i.fasta, false, json!({}));
     req.settings.threads = 100_000;
-    assert!(build_args(&req, &out).unwrap_err().contains("1024"));
-    // the bounds themselves pass
+    assert!(build_runs(&req, &out).unwrap_err().contains("1024"));
+    // the bounds themselves pass; threads in the parameters is the request's threads
     let args = args_of(
         &request(
             &[&i.mzml],
             &i.fasta,
             false,
-            json!({ "precursor:max_charge": 2_147_483_647_i64, "precursor:isotope_error_min": -2_147_483_648_i64, "threads": 1024 }),
+            json!({ "precursor:max_charge": 2_147_483_647_i64, "precursor:isotopes": [-2_147_483_648_i64], "threads": 1024 }),
         ),
         &out,
     );
     assert_eq!(
-        values_of(&args, "-Search:precursor:max_charge"),
-        vec![OsString::from("2147483647")]
+        values_of(&args, "-precursor:max_charge"),
+        strings(&["2147483647"])
     );
     assert_eq!(
-        values_of(&args, "-Search:precursor:isotope_error_min"),
-        vec![OsString::from("-2147483648")]
+        values_of(&args, "-precursor:isotopes"),
+        strings(&["-2147483648"])
     );
-    assert_eq!(values_of(&args, "-threads"), vec![OsString::from("1024")]);
-}
-
-#[test]
-fn co_isolated_precursors_are_left_out_with_database_chunks() {
-    let i = inputs();
-    let out = i.dir.path().join("o");
-    let with = |chunk: i64| {
-        args_of(
-            &request(
-                &[&i.mzml],
-                &i.fasta,
-                false,
-                json!({ "chimeric:enabled": true, "database:chunk_size": chunk }),
-            ),
-            &out,
-        )
-    };
-    assert!(has(&with(0), "-Search:chimeric:enabled"));
-    let chunked = with(1000);
-    assert!(
-        !has(&chunked, "-Search:chimeric:enabled"),
-        "ProSE would ignore it"
-    );
-    assert_eq!(
-        values_of(&chunked, "-Search:database:chunk_size"),
-        vec![OsString::from("1000")]
-    );
-    // a wrong value is still refused
-    assert!(build_args(
-        &request(
-            &[&i.mzml],
-            &i.fasta,
-            false,
-            json!({ "chimeric:enabled": "yes", "database:chunk_size": 1000 })
-        ),
-        &out
-    )
-    .is_err());
-}
-
-#[test]
-fn the_psm_fdr_is_above_zero() {
-    let i = inputs();
-    let out = i.dir.path().join("o");
-    // absent: the shim sends 1 %, because ProSE's default (0) leaves a search without q-values
-    let args = args_of(&request(&[&i.mzml], &i.fasta, false, json!({})), &out);
-    assert_eq!(
-        values_of(&args, "-Search:FDR:PSM"),
-        vec![OsString::from("0.01")]
-    );
-    for fdr in [json!(0), json!(-0.5)] {
-        let err = build_args(
-            &request(&[&i.mzml], &i.fasta, false, json!({ "FDR:PSM": fdr })),
-            &out,
-        )
-        .unwrap_err();
-        assert!(err.contains("FDR:PSM"), "{err}");
-    }
-}
-
-#[test]
-fn a_search_without_decoys_has_no_fdr() {
-    let i = inputs();
-    let out = i.dir.path().join("o");
-    let fdr = json!({ "FDR:PSM": 0.01, "FDR:protein": 0.05, "FDR:protein_inference_PSM": 0.1 });
-    let mut without = fdr.clone();
-    without["decoys"] = json!("ignore");
-    // decoys 'ignore': no FDR is sent (ProSE would skip it), not even the shim's default PSM FDR, and 0 is no error
-    for params in [
-        without,
-        json!({ "decoys": "ignore" }),
-        json!({ "decoys": "ignore", "FDR:PSM": 0 }),
-    ] {
-        let args = args_of(&request(&[&i.mzml], &i.fasta, false, params.clone()), &out);
-        for name in [
-            "-Search:FDR:PSM",
-            "-Search:FDR:protein",
-            "-Search:FDR:protein_inference_PSM",
-        ] {
-            assert!(!has(&args, name), "{name} sent with {params}");
-        }
-        assert_eq!(
-            values_of(&args, "-Search:decoys"),
-            vec![OsString::from("ignore")]
-        );
-    }
-    // with decoys they are sent
-    for decoys in ["auto", "generate"] {
-        let mut params = fdr.clone();
-        params["decoys"] = json!(decoys);
-        let args = args_of(&request(&[&i.mzml], &i.fasta, false, params), &out);
-        assert_eq!(
-            values_of(&args, "-Search:FDR:PSM"),
-            vec![OsString::from("0.01")]
-        );
-        assert_eq!(
-            values_of(&args, "-Search:FDR:protein"),
-            vec![OsString::from("0.05")]
-        );
-    }
-    // a value of the wrong type is still refused
-    assert!(build_args(
-        &request(
-            &[&i.mzml],
-            &i.fasta,
-            false,
-            json!({ "decoys": "ignore", "FDR:PSM": "x" })
-        ),
-        &out
-    )
-    .is_err());
+    assert_eq!(values_of(&args, "-threads"), strings(&["1024"]));
 }
 
 #[test]
@@ -508,27 +484,31 @@ fn input_paths_are_validated() {
     let missing = i.dir.path().join("data/missing.mzML");
     let folder = i.dir.path().join("data");
     let raw = i.dir.write("data/a.raw", "x");
+    let gz = i.dir.write("data/b.MZML.GZ", "gz");
     let text = i.dir.write("data/db.txt", ">a\nMK\n");
     assert!(
-        build_args(&request(&[&missing], &i.fasta, false, json!({})), &out)
+        build_runs(&request(&[&missing], &i.fasta, false, json!({})), &out)
             .unwrap_err()
             .contains("missing.mzML")
     );
     assert!(
-        build_args(&request(&[&folder], &i.fasta, false, json!({})), &out).is_err(),
+        build_runs(&request(&[&folder], &i.fasta, false, json!({})), &out).is_err(),
         "a folder is not a file"
     );
     assert!(
-        build_args(&request(&[&raw], &i.fasta, false, json!({})), &out)
+        build_runs(&request(&[&raw], &i.fasta, false, json!({})), &out)
             .unwrap_err()
             .contains("a.raw")
     );
+    // OpenNuXL reads no compressed mzML: unpack it first
+    let err = build_runs(&request(&[&i.mzml, &gz], &i.fasta, false, json!({})), &out).unwrap_err();
+    assert!(err.contains("b.MZML.GZ") && err.contains("unpack"), "{err}");
     assert!(
-        build_args(&request(&[&i.mzml], &text, false, json!({})), &out)
+        build_runs(&request(&[&i.mzml], &text, false, json!({})), &out)
             .unwrap_err()
             .contains("db.txt")
     );
-    assert!(build_args(
+    assert!(build_runs(
         &request(
             &[&i.mzml],
             &i.dir.path().join("none.fasta"),
@@ -539,15 +519,19 @@ fn input_paths_are_validated() {
     )
     .is_err());
     assert!(
-        build_args(&request(&[], &i.fasta, false, json!({})), &out).is_err(),
+        build_runs(&request(&[], &i.fasta, false, json!({})), &out).is_err(),
         "no input file"
     );
+    // OpenNuXL replaces ".idXML" in its output paths: not in a stem
+    let tricky = i.dir.write("data/run.idXML.mzML", "<mzML/>");
+    let err = build_runs(&request(&[&tricky], &i.fasta, false, json!({})), &out).unwrap_err();
+    assert!(err.contains(".idXML") && err.contains("rename"), "{err}");
     // the extensions the app takes
-    let gz = i.dir.write("data/b.MZML.GZ", "gz");
+    let upper = i.dir.write("data/C.MZML", "<mzML/>");
     let fa = i.dir.write("data/db.fa", ">a\nMK\n");
     let faa = i.dir.write("data/db.faa", ">a\nMK\n");
     for db in [&fa, &faa] {
-        assert!(build_args(&request(&[&i.mzml, &gz], db, false, json!({})), &out).is_ok());
+        assert!(build_runs(&request(&[&i.mzml, &upper], db, false, json!({})), &out).is_ok());
     }
 }
 
@@ -558,7 +542,7 @@ fn relative_paths_are_refused_so_none_can_pass_for_an_option() {
     let json = |files: Value, database: Value| -> SearchRequest {
         serde_json::from_value(json!({
             "files": files, "database": database, "contaminants": false,
-            "settings": { "parameters": {}, "rescore": true, "peptdeep": false, "threads": 1 },
+            "settings": { "parameters": {}, "rescore": true, "threads": 1, "peptideFdr": 0.01, "xlFdr": 0.01 },
         }))
         .unwrap()
     };
@@ -566,13 +550,13 @@ fn relative_paths_are_refused_so_none_can_pass_for_an_option() {
     let good_db = json!(i.fasta);
     for path in [
         "-in.mzML",
-        "-out_qpx",
+        "-out",
         "data/a.mzML",
         "a.mzML",
         "./a.mzML",
         "../a.mzML",
     ] {
-        let err = build_args(
+        let err = build_runs(
             &json(json!([{ "id": "f", "path": path }]), good_db.clone()),
             &out,
         )
@@ -583,17 +567,19 @@ fn relative_paths_are_refused_so_none_can_pass_for_an_option() {
         );
     }
     for path in ["-database.fasta", "-ini", "db.fasta", "sub/db.fasta"] {
-        let err = build_args(&json(good_file.clone(), json!(path)), &out).unwrap_err();
+        let err = build_runs(&json(good_file.clone(), json!(path)), &out).unwrap_err();
         assert!(
             err.contains("absolute") && err.contains(path),
             "{path}: {err}"
         );
     }
-    assert!(build_args(&json(good_file, good_db), &out).is_ok());
+    assert!(build_runs(&json(good_file, good_db), &out).is_ok());
 }
 
+// ---- the database ---------------------------------------------------------------------------
+
 #[test]
-fn contaminants_swap_the_database_for_the_search_folders_copy() {
+fn contaminants_or_decoys_swap_the_database_for_the_search_folders_copy() {
     let i = inputs();
     let out = i.dir.path().join("o");
     let with = args_of(&request(&[&i.mzml], &i.fasta, true, json!({})), &out);
@@ -606,6 +592,40 @@ fn contaminants_swap_the_database_for_the_search_folders_copy() {
         values_of(&without, "-database"),
         vec![i.fasta.clone().into_os_string()]
     );
+    // a database with decoys of its own: the copy without them, also without contaminants
+    let decoys = i.dir.write(
+        "data/td.fasta",
+        ">P1\nMKWV\n>P2\nAAAK\n>rev_P1\nVWKM\n>rev_P2\nKAAA\n",
+    );
+    let req = request(&[&i.mzml], &decoys, false, json!({}));
+    assert_eq!(
+        plan_database(&req).unwrap(),
+        DatabasePlan {
+            copy: true,
+            decoys: Some(Marker::Prefix("rev_".into()))
+        }
+    );
+    let args = args_of(&req, &out);
+    assert_eq!(
+        values_of(&args, "-database"),
+        vec![out.join("database.fasta").into_os_string()]
+    );
+    assert!(!has(&args, "-NuXL:decoys"), "OpenNuXL generates its decoys");
+    assert_eq!(
+        plan_database(&request(&[&i.mzml], &i.fasta, false, json!({}))).unwrap(),
+        DatabasePlan {
+            copy: false,
+            decoys: None
+        }
+    );
+}
+
+fn bundled_crap() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fasta/crap.fasta")
+}
+
+fn headers(text: &str) -> Vec<&str> {
+    text.lines().filter(|l| l.starts_with('>')).collect()
 }
 
 #[test]
@@ -618,7 +638,11 @@ fn contaminants_are_appended_with_con_accessions() {
         ">sp|ALBU_BOVIN|\nMKWVT\nFISL\n>CON__kept\nAAAA\n>gi|2|keratin\nGGGG\n",
     );
     let dest = dir.path().join("database.fasta");
-    with_contaminants(&user, &crap, &dest, &DecoyRules::default()).unwrap();
+    let copy = write_database(&user, Some(&crap), None, &dest).unwrap();
+    assert_eq!(
+        (copy.targets, copy.contaminants, copy.decoys_left_out),
+        (1, 3, 0)
+    );
     assert_eq!(
         fs::read_to_string(&dest).unwrap(),
         ">sp|P1|ONE desc\nMKWV\nTFIS\n>CON__sp|ALBU_BOVIN|\nMKWVT\nFISL\n>CON__kept\nAAAA\n>CON__gi|2|keratin\nGGGG\n"
@@ -629,7 +653,7 @@ fn contaminants_are_appended_with_con_accessions() {
         ">sp|P1|ONE desc\nMKWV\nTFIS"
     );
     let user2 = dir.write("user2.fasta", ">x\nMK\n");
-    with_contaminants(&user2, &crap, &dest, &DecoyRules::default()).unwrap();
+    write_database(&user2, Some(&crap), None, &dest).unwrap();
     assert!(fs::read_to_string(&dest)
         .unwrap()
         .starts_with(">x\nMK\n>CON__sp|ALBU_BOVIN|\n"));
@@ -638,23 +662,14 @@ fn contaminants_are_appended_with_con_accessions() {
 #[test]
 fn the_bundled_crap_has_116_entries_and_gets_the_prefix() {
     let dir = TempDir::new("bundled-crap");
-    let crap = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fasta/crap.fasta");
     let user = dir.write("user.fasta", ">a\nMK\n");
     let dest = dir.path().join("database.fasta");
-    with_contaminants(&user, &crap, &dest, &DecoyRules::default()).unwrap();
+    write_database(&user, Some(&bundled_crap()), None, &dest).unwrap();
     let text = fs::read_to_string(&dest).unwrap();
-    let headers: Vec<&str> = text.lines().filter(|l| l.starts_with('>')).collect();
+    let headers = headers(&text);
     assert_eq!(headers.len(), 117);
     assert_eq!(headers[0], ">a");
     assert!(headers[1..].iter().all(|h| h.starts_with(">CON__")));
-}
-
-fn bundled_crap() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fasta/crap.fasta")
-}
-
-fn headers(text: &str) -> Vec<&str> {
-    text.lines().filter(|l| l.starts_with('>')).collect()
 }
 
 #[test]
@@ -670,7 +685,7 @@ fn contaminants_the_database_has_already_are_not_appended_again() {
         ">sp|P1|ONE\nMKWV\n>CON__sp|ALBU_BOVIN| own text\r\nMKWVT\r\n",
     );
     let dest = dir.path().join("database.fasta");
-    with_contaminants(&user, &crap, &dest, &DecoyRules::default()).unwrap();
+    write_database(&user, Some(&crap), None, &dest).unwrap();
     assert_eq!(
         fs::read_to_string(&dest).unwrap(),
         ">sp|P1|ONE\nMKWV\n>CON__sp|ALBU_BOVIN| own text\r\nMKWVT\r\n>CON__gi|2|keratin\nGGGG\n"
@@ -679,8 +694,8 @@ fn contaminants_the_database_has_already_are_not_appended_again() {
     let first = dir.path().join("first.fasta");
     let again = dir.path().join("again.fasta");
     let plain = dir.write("plain.fasta", ">a\nMK\n");
-    with_contaminants(&plain, &bundled_crap(), &first, &DecoyRules::default()).unwrap();
-    with_contaminants(&first, &bundled_crap(), &again, &DecoyRules::default()).unwrap();
+    write_database(&plain, Some(&bundled_crap()), None, &first).unwrap();
+    write_database(&first, Some(&bundled_crap()), None, &again).unwrap();
     assert_eq!(
         fs::read_to_string(&again).unwrap(),
         fs::read_to_string(&first).unwrap()
@@ -692,68 +707,55 @@ fn contaminants_the_database_has_already_are_not_appended_again() {
 }
 
 #[test]
-fn a_database_with_decoys_gets_decoys_of_the_contaminants_too() {
-    let dir = TempDir::new("crap-decoys");
-    let crap = dir.write("crap.fasta", ">sp|TRY|trypsin\nMABCKDE\n>CON__kept\nAKPR\n");
+fn the_databases_own_decoys_are_left_out() {
+    let dir = TempDir::new("decoys");
+    let crap = dir.write("crap.fasta", ">sp|TRY|trypsin\nMABCKDE\n");
     let dest = dir.path().join("database.fasta");
-    // a prefix as DecoyHelper knows it, spelled as the database spells it
+    // a prefix as DecoyHelper knows it, spelled as the database spells it; a decoy's sequence over two lines
     let user = dir.write(
         "decoys.fasta",
-        ">P1 one\nMKWV\n>P2\nAAAK\n>rev_P1 one\nMVWK\n>rev_P2\nAAAK\n",
+        ">P1 one\nMKWV\n>REV_P1 one\nMV\nWK\n>P2\nAAAK\n>rev_P2\nAAAK\n",
     );
-    with_contaminants(&user, &crap, &dest, &DecoyRules::default()).unwrap();
-    let text = fs::read_to_string(&dest).unwrap();
-    assert!(
-        text.ends_with(
-            ">CON__sp|TRY|trypsin\nMABCKDE\n>CON__kept\nAKPR\n>rev_CON__sp|TRY|trypsin\nMCBAKED\n>rev_CON__kept\nRPKA\n"
-        ),
-        "{text}"
+    let marker = database_decoys(&user).unwrap();
+    assert_eq!(marker, Some(Marker::Prefix("rev_".into())));
+    let copy = write_database(&user, Some(&crap), marker.as_ref(), &dest).unwrap();
+    assert_eq!(
+        (copy.targets, copy.decoys_left_out, copy.contaminants),
+        (2, 2, 1)
     );
-    // targets and decoys pair up again
-    let decoys = headers(&text)
-        .iter()
-        .filter(|h| h.starts_with(">rev_"))
-        .count();
-    assert_eq!(headers(&text).len(), 2 * decoys);
-    // a suffix, and Trypsin/P without keeping the initial Met
+    assert_eq!(
+        fs::read_to_string(&dest).unwrap(),
+        ">P1 one\nMKWV\n>P2\nAAAK\n>CON__sp|TRY|trypsin\nMABCKDE\n",
+        "no decoy, of either spelling, and none of the contaminants (OpenNuXL makes them all)"
+    );
+    // a suffix; and OpenNuXL's own prefix, of an earlier search's database that kept a few
     let suffixed = dir.write("suffixed.fasta", ">P1\nMK\n>P1_REVERSED\nKM\n");
-    let rules = DecoyRules::of(
-        json!({ "enzyme": "Trypsin/P", "peptide:clip_nterm_methionine": false })
-            .as_object()
-            .unwrap(),
+    assert_eq!(
+        database_decoys(&suffixed).unwrap(),
+        Some(Marker::Suffix("_REVERSED".into()))
     );
-    with_contaminants(&suffixed, &crap, &dest, &rules).unwrap();
-    let text = fs::read_to_string(&dest).unwrap();
+    let own = dir.write("own.fasta", ">P1\nMK\n>P2\nMK\n>P3\nMK\n>DECOY_P1\nKM\n");
+    let marker = database_decoys(&own).unwrap();
+    assert_eq!(marker, Some(Marker::Prefix("DECOY_".into())));
+    write_database(&own, None, marker.as_ref(), &dest).unwrap();
+    assert_eq!(
+        headers(&fs::read_to_string(&dest).unwrap()),
+        [">P1", ">P2", ">P3"]
+    );
+    // a database of decoys only: refused, nothing left
+    let only = dir.write("only.fasta", ">rev_P1\nMK\n>rev_P2\nKM\n");
+    let marker = database_decoys(&only).unwrap();
+    let err = write_database(&only, None, marker.as_ref(), &dest).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     assert!(
-        text.ends_with(">CON__sp|TRY|trypsin_REVERSED\nCBAMKED\n>CON__kept_REVERSED\nAKRP\n"),
-        "{text}"
+        err.to_string().contains("decoys only") && err.to_string().contains("rev_"),
+        "{err}"
     );
-    // ProSE removes the database's decoys and generates all of them (generate, ignore), or the database has
-    // none: no decoys from the app
-    for (db, params) in [
-        (&user, json!({ "decoys": "generate" })),
-        (&user, json!({ "decoys": "ignore" })),
-        (&dir.write("targets.fasta", ">P1\nMK\n>P2\nAK\n"), json!({})),
-    ] {
-        with_contaminants(
-            db,
-            &crap,
-            &dest,
-            &DecoyRules::of(params.as_object().unwrap()),
-        )
-        .unwrap();
-        let text = fs::read_to_string(&dest).unwrap();
-        assert!(
-            headers(&text)
-                .iter()
-                .all(|h| !h.contains("rev_CON") && !h.contains("REVERSED")),
-            "{params}: {text}"
-        );
-    }
+    assert!(!dest.exists());
 }
 
 #[test]
-fn a_database_without_proteins_is_refused_with_contaminants() {
+fn a_database_without_proteins_is_refused() {
     let dir = TempDir::new("crap-empty");
     let dest = dir.path().join("database.fasta");
     for (name, contents) in [
@@ -762,15 +764,14 @@ fn a_database_without_proteins_is_refused_with_contaminants() {
         ("nohdr.fasta", "MKWVTFISLLK\n"),
     ] {
         let user = dir.write(name, contents);
-        let err =
-            with_contaminants(&user, &bundled_crap(), &dest, &DecoyRules::default()).unwrap_err();
+        let err = write_database(&user, Some(&bundled_crap()), None, &dest).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{name}");
         assert!(err.to_string().contains("has no proteins"), "{name}: {err}");
         assert!(!dest.exists(), "{name}: no half-written copy is left");
     }
     // a byte order mark before the first header is no problem
     let bom = dir.write("bom.fasta", "\u{feff}>P1\nMK\n");
-    with_contaminants(&bom, &bundled_crap(), &dest, &DecoyRules::default()).unwrap();
+    write_database(&bom, Some(&bundled_crap()), None, &dest).unwrap();
     // through start_search: refused, and nothing is left
     let run = Run::new();
     let i = inputs();
@@ -787,23 +788,27 @@ fn a_database_without_proteins_is_refused_with_contaminants() {
     assert!(run.listing().is_empty(), "{:?}", run.listing());
 }
 
+// ---- inputs and their names -----------------------------------------------------------------
+
 #[test]
 fn on_windows_inputs_go_by_their_own_paths_unless_their_names_clash() {
     let dir = TempDir::new("placements");
     let a = dir.write("one/a.mzML", "<mzML/>");
-    let b = dir.write("one/b.mzML.gz", "gz");
+    let b = dir.write("one/b.mzML", "<mzML/>");
     let a_upper = dir.write("two/A.MZML", "<mzML/>");
-    let a_gz = dir.write("three/a.mzML.gz", "gz");
+    let a_perc = dir.write("three/a_perc.mzML", "<mzML/>");
     let fasta = dir.write("db.fasta", ">a\nMK\n");
     let out = dir.path().join("s.partial");
     let windows = InputLinks::PathsOrHardLinks;
     let plan = |files: &[&Path]| {
         let req = request(files, &fasta, false, json!({}));
-        let args = build_args_with(&req, &out, windows).unwrap();
+        let runs = build_runs_with(&req, &out, windows, &plan_database(&req).unwrap()).unwrap();
         let records = input_records_with(&req, windows, &out);
         (
             input_placements(&req, windows, &out),
-            values_of(&args, "-in"),
+            runs.iter()
+                .map(|r| values_of(r, "-in").remove(0))
+                .collect::<Vec<_>>(),
             records
                 .iter()
                 .map(|r| (r.link.clone(), r.stem.clone()))
@@ -811,7 +816,7 @@ fn on_windows_inputs_go_by_their_own_paths_unless_their_names_clash() {
         )
     };
 
-    // names that differ: the user's paths themselves, and ProSE names the outputs after them
+    // names that differ: the user's paths themselves, the outputs named after them
     let (placements, ins, records) = plan(&[&a, &b]);
     assert_eq!(placements, [Placement::OwnPath, Placement::OwnPath]);
     assert_eq!(
@@ -822,11 +827,12 @@ fn on_windows_inputs_go_by_their_own_paths_unless_their_names_clash() {
         records,
         [
             ("a.mzML".to_string(), "a".to_string()),
-            ("b.mzML.gz".to_string(), "b".to_string())
+            ("b.mzML".to_string(), "b".to_string())
         ]
     );
-    // one stem, ignoring case (NTFS) or the .gz: the clashing ones as hard links in the folder
-    let (placements, ins, records) = plan(&[&a, &b, &a_upper, &a_gz]);
+    // one stem, ignoring case (NTFS), or one stem and another that begins with it and `_` (the outputs of
+    // `a` after Percolator are named as those of `a_perc`): the clashing ones as hard links in the folder
+    let (placements, ins, records) = plan(&[&a, &b, &a_upper, &a_perc]);
     use Placement::*;
     assert_eq!(placements, [HardLink, OwnPath, HardLink, HardLink]);
     assert_eq!(
@@ -835,7 +841,7 @@ fn on_windows_inputs_go_by_their_own_paths_unless_their_names_clash() {
             out.join("1__a.mzML").into_os_string(),
             b.clone().into_os_string(),
             out.join("3__A.MZML").into_os_string(),
-            out.join("4__a.mzML.gz").into_os_string(),
+            out.join("4__a_perc.mzML").into_os_string(),
         ]
     );
     assert_eq!(
@@ -843,8 +849,10 @@ fn on_windows_inputs_go_by_their_own_paths_unless_their_names_clash() {
             .iter()
             .map(|(_, stem)| stem.as_str())
             .collect::<Vec<_>>(),
-        ["1__a", "b", "3__A", "4__a"]
+        ["1__a", "b", "3__A", "4__a_perc"]
     );
+    let (placements, _, _) = plan(&[&a_perc, &b]);
+    assert_eq!(placements, [OwnPath, OwnPath], "no clash, no link");
     // a file whose own name looks like a link beside the clash it would meet: all of them as links
     let tricky = dir.write("four/1__a.mzML", "<mzML/>");
     let (placements, _, records) = plan(&[&a, &a_upper, &tricky]);
@@ -856,12 +864,6 @@ fn on_windows_inputs_go_by_their_own_paths_unless_their_names_clash() {
             .collect::<Vec<_>>(),
         ["1__a.mzML", "2__A.MZML", "3__1__a.mzML"]
     );
-    // an input of stem `quantms`, which ProSE refuses (its merged QPX views are quantms.*): as a link
-    let quantms = dir.write("five/QuantMS.mzML", "<mzML/>");
-    let (placements, ins, records) = plan(&[&b, &quantms]);
-    assert_eq!(placements, [OwnPath, HardLink]);
-    assert_eq!(ins[1], out.join("2__QuantMS.mzML").into_os_string());
-    assert_eq!(records[1].1, "2__QuantMS");
     // elsewhere every input is a symbolic link
     let req = request(&[&a, &b], &fasta, false, json!({}));
     assert_eq!(
@@ -879,8 +881,26 @@ fn on_windows_inputs_go_by_their_own_paths_unless_their_names_clash() {
 }
 
 #[test]
+fn stems_clash_when_one_names_the_others_outputs() {
+    assert!(stems_clash("a", "a"));
+    assert!(stems_clash("a", "a_perc") && stems_clash("a_perc", "a"));
+    assert!(stems_clash("a", "a_sse_perc_in"));
+    for (x, y) in [
+        ("a", "ab"),
+        ("a", "a.b"),
+        ("1__a", "11__a"),
+        ("a", "b_a"),
+        ("A", "a"),
+    ] {
+        assert!(!stems_clash(x, y), "{x} {y}");
+    }
+    // (compared as given: the shim compares the lower-cased stems, as NTFS compares names)
+    assert!(stems_clash("a", "a__x"), "on the safe side");
+}
+
+#[test]
 fn input_links_are_known_by_their_names() {
-    for name in ["1__a.mzML", "12__x y.mzML.gz", "3__1__a.MZML"] {
+    for name in ["1__a.mzML", "12__x y.mzML", "3__1__a.MZML"] {
         assert!(is_input_link(name), "{name}");
     }
     for name in [
@@ -888,8 +908,9 @@ fn input_links_are_known_by_their_names() {
         "__a.mzML",
         "x__a.mzML",
         "1__a.fasta",
+        "1__a.mzML.gz",
         "1__",
-        "summary.yaml",
+        "search.json",
         "1_a.mzML",
     ] {
         assert!(!is_input_link(name), "{name}");
@@ -897,13 +918,13 @@ fn input_links_are_known_by_their_names() {
 }
 
 #[test]
-fn link_names_keep_the_name_and_the_gz_suffix() {
+fn link_names_keep_the_name_and_its_suffix() {
     assert_eq!(link_name(0, "/data/x.mzML"), "1__x.mzML");
-    assert_eq!(link_name(9, "/data/x.mzML.gz"), "10__x.mzML.gz");
+    assert_eq!(link_name(9, "/data/x.MZML"), "10__x.MZML");
     assert_eq!(link_name(0, "/Daten ä/ünï cøde.mzML"), "1__ünï cøde.mzML");
     assert_eq!(input_stem("1__x.mzML"), "1__x");
-    assert_eq!(input_stem("10__x.mzML.gz"), "10__x");
-    assert_eq!(input_stem("2__a.b.MZML.GZ"), "2__a.b");
+    assert_eq!(input_stem("10__x.MZML"), "10__x");
+    assert_eq!(input_stem("2__a.b.mzml"), "2__a.b");
 }
 
 #[test]
@@ -916,21 +937,17 @@ fn link_names_of_long_file_names_are_shortened_to_a_unique_stem_with_the_suffix(
         "{link}"
     );
     assert_eq!(input_stem(&link).len(), MAX_STEM, "{link}");
-    // ProSE's longest output name fits
-    assert!(
-        format!(
-            "{}_ModificationAnalysis_DeltaMassStats.tsv",
-            input_stem(&link)
-        )
-        .len()
-            <= 255
+    // OpenNuXL's longest output name fits
+    assert_eq!(
+        format!("{}_perc_proteins0.0100_XLs.tsv", input_stem(&link)).len(),
+        255
     );
     assert!(is_input_link(&link));
     // `<n>__` keeps two such inputs apart, and the suffix stays as it is
-    let gz = link_name(11, &format!("/data/{}.MZML.GZ", "x".repeat(246)));
+    let upper = link_name(11, &format!("/data/{}.MZML", "x".repeat(250)));
     assert!(
-        gz.starts_with("12__xxx") && gz.ends_with(".MZML.GZ"),
-        "{gz}"
+        upper.starts_with("12__xxx") && upper.ends_with(".MZML"),
+        "{upper}"
     );
     assert_ne!(
         input_stem(&link),
@@ -953,39 +970,36 @@ fn link_names_of_long_file_names_are_shortened_to_a_unique_stem_with_the_suffix(
 }
 
 /// Names whose lower-cased form has another length in bytes: `İ` (2 bytes, lower case 3), `Ⱥ` (2 -> 3),
-/// `ẞ` (3 -> 2) and the Kelvin sign (3 -> 1). The stem is ProSE's (`File::stemName`: ASCII suffixes,
-/// ignoring their case), and no name makes the shim panic.
+/// `ẞ` (3 -> 2) and the Kelvin sign (3 -> 1). The stem is the name without its ASCII suffix (ignoring its
+/// case), and no name makes the shim panic.
 #[test]
 fn input_stems_of_names_whose_lower_case_has_another_length() {
     for (link, stem) in [
         ("1__İstanbul_run.mzML", "1__İstanbul_run"),
-        ("1__İstanbul_run.mzML.gz", "1__İstanbul_run"),
-        ("1__Ⱥ.mzML.gz", "1__Ⱥ"),
         ("1__Ⱥ.mzML", "1__Ⱥ"),
         ("2__ẞ.mzML", "2__ẞ"),
-        ("2__ẞẞ.MzMl.gZ", "2__ẞẞ"),
+        ("2__ẞẞ.MzMl", "2__ẞẞ"),
         ("3__\u{212A}.mzML", "3__\u{212A}"),
-        ("3__\u{212A}\u{212A}.mzML.GZ", "3__\u{212A}\u{212A}"),
         ("4__İ.mZmL", "4__İ"),
         ("5__a.mzML.mzML", "5__a.mzML"),
-        ("6__Ⱥ.gz", "6__Ⱥ"),
+        ("6__Ⱥ.gz", "6__Ⱥ.gz"),
         (".mzML", ""),
         ("İ", "İ"),
         ("", ""),
     ] {
         assert_eq!(input_stem(link), stem, "{link}");
     }
-    for name in ["İstanbul.mzML", "Ⱥ.MZML.GZ", "ẞ.mzml", "\u{212A}.mZmL.Gz"] {
-        assert!(prose_desktop_lib::args::is_spectrum_file(name), "{name}");
+    for name in ["İstanbul.mzML", "Ⱥ.MZML", "ẞ.mzml", "\u{212A}.mZmL"] {
+        assert!(nuxl_desktop_lib::args::is_spectrum_file(name), "{name}");
     }
-    for name in ["Ⱥ.mzM", "x.mzml.gzip", "x.gz", "ẞ"] {
-        assert!(!prose_desktop_lib::args::is_spectrum_file(name), "{name}");
+    for name in ["Ⱥ.mzM", "x.mzML.gz", "x.gz", "ẞ"] {
+        assert!(!nuxl_desktop_lib::args::is_spectrum_file(name), "{name}");
     }
-    // the records of a search with such inputs carry these stems (the reader looks for <stem>.psm.parquet)
+    // the records of a search with such inputs carry these stems (the outputs are named after them)
     let req = request(
         &[
             Path::new("/data/İstanbul_run.mzML"),
-            Path::new("/data/Ⱥ.mzML.gz"),
+            Path::new("/data/Ⱥ.mzML"),
             Path::new("/data/ẞ.MZML"),
         ],
         Path::new("/db/x.fasta"),
@@ -1005,357 +1019,6 @@ fn input_stems_of_names_whose_lower_case_has_another_length() {
     assert_eq!(own, ["İstanbul_run", "Ⱥ", "ẞ"]);
 }
 
-// ---- progress -------------------------------------------------------------------------------
-
-type Step = (String, i32, f64);
-
-fn steps_of(fixture_name: &str, names: &[&str]) -> Vec<Step> {
-    let mut tracker = ProgressTracker::new(names.iter().map(|n| n.to_string()).collect());
-    let mut steps = Vec::new();
-    for line in fixture(fixture_name).lines() {
-        if let Some(p) = tracker.feed(line) {
-            steps.push((p.label, p.file, p.fraction));
-        }
-    }
-    steps
-}
-
-fn labels(steps: &[Step]) -> Vec<&str> {
-    steps.iter().map(|s| s.0.as_str()).collect()
-}
-
-fn assert_monotone(steps: &[Step]) {
-    for pair in steps.windows(2) {
-        assert!(pair[1].2 >= pair[0].2, "the fraction goes back: {pair:?}");
-    }
-    assert!(
-        steps.iter().all(|s| (0.0..=1.0).contains(&s.2)),
-        "{steps:?}"
-    );
-}
-
-#[test]
-fn progress_lines_become_events_with_file_and_fraction() {
-    // real output of the pinned ProSE: two files, PeptDeep and Percolator on, closed search
-    let steps = steps_of(
-        "prose-closed-two-files-peptdeep.stdout.txt",
-        &["DatabaseSuitability_1.mzML", "DatabaseSuitability_2.mzML"],
-    );
-    assert_eq!(
-        labels(&steps),
-        [
-            "Searching DatabaseSuitability_1.mzML (1 of 2)...",
-            "Building the fragment index...",
-            "Searching DatabaseSuitability_1.mzML (1 of 2)...",
-            "Adding PeptDeep rescoring features...",
-            "Mapping peptides to proteins...",
-            "Rescoring with Percolator...",
-            "Searching DatabaseSuitability_2.mzML (2 of 2)...",
-            "Adding PeptDeep rescoring features...",
-            "Mapping peptides to proteins...",
-            "Rescoring with Percolator...",
-            // (a ProSE without -qpx_extended: the views' lines are not there)
-            "Preparing the spectrum view (file 1 of 2)...",
-            "Pooling the files...",
-            "Writing the results...",
-        ]
-    );
-    let files: Vec<i32> = steps.iter().map(|s| s.1).collect();
-    assert_eq!(files, [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, -1, -1, -1]);
-    assert_eq!(steps[0].2, 0.0, "the first file starts at 0");
-    // the second file's step starts where the first one's share ends: half of the 35 % for the files' search
-    assert!((steps[6].2 - 0.175).abs() < 1e-9, "{:?}", steps[6]);
-    // the spectrum views follow the files' search, not 95 %
-    assert!((steps[10].2 - 0.35).abs() < 1e-9, "{:?}", steps[10]);
-    assert!(
-        (steps[11].2 - 0.95).abs() < 1e-9,
-        "pooling holds at 95 %: {:?}",
-        steps[11]
-    );
-    assert_monotone(&steps);
-}
-
-#[test]
-fn progress_names_the_file_by_the_original_name_not_the_symlink() {
-    // the fixture names the files "1__DatabaseSuitability_1.mzML" (the shim's link); the label shows the user's name
-    let steps = steps_of(
-        "prose-closed-two-files-peptdeep.stdout.txt",
-        &["First run.mzML", "Zweite Probe ä.mzML.gz"],
-    );
-    assert_eq!(steps[0].0, "Searching First run.mzML (1 of 2)...");
-    assert!(labels(&steps).contains(&"Searching Zweite Probe ä.mzML.gz (2 of 2)..."));
-    // without names, the line's own file name is used
-    let plain = steps_of("prose-closed-two-files-peptdeep.stdout.txt", &[]);
-    assert_eq!(
-        plain[0].0,
-        "Searching 1__DatabaseSuitability_1.mzML (1 of 2)..."
-    );
-}
-
-#[test]
-fn progress_of_a_single_open_search_ends_with_the_modification_analysis() {
-    let steps = steps_of(
-        "prose-open-one-file.stdout.txt",
-        &["DatabaseSuitability_1.mzML"],
-    );
-    assert_eq!(
-        labels(&steps),
-        [
-            "Searching DatabaseSuitability_1.mzML (1 of 1)...",
-            "Building the fragment index...",
-            "Searching DatabaseSuitability_1.mzML (1 of 1)...",
-            "Mapping peptides to proteins...",
-            "Rescoring with Percolator...",
-            "Analysing modifications...",
-            "Writing the results...",
-        ]
-    );
-    assert_eq!(steps.last().unwrap().1, -1);
-    assert_monotone(&steps);
-}
-
-#[test]
-fn progress_of_several_open_files_pools_after_the_last_modification_analysis() {
-    let steps = steps_of("prose-open-two-files.stdout.txt", &["a.mzML", "b.mzML"]);
-    let l = labels(&steps);
-    assert_eq!(
-        &l[l.len() - 4..],
-        [
-            "Analysing modifications...",
-            "Preparing the spectrum view (file 1 of 2)...",
-            "Pooling the files...",
-            "Writing the results..."
-        ]
-    );
-    assert_eq!(
-        l.iter()
-            .filter(|x| **x == "Analysing modifications...")
-            .count(),
-        2
-    );
-    assert_eq!(
-        steps
-            .iter()
-            .find(|s| s.0 == "Pooling the files...")
-            .unwrap()
-            .1,
-        -1
-    );
-    assert_monotone(&steps);
-}
-
-const CHUNK_NAMES: [&str; 2] = ["a.mzML", "b.mzML"];
-
-fn chunk_labels(n: usize) -> Vec<String> {
-    (1..=n)
-        .map(|k| format!("Searching database chunk {k} of {n}..."))
-        .collect()
-}
-
-#[test]
-fn a_chunked_search_of_two_files_reports_its_chunks_and_each_files_rescoring() {
-    // real output: `database:chunk_size 20` on two inputs prints no "Searching" line (chunk-major mode)
-    let steps = steps_of("prose-chunked-two-files-peptdeep.stdout.txt", &CHUNK_NAMES);
-    let mut expected = vec!["Reading the spectra...".to_string()];
-    expected.extend(chunk_labels(17));
-    expected.extend(
-        [
-            "Adding PeptDeep rescoring features...",
-            "Mapping peptides to proteins...",
-            "Rescoring with Percolator...",
-            "Adding PeptDeep rescoring features...",
-            "Mapping peptides to proteins...",
-            "Rescoring with Percolator...",
-            // (no end marker of the last file in a closed chunked search, and this ProSE had no -qpx_extended)
-            "Pooling the files...",
-            "Writing the results...",
-        ]
-        .map(String::from),
-    );
-    assert_eq!(
-        labels(&steps),
-        expected.iter().map(String::as_str).collect::<Vec<_>>()
-    );
-    let files: Vec<i32> = steps.iter().map(|s| s.1).collect();
-    assert!(
-        files[..18].iter().all(|f| *f == -1),
-        "reading and chunks are outside the files"
-    );
-    assert_eq!(files[18..], [0, 0, 0, 1, 1, 1, -1, -1]);
-    // the chunks take the first half of the files' 35 % of the bar, in 17 equal steps
-    assert_eq!(steps[1].2, 0.0);
-    assert!(
-        (steps[17].2 - 16.0 / 17.0 * 0.5 * 0.35).abs() < 1e-9,
-        "{:?}",
-        steps[17]
-    );
-    // the files' rescoring follows, file 1 after file 0
-    assert!(
-        steps[18].2 >= 0.175 && steps[23].2 > steps[20].2 && steps[23].2 < 0.35,
-        "{steps:?}"
-    );
-    assert!((steps[24].2 - 0.95).abs() < 1e-9 && (steps[25].2 - 0.97).abs() < 1e-9);
-    assert_monotone(&steps);
-}
-
-#[test]
-fn a_chunked_search_of_one_file_reports_its_chunks() {
-    let steps = steps_of(
-        "prose-chunked-one-file-peptdeep.stdout.txt",
-        &CHUNK_NAMES[..1],
-    );
-    let mut expected = vec!["Reading the spectra...".to_string()];
-    expected.extend(chunk_labels(17));
-    expected.extend(
-        [
-            "Adding PeptDeep rescoring features...",
-            "Mapping peptides to proteins...",
-            "Rescoring with Percolator...",
-            "Writing the results...",
-        ]
-        .map(String::from),
-    );
-    assert_eq!(
-        labels(&steps),
-        expected.iter().map(String::as_str).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        steps[18..21].iter().map(|s| s.1).collect::<Vec<_>>(),
-        [0, 0, 0]
-    );
-    assert_eq!(steps.last().unwrap().1, -1);
-    assert_monotone(&steps);
-}
-
-#[test]
-fn a_chunked_open_search_pools_after_the_aggregate_modification_analysis() {
-    // no PeptDeep: the mapping line starts each file's rescoring
-    let steps = steps_of("prose-chunked-open-two-files.stdout.txt", &CHUNK_NAMES);
-    let l = labels(&steps);
-    assert_eq!(l[0], "Reading the spectra...");
-    assert_eq!(l[1], "Searching database chunk 1 of 4...");
-    assert_eq!(
-        l[5..],
-        [
-            "Mapping peptides to proteins...",
-            "Rescoring with Percolator...",
-            "Mapping peptides to proteins...",
-            "Rescoring with Percolator...",
-            "Preparing the spectrum view (file 1 of 2)...",
-            "Pooling the files...",
-            "Writing the results...",
-        ]
-    );
-    assert_eq!(
-        steps[5..12].iter().map(|s| s.1).collect::<Vec<_>>(),
-        [0, 0, 1, 1, -1, -1, -1]
-    );
-    assert_monotone(&steps);
-}
-
-#[test]
-fn progress_never_stalls_on_lines_it_does_not_know() {
-    // unknown lines between the known ones change nothing, in every mode
-    for (fixture, names) in [
-        (
-            "prose-closed-two-files-peptdeep.stdout.txt",
-            &CHUNK_NAMES[..],
-        ),
-        (
-            "prose-chunked-two-files-peptdeep.stdout.txt",
-            &CHUNK_NAMES[..],
-        ),
-        (
-            "prose-chunked-one-file-peptdeep.stdout.txt",
-            &CHUNK_NAMES[..1],
-        ),
-        ("prose-open-one-file.stdout.txt", &CHUNK_NAMES[..1]),
-    ] {
-        let plain = steps_of(fixture, names);
-        let mut tracker = ProgressTracker::new(names.iter().map(|n| n.to_string()).collect());
-        let mut noisy = Vec::new();
-        for line in fixture_lines(fixture) {
-            for junk in [
-                "",
-                "[ProSE] something new",
-                "Chunk",
-                "Chunk x/y",
-                "[ProSE] Chunk-major",
-                "Mapping",
-                "[PeptDeepRescoring",
-            ] {
-                assert!(tracker.feed(junk).is_none(), "{junk:?} in {fixture}");
-            }
-            if let Some(p) = tracker.feed(&line) {
-                noisy.push((p.label, p.file, p.fraction));
-            }
-        }
-        assert_eq!(noisy, plain, "{fixture}");
-    }
-}
-
-fn fixture_lines(name: &str) -> Vec<String> {
-    fixture(name).lines().map(String::from).collect()
-}
-
-#[test]
-fn a_chunked_search_pools_on_the_protein_inference_line_of_current_prose() {
-    // Since OpenMS #10707 the pooled protein inference and FDR logs "[ProSE] Protein inference on …" (the recorded runs
-    // have the earlier "[ProSE] Merged protein inference + FDR …"): the same steps
-    let fixture_name = "prose-chunked-two-files-peptdeep.stdout.txt";
-    let mut tracker = ProgressTracker::new(CHUNK_NAMES.iter().map(|n| n.to_string()).collect());
-    let mut steps = Vec::new();
-    let mut replaced = 0;
-    for line in fixture_lines(fixture_name) {
-        let line = if line.starts_with("[ProSE] Merged protein inference") {
-            replaced += 1;
-            "[ProSE] Protein inference on 1792 PSMs (2 of them up to FDR:protein_inference_PSM, not reported), protein \
-             score PEP: 51 target and 3 decoy proteins."
-                .to_string()
-        } else {
-            line
-        };
-        if let Some(p) = tracker.feed(&line) {
-            steps.push((p.label, p.file, p.fraction));
-        }
-    }
-    assert_eq!(replaced, 1);
-    assert_eq!(steps, steps_of(fixture_name, &CHUNK_NAMES));
-    assert!(labels(&steps).contains(&"Pooling the files..."));
-}
-
-#[test]
-fn progress_reports_the_calibration_pass() {
-    let steps = steps_of(
-        "prose-calibration-one-file.stdout.txt",
-        &["DatabaseSuitability_1.mzML"],
-    );
-    assert!(
-        labels(&steps).contains(&"Running calibration pass..."),
-        "{:?}",
-        labels(&steps)
-    );
-    assert!(
-        !labels(&steps).contains(&"Rescoring with Percolator..."),
-        "rescoring was off in this run"
-    );
-    assert_monotone(&steps);
-}
-
-#[test]
-fn lines_without_a_step_give_no_event() {
-    let mut tracker = ProgressTracker::new(vec!["a.mzML".into()]);
-    for line in [
-        "",
-        "Generating fragments...",
-        "Collapsed 12 repeated peptidoform occurrences.",
-        "random text",
-        "[ProSE] open_search=false (precursor tolerance [-10, +10] ppm)",
-    ] {
-        assert!(tracker.feed(line).is_none(), "{line:?}");
-    }
-}
-
 // ---- tool resolution ------------------------------------------------------------------------
 
 fn executable(dir: &TempDir, relative: &str) -> PathBuf {
@@ -1369,10 +1032,10 @@ fn executable(dir: &TempDir, relative: &str) -> PathBuf {
 }
 
 #[test]
-fn the_tool_is_found_through_prose_bin_then_the_bundle_then_path() {
+fn the_tool_is_found_through_nuxl_tool_then_the_bundle_then_path() {
     let dir = TempDir::new("resolve");
-    let env_bin = executable(&dir, "env/ProSE");
-    let bundled = executable(&dir, &format!("res/resources/prose/bin/{}", tool::EXE));
+    let env_bin = executable(&dir, "env/OpenNuXL");
+    let bundled = executable(&dir, &format!("res/resources/nuxl/bin/{}", tool::EXE));
     let on_path = executable(&dir, &format!("pathdir/{}", tool::EXE));
     let res = dir.path().join("res");
     let path_var = OsString::from(dir.path().join("pathdir"));
@@ -1386,19 +1049,31 @@ fn the_tool_is_found_through_prose_bin_then_the_bundle_then_path() {
     assert_eq!(all(None).unwrap(), on_path);
     fs::remove_file(&on_path).unwrap();
     let err = all(None).unwrap_err();
-    assert!(err.contains("ProSE"), "{err}");
+    assert!(
+        err.contains("OpenNuXL") && err.contains("NUXL_TOOL"),
+        "{err}"
+    );
 
-    // a PROSE_BIN that does not exist is an error, not a reason to look elsewhere
+    // a NUXL_TOOL that does not exist is an error, not a reason to look elsewhere
     let err = tool::resolve_with(
-        Some(OsStr::new("/nonexistent/ProSE")),
+        Some(OsStr::new("/nonexistent/OpenNuXL")),
         Some(&res),
         Some(&path_var),
     )
     .unwrap_err();
     assert!(
-        err.contains("PROSE_BIN") && err.contains("/nonexistent/ProSE"),
+        err.contains("NUXL_TOOL") && err.contains("/nonexistent/OpenNuXL"),
         "{err}"
     );
+}
+
+#[test]
+fn percolator_adapter_is_looked_for_beside_the_tool() {
+    let dir = TempDir::new("adapter");
+    let nuxl = executable(&dir, &format!("bin/{}", tool::EXE));
+    assert!(!tool::has_percolator_adapter(&nuxl));
+    executable(&dir, &format!("bin/{}", tool::PERCOLATOR_ADAPTER));
+    assert!(tool::has_percolator_adapter(&nuxl));
 }
 
 /// macOS: Tauri names no resource folder when the app's path goes through a symbolic link; the app then
@@ -1407,27 +1082,27 @@ fn the_tool_is_found_through_prose_bin_then_the_bundle_then_path() {
 #[test]
 fn the_resources_of_an_app_bundle_are_found_through_a_link() {
     let dir = TempDir::new("bundle");
-    let exe = executable(&dir, "real/ProSE.app/Contents/MacOS/prose-desktop");
+    let exe = executable(&dir, "real/NuXL.app/Contents/MacOS/nuxl-desktop");
     dir.write(
-        "real/ProSE.app/Contents/Resources/resources/prose/build.json",
+        "real/NuXL.app/Contents/Resources/resources/nuxl/build.json",
         "{}",
     );
     let resources = dir
         .path()
-        .join("real/ProSE.app/Contents/Resources")
+        .join("real/NuXL.app/Contents/Resources")
         .canonicalize()
         .unwrap();
     assert_eq!(tool::bundle_resources(&exe), Some(resources.clone()));
     // the app through a linked folder, and as a linked bundle
     std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("linked")).unwrap();
     std::os::unix::fs::symlink(
-        dir.path().join("real/ProSE.app"),
+        dir.path().join("real/NuXL.app"),
         dir.path().join("Linked.app"),
     )
     .unwrap();
     for through in [
-        "linked/ProSE.app/Contents/MacOS/prose-desktop",
-        "Linked.app/Contents/MacOS/prose-desktop",
+        "linked/NuXL.app/Contents/MacOS/nuxl-desktop",
+        "Linked.app/Contents/MacOS/nuxl-desktop",
     ] {
         assert_eq!(
             tool::bundle_resources(&dir.path().join(through)),
@@ -1436,17 +1111,22 @@ fn the_resources_of_an_app_bundle_are_found_through_a_link() {
         );
     }
     // not in a bundle: no Resources folder, none
-    let loose = executable(&dir, "bin/prose-desktop");
+    let loose = executable(&dir, "bin/nuxl-desktop");
     assert_eq!(tool::bundle_resources(&loose), None);
     assert_eq!(tool::bundle_resources(&dir.path().join("nothing")), None);
 }
 
 #[test]
 fn the_tools_version_is_read_from_its_help() {
-    let help = "ProSE -- Annotates bottom-up MS/MS spectra using ProSE.\nFull documentation: http://x\nVersion: 3.7.0-pre-exported-20261020 Oct 20 2026, 22:16:02\nTo cite OpenMS:\n";
+    let help = "OpenNuXL -- Annotate RNA/DNA-peptide cross-links in MS/MS spectra.\nFull documentation: http://x\nVersion: 3.7.0-pre-exported-20261020 Oct 20 2026, 22:16:02, Revision: 7b5d88c\nTo cite OpenMS:\n";
     assert_eq!(
         tool::parse_version(help).as_deref(),
         Some("3.7.0-pre-exported-20261020")
+    );
+    // as OpenMS' Colorizer writes it to a terminal: "Version: " bold
+    assert_eq!(
+        tool::parse_version("\u{1b}[1mVersion: \u{1b}[0m3.5.0 Jan 1 2026").as_deref(),
+        Some("3.5.0")
     );
     assert_eq!(tool::parse_version("nothing"), None);
 }
@@ -1469,74 +1149,37 @@ fn probe_written_script(script: &Path) -> Result<tool::ToolInfo, String> {
 }
 
 #[test]
-fn probing_a_tool_reports_its_version_path_and_onnx_support() {
+fn probing_a_tool_reports_its_version_and_path() {
     let dir = TempDir::new("probe");
-    // a script on Unix; on Windows the fake tool, which answers --help the same way
+    // a script on Unix (the help on stderr, as TOPPBase prints it); on Windows the fake tool
     #[cfg(unix)]
-    let script = executable(&dir, "ProSE");
+    let script = executable(&dir, "OpenNuXL");
     #[cfg(unix)]
-    fs::write(&script, "#!/bin/sh\necho 'Version: 9.9.9 Oct 20 2026'\n").unwrap();
+    fs::write(
+        &script,
+        "#!/bin/sh\necho 'Version: 9.9.9 Oct 20 2026' >&2\n",
+    )
+    .unwrap();
     #[cfg(not(unix))]
-    let script = fake_prose_exe();
+    let script = fake_nuxl_exe();
     let info = probe_written_script(&script).unwrap();
     assert_eq!(info.version, "9.9.9");
     assert_eq!(info.path, script.to_string_lossy());
-    assert!(!info.onnx, "a tool without a build manifest has no ONNX");
-    assert!(tool::probe(&dir.path().join("none")).is_err());
-}
-
-#[test]
-fn onnx_support_comes_from_the_bundles_manifest_and_its_models() {
-    let dir = TempDir::new("onnx");
-    let bin = executable(&dir, "prose/bin/ProSE");
-    let models = [
-        "share/OpenMS/models/peptdeep_ms2_dynamic.onnx",
-        "share/OpenMS/models/peptdeep_rt_dynamic.onnx",
-    ];
-    let manifest = |with_onnx: bool| {
-        dir.write(
-            "prose/build.json",
-            &serde_json::json!({ "tool": "ProSE", "withOnnx": with_onnx, "models": models })
-                .to_string(),
-        );
-    };
-
-    // no manifest (a tool from a build tree or the PATH): no ONNX, whatever it links
-    assert!(!tool::has_onnx(&bin));
-    // a build with ONNX, but the models are missing
-    manifest(true);
-    assert!(!tool::has_onnx(&bin));
-    for model in models {
-        dir.write(&format!("prose/{model}"), "onnx");
-    }
-    assert!(tool::has_onnx(&bin));
-    // one model gone
-    fs::remove_file(dir.path().join("prose").join(models[1])).unwrap();
-    assert!(!tool::has_onnx(&bin));
-    dir.write(&format!("prose/{}", models[1]), "onnx");
-    // a build without ONNX, models or not
-    manifest(false);
-    assert!(!tool::has_onnx(&bin));
-    // a manifest that names no models, or cannot be read
-    dir.write("prose/build.json", r#"{"withOnnx": true, "models": []}"#);
-    assert!(!tool::has_onnx(&bin));
-    dir.write("prose/build.json", "not json");
-    assert!(!tool::has_onnx(&bin));
-    // a model path that leaves the bundle does not count
-    dir.write("outside.onnx", "onnx");
-    dir.write(
-        "prose/build.json",
-        r#"{"withOnnx": true, "models": ["../outside.onnx"]}"#,
+    assert_eq!(
+        serde_json::to_value(&info).unwrap(),
+        json!({ "version": "9.9.9", "path": script.to_string_lossy() })
     );
-    assert!(!tool::has_onnx(&bin));
+    assert!(tool::probe(&dir.path().join("none")).is_err());
+    // the fake answers --help as OpenNuXL does
+    assert_eq!(probe_written_script(&fake_nuxl()).unwrap().version, "9.9.9");
 }
 
 #[test]
 fn the_tool_runs_with_one_blas_thread_unless_set() {
-    let cmd = tool::command_with(Path::new("/x/ProSE"), None);
+    let cmd = tool::command_with(Path::new("/x/OpenNuXL"), None);
     let env: Vec<_> = cmd.get_envs().collect();
     assert!(env.contains(&(OsStr::new("OPENBLAS_NUM_THREADS"), Some(OsStr::new("1")))));
-    let cmd = tool::command_with(Path::new("/x/ProSE"), Some(OsString::from("4")));
+    let cmd = tool::command_with(Path::new("/x/OpenNuXL"), Some(OsString::from("4")));
     assert!(
         cmd.get_envs().all(|(k, _)| k != "OPENBLAS_NUM_THREADS"),
         "the user's value stays"
@@ -1551,7 +1194,7 @@ fn the_tool_runs_with_one_blas_thread_unless_set() {
 #[test]
 fn the_tool_never_runs_the_update_check_of_openms() {
     for openblas in [None, Some(OsString::from("4"))] {
-        let cmd = tool::command_with(Path::new("/x/ProSE"), openblas);
+        let cmd = tool::command_with(Path::new("/x/OpenNuXL"), openblas);
         let set: Vec<_> = cmd
             .get_envs()
             .filter(|(k, _)| *k == "OPENMS_DISABLE_UPDATE_CHECK")
@@ -1577,9 +1220,14 @@ struct Run {
 
 impl Run {
     fn new() -> Run {
+        Run::with_links(InputLinks::PLATFORM)
+    }
+
+    /// With the inputs reaching the tool as `links` says (Windows' way on any platform).
+    fn with_links(links: InputLinks) -> Run {
         Run {
             work: TempDir::new("run"),
-            searches: Arc::new(Searches::default()),
+            searches: Arc::new(Searches::with_links(links)),
         }
     }
 
@@ -1598,7 +1246,7 @@ impl Run {
         let (sink, rx) = channel_sink();
         (
             self.searches
-                .start(&fake_prose(), &self.dir(), crap, req, sink),
+                .start(&fake_nuxl(), &self.dir(), crap, req, sink),
             rx,
         )
     }
@@ -1616,20 +1264,35 @@ impl Run {
     }
 }
 
-impl Run {
-    /// As `new`, with the inputs reaching the tool as `links` says (Windows' way on any platform).
-    fn with_links(links: InputLinks) -> Run {
-        Run {
-            work: TempDir::new("run"),
-            searches: Arc::new(Searches::with_links(links)),
-        }
-    }
-}
-
 fn done_folder(events: &[SearchEvent]) -> PathBuf {
     match events.last() {
         Some(SearchEvent::Done(d)) => PathBuf::from(&d.folder),
         other => panic!("not done: {other:?} in {events:?}"),
+    }
+}
+
+fn outputs_of(folder: &Path, stem: &str) -> Value {
+    serde_json::from_str(
+        &fs::read_to_string(folder.join(format!("nuxl/{stem}.outputs.json"))).unwrap(),
+    )
+    .unwrap()
+}
+
+fn progress_of(events: &[SearchEvent]) -> Vec<(String, i32, f64)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            SearchEvent::Progress(p) => Some((p.label.clone(), p.file, p.fraction)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The stem of the `k`-th input (0-based) of a one-input search named `name`, as this platform names it.
+fn stem_of(k: usize, name: &str) -> String {
+    match InputLinks::PLATFORM {
+        InputLinks::Symlinks => format!("{}__{}", k + 1, input_stem(name)),
+        InputLinks::PathsOrHardLinks => input_stem(name),
     }
 }
 
@@ -1646,13 +1309,13 @@ fn a_search_of_the_users_database_records_its_path_for_the_reader() {
         serde_json::from_str(&fs::read_to_string(folder.join("database.json")).unwrap()).unwrap();
     assert_eq!(record["path"].as_str(), i.fasta.to_str());
     assert_eq!(
-        prose_desktop_lib::files::recorded_database(&folder).as_deref(),
+        nuxl_desktop_lib::files::recorded_database(&folder).as_deref(),
         i.fasta.to_str()
     );
 }
 
 #[test]
-fn a_search_ends_with_done_and_the_partial_folder_becomes_the_search_folder() {
+fn a_search_ends_with_done_its_outputs_recorded_and_the_partial_folder_becomes_the_search_folder() {
     let run = Run::new();
     let i = inputs();
     let crap = i.dir.write("crap.fasta", ">ALBU\nMKW\n");
@@ -1667,7 +1330,6 @@ fn a_search_ends_with_done_and_the_partial_folder_becomes_the_search_folder() {
         vec![id.clone()],
         "no .partial folder is left"
     );
-    assert!(folder.join("qpx/quantms.psm.parquet").is_file());
     assert!(
         !folder.join(".lock").exists(),
         "the lock file does not belong to the search"
@@ -1675,8 +1337,40 @@ fn a_search_ends_with_done_and_the_partial_folder_becomes_the_search_folder() {
     assert!(fs::read_to_string(folder.join("database.fasta"))
         .unwrap()
         .contains(">CON__ALBU"));
-    // ProSE searched the folder's own database: no path outside the folder is recorded
+    // OpenNuXL searched the folder's own database: no path outside the folder is recorded
     assert!(!folder.join("database.json").exists());
+
+    // the record of the run's outputs (design §2): Percolator's files, the protein report at the cross-link FDR
+    let stem = stem_of(0, "a.mzML");
+    let outputs = outputs_of(&folder, &stem);
+    let seconds = outputs["seconds"].as_f64().unwrap();
+    assert!((0.0..60.0).contains(&seconds), "{outputs}");
+    let mut expected = json!({
+        "input": 0,
+        "all": format!("nuxl/{stem}.idXML"),
+        "xls": format!("nuxl/{stem}_perc_1.0000_XLs.idXML"),
+        "peptides": format!("nuxl/{stem}_perc_0.0000_peptides.idXML"),
+        "proteins": format!("nuxl/{stem}_perc_proteins0.0100_XLs.tsv"),
+        "report": format!("nuxl/{stem}_perc.tsv"),
+        "percolator": true,
+        "notes": ["autotune: too few non-cross-linked peptides found. Will keep parameters as-is."],
+        "seconds": seconds,
+        "fdr": { "peptide": 0.01, "xl": 0.01 },
+    });
+    assert_eq!(outputs, expected);
+    for key in ["all", "xls", "peptides", "proteins", "report"] {
+        assert!(
+            folder.join(outputs[key].as_str().unwrap()).is_file(),
+            "{key}"
+        );
+    }
+    expected["percolator"] = json!(false);
+
+    // the log: the run's command line, then its output
+    let log = fs::read_to_string(folder.join("nuxl.log")).unwrap();
+    assert!(log.starts_with("$ "), "{log}");
+    assert!(log.contains("Running percolator."), "{log}");
+
     // every event carries the search id; progress stays below 1 (the search is not done before `done`)
     for event in &events {
         match event {
@@ -1688,21 +1382,31 @@ fn a_search_ends_with_done_and_the_partial_folder_becomes_the_search_folder() {
             SearchEvent::Failed(f) => panic!("{f:?}"),
         }
     }
-    assert!(
-        matches!(&events[0], SearchEvent::Progress(p) if p.file == -1 && p.fraction == 0.0),
-        "{:?}",
-        events[0]
+    let progress = progress_of(&events);
+    assert_eq!(
+        progress[0],
+        ("Searching a.mzML (1 of 1)...".to_string(), 0, 0.0)
     );
-    assert!(events.iter().any(|e| matches!(e, SearchEvent::Progress(p) if p.label == "Searching a.mzML (1 of 1)..." && p.file == 0)));
-    // the fake ran with exactly the arguments build_args makes for the partial folder
-    let argv = fs::read_to_string(folder.join("argv.txt")).unwrap();
+    let labels: Vec<&str> = progress.iter().map(|p| p.0.as_str()).collect();
+    for label in [
+        "Scoring a.mzML (1 of 1)... 33 %",
+        "Percolator: a.mzML (1 of 1)...",
+    ] {
+        assert!(labels.contains(&label), "{label} in {labels:?}");
+    }
+    for pair in progress.windows(2) {
+        assert!(pair[1].2 >= pair[0].2, "{pair:?}");
+    }
+    // the fake ran with exactly the arguments build_runs makes for the partial folder
+    let argv = fs::read_to_string(folder.join(format!("nuxl/{stem}.argv.txt"))).unwrap();
     let input = match InputLinks::PLATFORM {
         InputLinks::Symlinks => run.dir().join(format!("{id}.partial")).join("1__a.mzML"),
         InputLinks::PathsOrHardLinks => i.mzml.clone(),
     };
-    assert!(
-        argv.lines().any(|l| Path::new(l) == input),
-        "{input:?} in {argv}"
+    assert_eq!(
+        argv.lines().nth(1).map(PathBuf::from),
+        Some(input),
+        "{argv}"
     );
     // nothing was written next to the input
     let mut data: Vec<_> = fs::read_dir(i.mzml.parent().unwrap())
@@ -1712,6 +1416,131 @@ fn a_search_ends_with_done_and_the_partial_folder_becomes_the_search_folder() {
         .collect();
     data.sort();
     assert_eq!(data, ["a.mzML", "db.fasta"]);
+}
+
+#[test]
+fn the_inputs_are_searched_one_after_the_other_each_with_its_outputs() {
+    let run = Run::new();
+    let i = inputs();
+    let b = i.dir.write("data/b.mzML", "<mzML/>");
+    let few = i.dir.write("data/fewpsms.mzML", "<mzML/>");
+    let (_, rx) = run.start(
+        request(&[&i.mzml, &few, &b], &i.fasta, false, json!({})),
+        None,
+    );
+    let events = until_terminal(&rx, WAIT);
+    let folder = done_folder(&events);
+    // in order, one run each
+    let resolved = fs::read_to_string(folder.join("inputs.txt")).unwrap();
+    let ran: Vec<&str> = resolved
+        .lines()
+        .map(|l| l.split(" -> ").next().unwrap())
+        .collect();
+    assert_eq!(ran.len(), 3, "{resolved}");
+    for (line, name) in ran.iter().zip(["a.mzML", "fewpsms.mzML", "b.mzML"]) {
+        assert!(line.ends_with(name), "{line} {name}");
+    }
+    let log = fs::read_to_string(folder.join("nuxl.log")).unwrap();
+    assert_eq!(
+        log.lines().filter(|l| l.starts_with("$ ")).count(),
+        3,
+        "{log}"
+    );
+    // each input's record; the run with too few PSMs has the plain files and says why
+    let few_outputs = outputs_of(&folder, &stem_of(1, "fewpsms.mzML"));
+    let stem = stem_of(1, "fewpsms.mzML");
+    assert_eq!(few_outputs["input"], 1);
+    assert_eq!(few_outputs["percolator"], false);
+    assert_eq!(few_outputs["xls"], format!("nuxl/{stem}_1.0000_XLs.idXML"));
+    assert_eq!(few_outputs["report"], format!("nuxl/{stem}.tsv"));
+    assert!(
+        few_outputs["notes"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Too few PSMs for score recalibration. Skipped.")),
+        "{few_outputs}"
+    );
+    assert_eq!(outputs_of(&folder, &stem_of(2, "b.mzML"))["input"], 2);
+    assert_eq!(
+        outputs_of(&folder, &stem_of(0, "a.mzML"))["percolator"],
+        true
+    );
+    // progress: each run in its third of the bar, in order
+    let progress = progress_of(&events);
+    let starts: Vec<&(String, i32, f64)> = progress
+        .iter()
+        .filter(|p| p.0.starts_with("Searching"))
+        .collect();
+    assert_eq!(
+        starts
+            .iter()
+            .map(|p| (p.0.as_str(), p.1))
+            .collect::<Vec<_>>(),
+        [
+            ("Searching a.mzML (1 of 3)...", 0),
+            ("Searching fewpsms.mzML (2 of 3)...", 1),
+            ("Searching b.mzML (3 of 3)...", 2),
+        ]
+    );
+    for (k, start) in starts.iter().enumerate() {
+        assert!((start.2 - k as f64 / 3.0).abs() < 1e-9, "{start:?}");
+    }
+    for pair in progress.windows(2) {
+        assert!(pair[1].2 >= pair[0].2 && pair[1].1 >= pair[0].1, "{pair:?}");
+    }
+}
+
+#[test]
+fn the_cutoffs_and_the_rescoring_of_the_request_shape_the_outputs() {
+    let run = Run::new();
+    let i = inputs();
+    // no rescoring, a cross-link FDR above 10 %: the plain files, no protein report
+    let mut req = request(&[&i.mzml], &i.fasta, false, json!({}));
+    req.settings.rescore = false;
+    req.settings.xl_fdr = 0.2;
+    req.settings.peptide_fdr = 0.05;
+    let (_, rx) = run.start(req, None);
+    let folder = done_folder(&until_terminal(&rx, WAIT));
+    let stem = stem_of(0, "a.mzML");
+    let outputs = outputs_of(&folder, &stem);
+    assert_eq!(outputs["percolator"], false);
+    assert_eq!(outputs["xls"], format!("nuxl/{stem}_1.0000_XLs.idXML"));
+    assert_eq!(outputs["proteins"], Value::Null);
+    assert_eq!(outputs["fdr"], json!({ "peptide": 0.05, "xl": 0.2 }));
+    // 5 %: the protein report at it
+    let mut req = request(&[&i.mzml], &i.fasta, false, json!({}));
+    req.settings.xl_fdr = 0.05;
+    let (_, rx) = run.start(req, None);
+    let folder = done_folder(&until_terminal(&rx, WAIT));
+    assert_eq!(
+        outputs_of(&folder, &stem)["proteins"],
+        format!("nuxl/{stem}_perc_proteins0.0500_XLs.tsv")
+    );
+}
+
+#[test]
+fn a_database_with_decoys_is_searched_without_them_and_says_so() {
+    let run = Run::new();
+    let i = inputs();
+    let td = i.dir.write(
+        "data/td.fasta",
+        ">P1\nMKWV\n>P2\nAAAK\n>DECOY_P1\nVWKM\n>DECOY_P2\nKAAA\n",
+    );
+    let (_, rx) = run.start(request(&[&i.mzml], &td, false, json!({})), None);
+    let folder = done_folder(&until_terminal(&rx, WAIT));
+    assert_eq!(
+        headers(&fs::read_to_string(folder.join("database.fasta")).unwrap()),
+        [">P1", ">P2"]
+    );
+    assert!(!folder.join("database.json").exists());
+    let notes = outputs_of(&folder, &stem_of(0, "a.mzML"))["notes"].clone();
+    assert!(
+        notes.as_array().unwrap().iter().any(|n| n
+            .as_str()
+            .unwrap()
+            .contains("2 decoys (the prefix DECOY_) were left out")),
+        "{notes}"
+    );
 }
 
 #[cfg(unix)]
@@ -1744,8 +1573,8 @@ fn two_inputs_with_the_same_name_from_different_folders_are_both_searched() {
         "{resolved}"
     );
     assert!(
-        folder.join("qpx/runs/1__sample.psm.parquet").is_file()
-            && folder.join("qpx/runs/2__sample.psm.parquet").is_file()
+        folder.join("nuxl/1__sample.idXML").is_file()
+            && folder.join("nuxl/2__sample.idXML").is_file()
     );
 
     // links, not copies; the mapping is recorded for the results
@@ -1774,26 +1603,6 @@ fn two_inputs_with_the_same_name_from_different_folders_are_both_searched() {
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn gz_inputs_keep_their_suffix_in_the_link() {
-    let run = Run::new();
-    let i = inputs();
-    let gz = i.dir.write("zipped/x.mzML.gz", "gz");
-    let (id, rx) = run.start(request(&[&gz], &i.fasta, false, json!({})), None);
-    id.unwrap();
-    let folder = done_folder(&until_terminal(&rx, WAIT));
-    assert!(fs::symlink_metadata(folder.join("1__x.mzML.gz"))
-        .unwrap()
-        .file_type()
-        .is_symlink());
-    assert!(folder.join("qpx/runs/1__x.psm.parquet").is_file());
-    let mapping: Value =
-        serde_json::from_str(&fs::read_to_string(folder.join("inputs.json")).unwrap()).unwrap();
-    assert_eq!(mapping[0]["link"], "1__x.mzML.gz");
-    assert_eq!(mapping[0]["name"], "x.mzML.gz");
-}
-
 #[test]
 fn an_input_of_a_255_byte_name_is_searched_and_maps_back_to_its_file() {
     let run = Run::new();
@@ -1820,7 +1629,7 @@ fn an_input_of_a_255_byte_name_is_searched_and_maps_back_to_its_file() {
         "{link}"
     );
     if cfg!(windows) {
-        // a hard link (the name is too long for ProSE's outputs), which the finished search drops
+        // a hard link (the name is too long for the outputs), which the finished search drops
         assert!(!folder.join(&link).exists(), "{link} is gone");
     } else {
         assert!(fs::symlink_metadata(folder.join(&link))
@@ -1828,14 +1637,17 @@ fn an_input_of_a_255_byte_name_is_searched_and_maps_back_to_its_file() {
             .file_type()
             .is_symlink());
     }
-    // the reader finds the input's outputs by the stem inputs.json records
-    assert!(folder
-        .join(format!("qpx/runs/{stem}.psm.parquet"))
-        .is_file());
+    // the reader finds the input's outputs through the record named after the stem inputs.json records,
+    // and the longest of them fits
+    let outputs = outputs_of(&folder, &stem);
+    assert_eq!(
+        outputs["proteins"],
+        format!("nuxl/{stem}_perc_proteins0.0100_XLs.tsv")
+    );
     // Windows: such an input goes as a (shortened) link, not by its own path
     let req = request(&[&long, &i.mzml], &i.fasta, false, json!({}));
     let windows =
-        Path::new(r"C:\Users\u\AppData\Roaming\org.openms.prose.desktop\searches\1-0.partial");
+        Path::new(r"C:\Users\u\AppData\Roaming\org.openms.nuxl.desktop\searches\1-0.partial");
     assert_eq!(
         input_placements(&req, InputLinks::PathsOrHardLinks, windows),
         vec![Placement::HardLink, Placement::OwnPath]
@@ -1850,9 +1662,9 @@ fn an_input_of_a_255_byte_name_is_searched_and_maps_back_to_its_file() {
 }
 
 /// Windows' MAX_PATH (259 characters): the stems of the links are as short as the search folder's path needs,
-/// so that ProSE's longest output (`mods\<stem>_ModificationAnalysis_DeltaMassStats.tsv`) and every link stay
-/// within it; a name that fits MAX_STEM but not the folder goes as a shortened link too; a folder of too long a
-/// path is refused before anything is made.
+/// so that OpenNuXL's longest output (`nuxl\<stem>_perc_proteins0.0100_XLs.tsv`) and every link stay within it;
+/// a name that fits MAX_STEM but not the folder goes as a shortened link too; a folder of too long a path is
+/// refused before anything is made.
 #[test]
 fn on_windows_the_search_folders_paths_stay_within_max_path() {
     let windows = InputLinks::PathsOrHardLinks;
@@ -1873,7 +1685,7 @@ fn on_windows_the_search_folders_paths_stay_within_max_path() {
     let max = max_stem(windows, folder);
     assert_eq!(
         max,
-        259 - 100 - r"\mods\".len() - "_ModificationAnalysis_DeltaMassStats.tsv".len()
+        259 - 100 - r"\nuxl\".len() - "_perc_proteins0.0100_XLs.tsv".len()
     );
     // elsewhere only the file name limit counts
     assert_eq!(max_stem(InputLinks::Symlinks, folder), MAX_STEM);
@@ -1893,7 +1705,7 @@ fn on_windows_the_search_folders_paths_stay_within_max_path() {
     assert_eq!(records[0].name, name);
     for r in &records {
         let longest = format!(
-            r"{}\mods\{}_ModificationAnalysis_DeltaMassStats.tsv",
+            r"{}\nuxl\{}_perc_proteins0.0100_XLs.tsv",
             folder.display(),
             r.stem
         );
@@ -1903,9 +1715,10 @@ fn on_windows_the_search_folders_paths_stay_within_max_path() {
             "{longest}"
         );
     }
-    let args = build_args_with(&req, folder, windows).unwrap();
+    let plan = plan_database(&req).unwrap();
+    let runs = build_runs_with(&req, folder, windows, &plan).unwrap();
     assert_eq!(
-        values_of(&args, "-in")[0],
+        values_of(&runs[0], "-in")[0],
         folder.join(&records[0].link).into_os_string()
     );
     // a multi-byte name: the stem's bytes bound its UTF-16 units
@@ -1923,9 +1736,9 @@ fn on_windows_the_search_folders_paths_stay_within_max_path() {
         input_placements(&req, windows, folder),
         [Placement::OwnPath]
     );
-    // a folder that leaves no room for ProSE's outputs is refused
+    // a folder that leaves no room for OpenNuXL's outputs is refused
     let deep = format!(r"C:\{}\1-0.partial", "d".repeat(220));
-    let err = build_args_with(&req, Path::new(&deep), windows).unwrap_err();
+    let err = build_runs_with(&req, Path::new(&deep), windows, &plan).unwrap_err();
     assert!(
         err.contains("too long a path") && err.contains("259"),
         "{err}"
@@ -1938,29 +1751,27 @@ fn on_windows_the_search_folders_paths_stay_within_max_path() {
 fn inputs_of_different_names_go_to_the_tool_by_their_own_paths() {
     let run = Run::with_links(InputLinks::PathsOrHardLinks);
     let i = inputs();
-    let b = i.dir.write("other/b.mzML.gz", "gz");
+    let b = i.dir.write("other/b.mzML", "<mzML/>");
     let (id, rx) = run.start(request(&[&i.mzml, &b], &i.fasta, false, json!({})), None);
     let id = id.unwrap();
     let folder = done_folder(&until_terminal(&rx, WAIT));
     assert_eq!(folder, run.dir().join(&id));
-    let argv = fs::read_to_string(folder.join("argv.txt")).unwrap();
-    let ins: Vec<&str> = argv.lines().skip(1).take(2).collect();
-    assert_eq!(
-        ins.iter().map(PathBuf::from).collect::<Vec<_>>(),
-        [i.mzml.clone(), b.clone()],
-        "{argv}"
-    );
-    assert!(
-        folder.join("qpx/runs/a.psm.parquet").is_file()
-            && folder.join("qpx/runs/b.psm.parquet").is_file()
-    );
+    for (stem, path) in [("a", &i.mzml), ("b", &b)] {
+        let argv = fs::read_to_string(folder.join(format!("nuxl/{stem}.argv.txt"))).unwrap();
+        assert_eq!(
+            argv.lines().nth(1).map(PathBuf::from).as_ref(),
+            Some(path),
+            "{argv}"
+        );
+        assert!(folder.join(format!("nuxl/{stem}.outputs.json")).is_file());
+    }
     let mapping: Value =
         serde_json::from_str(&fs::read_to_string(folder.join("inputs.json")).unwrap()).unwrap();
     assert_eq!(
         mapping,
         json!([
             { "id": "f0", "index": 0, "link": "a.mzML", "stem": "a", "name": "a.mzML", "path": i.mzml },
-            { "id": "f1", "index": 1, "link": "b.mzML.gz", "stem": "b", "name": "b.mzML.gz", "path": b },
+            { "id": "f1", "index": 1, "link": "b.mzML", "stem": "b", "name": "b.mzML", "path": b },
         ])
     );
     let names: Vec<String> = fs::read_dir(&folder)
@@ -1968,12 +1779,7 @@ fn inputs_of_different_names_go_to_the_tool_by_their_own_paths() {
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
-    assert!(
-        !names
-            .iter()
-            .any(|n| n.ends_with(".mzML") || n.ends_with(".gz")),
-        "{names:?}"
-    );
+    assert!(!names.iter().any(|n| n.ends_with(".mzML")), "{names:?}");
 }
 
 /// Windows' way, run on every platform: two inputs of one name go to the tool as hard links in the
@@ -2002,8 +1808,8 @@ fn inputs_of_one_name_go_as_hard_links_that_the_finished_search_drops() {
         assert!(!folder.join(name).exists(), "{name} is gone");
     }
     assert!(
-        folder.join("qpx/runs/1__sample.psm.parquet").is_file()
-            && folder.join("qpx/runs/2__Sample.psm.parquet").is_file()
+        folder.join("nuxl/1__sample.idXML").is_file()
+            && folder.join("nuxl/2__Sample.idXML").is_file()
     );
     assert_eq!(fs::read_to_string(&first).unwrap(), "<mzML>first</mzML>");
     assert_eq!(fs::read_to_string(&second).unwrap(), "<mzML>second</mzML>");
@@ -2042,7 +1848,6 @@ fn inputs_of_one_name_on_another_volume_are_refused() {
     let near = i.dir.write("near/sample.mzML", "<mzML>near</mzML>");
     let (result, _rx) = run.start(request(&[&near, &far], &i.fasta, false, json!({})), None);
     let err = result.unwrap_err();
-    let _ = fs::remove_dir_all(&elsewhere);
     assert!(
         err.contains("Two inputs are named sample.mzML")
             && err.contains("Rename one of the files")
@@ -2054,35 +1859,37 @@ fn inputs_of_one_name_on_another_volume_are_refused() {
         "no folder is left: {:?}",
         run.listing()
     );
-    // a lone input of stem quantms on the other volume: its own reason
-    let reserved = elsewhere.join("QuantMS.mzML");
-    fs::create_dir_all(&elsewhere).unwrap();
-    fs::write(&reserved, "<mzML/>").unwrap();
-    let (result, _rx) = run.start(request(&[&reserved], &i.fasta, false, json!({})), None);
+    // a name that begins another's, on the other volume: its own reason
+    let prefixed = elsewhere.join("near_perc.mzML");
+    fs::write(&prefixed, "<mzML/>").unwrap();
+    let plain = i.dir.write("near/near.mzML", "<mzML/>");
+    let (result, _rx) = run.start(
+        request(&[&plain, &prefixed], &i.fasta, false, json!({})),
+        None,
+    );
     let err = result.unwrap_err();
-    let _ = fs::remove_dir_all(&elsewhere);
     assert!(
-        err.contains("ProSE cannot search a file named QuantMS.mzML")
-            && err.contains("Rename the file")
+        err.contains("would be confused with those of another input")
             && !err.contains("Two inputs"),
         "{err}"
     );
-    // a lone input whose name is too long for ProSE's outputs in the search folder: its own reason too
+    // a lone input whose name is too long for OpenNuXL's outputs in the search folder: its own reason too
     let long = elsewhere.join(format!("{}.mzML", "l".repeat(240)));
-    fs::create_dir_all(&elsewhere).unwrap();
     fs::write(&long, "<mzML/>").unwrap();
     let (result, _rx) = run.start(request(&[&long], &i.fasta, false, json!({})), None);
     let err = result.unwrap_err();
     let _ = fs::remove_dir_all(&elsewhere);
     assert!(
-        err.contains("is too long for ProSE's result files")
+        err.contains("is too long for OpenNuXL's result files")
             && err.contains("Rename the file to a shorter name")
             && !err.contains("Two inputs"),
         "{err}"
     );
 }
 
-/// ProSE's lines of a full disk: the first one is the message, with the outputs named as in the search folder
+// ---- failures -------------------------------------------------------------------------------
+
+/// OpenMS' line of an output it cannot write: the message, with the output named as in the search folder
 /// (which is gone) and after the user's file.
 #[test]
 fn a_failure_names_the_cause_and_the_outputs_without_the_search_folder() {
@@ -2097,16 +1904,13 @@ fn a_failure_names_the_cause_and_the_outputs_without_the_search_folder() {
     };
     assert_eq!(
         f.message,
-        "Failed to write qpx/runs/diskfull.psm.parquet: IOError: Error writing bytes to file. Detail: [errno 28] No \
-         space left on device"
+        "Error: Unable to write file (the file 'nuxl/diskfull_1.0000_XLs.idXML' could not be created. writing the \
+         file failed (e.g. disk full or I/O error))"
     );
-    assert_eq!(f.ended.as_deref(), Some("ProSE ended with exit code 12"));
+    assert_eq!(f.ended.as_deref(), Some("OpenNuXL ended with exit code 12"));
+    assert_eq!(f.stage, "Scoring diskfull.mzML (1 of 1)... 0 %");
     let detail = f.detail.as_deref().unwrap();
-    assert!(
-        detail.ends_with("ProSE finished with 1 file(s) failing out of 1.")
-            && !detail.contains(".partial"),
-        "{detail}"
-    );
+    assert!(!detail.contains(".partial"), "{detail}");
 }
 
 #[test]
@@ -2121,16 +1925,16 @@ fn humanize_gives_the_users_names_and_drops_the_search_folder() {
     let records = input_records_with(&req, InputLinks::Symlinks, dir);
     assert_eq!(
         humanize(
-            "Reading /s/1-0.partial/2__a.mzML; writing /s/1-0.partial/qpx/runs/2__a.pg.parquet: row 3 reuses run '1__a'; \
-             1__a.mzML; 11__a stays",
+            "Reading /s/1-0.partial/2__a.mzML; writing /s/1-0.partial/nuxl/2__a_perc_1.0000_XLs.idXML: run '1__a'; \
+             1__a.mzML; 11__a stays; 2__ab stays",
             dir,
             &records
         ),
-        "Reading /other/a.mzML; writing qpx/runs/a.pg.parquet: row 3 reuses run 'a'; a.mzML; 11__a stays"
+        "Reading /other/a.mzML; writing nuxl/a_perc_1.0000_XLs.idXML: run 'a'; a.mzML; 11__a stays; 2__ab stays"
     );
-    // a Windows search folder, as ProSE may write it: with '\\', with '/' (a path it put together), mixed, and
+    // a Windows search folder, as OpenMS may write it: with '\\', with '/' (a path it put together), mixed, and
     // the drive letter in the other case
-    let dir = Path::new(r"C:\Users\u\AppData\Roaming\prose\searches\1-0.partial");
+    let dir = Path::new(r"C:\Users\u\AppData\Roaming\nuxl\searches\1-0.partial");
     let req = request(
         // (the inputs with '/', which is a separator on every platform)
         &[Path::new("D:/data/a.mzML"), Path::new("D:/other/a.mzML")],
@@ -2141,11 +1945,11 @@ fn humanize_gives_the_users_names_and_drops_the_search_folder() {
     let records = input_records_with(&req, InputLinks::PathsOrHardLinks, dir);
     assert_eq!(
         humanize(
-            r"Reading C:\Users\u\AppData\Roaming\prose\searches\1-0.partial\2__a.mzML; Reading c:/Users/u/AppData/Roaming/prose/searches/1-0.partial/1__a.mzML; writing C:\Users\u\AppData\Roaming\prose\searches\1-0.partial\qpx/runs/2__a.pg.parquet and C:/Users/u/AppData/Roaming/prose/searches/1-0.partial/merged.idXML",
+            r"Reading C:\Users\u\AppData\Roaming\nuxl\searches\1-0.partial\2__a.mzML; Reading c:/Users/u/AppData/Roaming/nuxl/searches/1-0.partial/1__a.mzML; writing C:\Users\u\AppData\Roaming\nuxl\searches\1-0.partial\nuxl/2__a.tsv and C:/Users/u/AppData/Roaming/nuxl/searches/1-0.partial/nuxl.log",
             dir,
             &records
         ),
-        "Reading D:/other/a.mzML; Reading D:/data/a.mzML; writing qpx/runs/a.pg.parquet and merged.idXML"
+        "Reading D:/other/a.mzML; Reading D:/data/a.mzML; writing nuxl/a.tsv and nuxl.log"
     );
 }
 
@@ -2165,10 +1969,10 @@ fn a_crash_becomes_search_failed_with_the_last_stage() {
     };
     assert_eq!(f.search_id, id);
     assert_eq!(
-        f.stage, "Rescoring with Percolator...",
+        f.stage, "Reading the spectra of crash.mzML (1 of 2)...",
         "the last progress label"
     );
-    assert_eq!(f.file, Some(0), "the input of the last report");
+    assert_eq!(f.file, Some(0), "the input of the run");
     assert_eq!(
         f.message,
         format!(
@@ -2177,8 +1981,8 @@ fn a_crash_becomes_search_failed_with_the_last_stage() {
         ),
         "the message names the user's file, not the link; noise lines are skipped"
     );
-    // how ProSE ended leads the message; the stderr tail is the detail, the log is kept
-    assert_eq!(f.ended.as_deref(), Some("ProSE ended with exit code 3"));
+    // how OpenNuXL ended leads the message; the stderr tail is the detail, the log is kept
+    assert_eq!(f.ended.as_deref(), Some("OpenNuXL ended with exit code 3"));
     assert_eq!(
         f.detail.as_deref(),
         Some(
@@ -2194,11 +1998,46 @@ fn a_crash_becomes_search_failed_with_the_last_stage() {
     let text = fs::read_to_string(&log).unwrap();
     assert!(text.starts_with("$ "), "the command line first: {text}");
     assert!(text.contains("Error: Unable to read file"), "{text}");
+    // the second input never ran
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("$ ")).count(),
+        1,
+        "{text}"
+    );
+    assert!(!progress_of(&events).iter().any(|p| p.1 == 1), "{events:?}");
     assert!(
         run.listing().is_empty(),
         "the partial folder is removed: {:?}",
         run.listing()
     );
+}
+
+#[test]
+fn a_failure_of_a_later_run_fails_the_search_with_its_input() {
+    let run = Run::new();
+    let i = inputs();
+    let crash = i.dir.write("in/crash.mzML", "<mzML/>");
+    let (_, rx) = run.start(
+        request(&[&i.mzml, &crash], &i.fasta, false, json!({})),
+        None,
+    );
+    let events = until_terminal(&rx, WAIT);
+    let Some(SearchEvent::Failed(f)) = events.last() else {
+        panic!("{events:?}")
+    };
+    assert_eq!(f.file, Some(1));
+    assert!(f.stage.contains("crash.mzML (2 of 2)"), "{}", f.stage);
+    let text = fs::read_to_string(f.log.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("$ ")).count(),
+        2,
+        "both runs in one log"
+    );
+    assert!(
+        text.contains("Running percolator."),
+        "the first run's output: {text}"
+    );
+    assert!(run.listing().is_empty());
 }
 
 #[test]
@@ -2216,13 +2055,12 @@ fn a_crash_by_a_signal_says_so_and_keeps_the_log_of_the_last_failure() {
         panic!("{events:?}")
     };
     let expected = if cfg!(windows) {
-        "ProSE crashed (exception 0xC0000005)"
+        "OpenNuXL crashed (exception 0xC0000005)"
     } else {
-        "ProSE crashed (signal 11, SIGSEGV)"
+        "OpenNuXL crashed (signal 11, SIGSEGV)"
     };
     assert_eq!(f.ended.as_deref(), Some(expected));
-    // the last line of a crashed tool says nothing about the crash (Percolator's "Split 3:" after a SIGKILL):
-    // it is in the details only
+    // the last line of a crashed tool says nothing about the crash: it is in the details only
     assert_eq!(f.message, "", "no message of its own");
     assert_eq!(
         f.detail.as_deref(),
@@ -2288,24 +2126,38 @@ fn a_tool_that_cannot_start_is_an_error_and_leaves_no_folder() {
     let err = run
         .searches
         .start(
-            Path::new("/nonexistent/ProSE"),
+            Path::new("/nonexistent/OpenNuXL"),
             &run.dir(),
             None,
             request(&[&i.mzml], &i.fasta, false, json!({})),
             sink,
         )
         .unwrap_err();
-    assert!(err.contains("/nonexistent/ProSE"), "{err}");
-    assert!(run.listing().is_empty());
+    assert!(err.contains("/nonexistent/OpenNuXL"), "{err}");
+    assert!(
+        wait_for(Duration::from_secs(5), || run.listing().is_empty()),
+        "{:?}",
+        run.listing()
+    );
+    assert!(!run.searches.any_running());
 }
 
+// ---- cancel ---------------------------------------------------------------------------------
+
+/// Starts a search of `before` (inputs that finish) and then an input named `<name>.mzML` (hang or stubborn), and
+/// waits until the hanging run has started its children.
 fn start_hanging(
     run: &Run,
     i: &Inputs,
+    before: &[&Path],
     name: &str,
+    after: &[&Path],
 ) -> (String, std::sync::mpsc::Receiver<SearchEvent>, PathBuf) {
     let hang = i.dir.write(&format!("in/{name}.mzML"), "<mzML/>");
-    let (id, rx) = run.start(request(&[&hang], &i.fasta, false, json!({})), None);
+    let mut files: Vec<&Path> = before.to_vec();
+    files.push(&hang);
+    files.extend(after);
+    let (id, rx) = run.start(request(&files, &i.fasta, false, json!({})), None);
     let id = id.unwrap();
     first_progress(&rx, WAIT);
     let partial = run.dir().join(format!("{id}.partial"));
@@ -2316,14 +2168,14 @@ fn start_hanging(
 
 #[test]
 fn a_running_search_holds_the_lock_of_its_partial_folder_and_the_sweep_leaves_it() {
-    use prose_desktop_lib::history::{sweep, SWEEP_GRACE};
+    use nuxl_desktop_lib::history::{sweep, SWEEP_GRACE};
     let run = Run::new();
     let i = inputs();
-    let (id, _rx, partial) = start_hanging(&run, &i, "hang");
+    let (id, _rx, partial) = start_hanging(&run, &i, &[], "hang", &[]);
     // another app instance's startup sweep, however late: the partial folder is live
     let much_later = std::time::SystemTime::now() + SWEEP_GRACE * 1000;
     assert!(sweep(&run.dir(), much_later, SWEEP_GRACE).is_empty());
-    assert!(partial.join("prose.log").exists() || partial.join("prose.pid").exists());
+    assert!(partial.join("nuxl.log").exists() && partial.join("tool.pid").exists());
     // the lock is taken, by the search
     let file = fs::File::options()
         .read(true)
@@ -2341,8 +2193,8 @@ fn a_running_search_holds_the_lock_of_its_partial_folder_and_the_sweep_leaves_it
 fn cancel_ends_the_process_and_its_children() {
     let run = Run::new();
     let i = inputs();
-    let (id, rx, partial) = start_hanging(&run, &i, "hang");
-    let tool_pid = read_pids(&partial.join("prose.pid"))[0];
+    let (id, rx, partial) = start_hanging(&run, &i, &[], "hang", &[]);
+    let tool_pid = read_pids(&partial.join("tool.pid"))[0];
     let children = read_pids(&partial.join("children.pid"));
     assert!(process_alive(tool_pid) && children.iter().all(|p| process_alive(*p)));
 
@@ -2373,6 +2225,32 @@ fn cancel_ends_the_process_and_its_children() {
     run.searches.cancel("nonexistent").unwrap();
 }
 
+#[test]
+fn cancel_during_a_later_run_ends_it_and_starts_no_further_one() {
+    let run = Run::new();
+    let i = inputs();
+    let last = i.dir.write("data/last.mzML", "<mzML/>");
+    let (id, rx, partial) = start_hanging(&run, &i, &[&i.mzml], "hang", &[&last]);
+    // the first run is done, its record written; the second hangs
+    assert!(partial
+        .join(format!("nuxl/{}.outputs.json", stem_of(0, "a.mzML")))
+        .is_file());
+    let tool_pid = read_pids(&partial.join("tool.pid"))[0];
+    run.searches.cancel(&id).unwrap();
+    assert!(!process_alive(tool_pid));
+    assert!(run.listing().is_empty(), "{:?}", run.listing());
+    // no event of the third input, and no done or failed
+    std::thread::sleep(Duration::from_millis(300));
+    let events: Vec<SearchEvent> = rx.try_iter().collect();
+    assert!(
+        events
+            .iter()
+            .all(|e| matches!(e, SearchEvent::Progress(p) if p.file < 2)),
+        "{events:?}"
+    );
+    assert!(!run.searches.any_running());
+}
+
 /// The watchdogs (`--watch-search <this process> <group>`) of the tool's process `group`, by `ps`.
 #[cfg(unix)]
 fn watchdogs_of(group: u32) -> Vec<String> {
@@ -2382,7 +2260,7 @@ fn watchdogs_of(group: u32) -> Vec<String> {
         .unwrap();
     let needle = format!(
         "{} {} {group}",
-        prose_desktop_lib::watchdog::FLAG,
+        nuxl_desktop_lib::watchdog::FLAG,
         std::process::id()
     );
     String::from_utf8_lossy(&out.stdout)
@@ -2393,19 +2271,19 @@ fn watchdogs_of(group: u32) -> Vec<String> {
 }
 
 /// (macOS's way; the code is the same on every Unix) a watched search starts the watchdog of its tool's
-/// group with the tool, and ends it with the search.
+/// group with each run, and ends it with the run.
 #[cfg(unix)]
 #[test]
 fn a_watched_search_starts_its_watchdog_and_ends_it_with_the_search() {
     let run = Run {
         work: TempDir::new("run"),
         searches: Arc::new(
-            Searches::default().with_watchdog(PathBuf::from(env!("CARGO_BIN_EXE_prose-desktop"))),
+            Searches::default().with_watchdog(PathBuf::from(env!("CARGO_BIN_EXE_nuxl-desktop"))),
         ),
     };
     let i = inputs();
-    let (id, _rx, partial) = start_hanging(&run, &i, "hang");
-    let tool_pid = read_pids(&partial.join("prose.pid"))[0];
+    let (id, _rx, partial) = start_hanging(&run, &i, &[], "hang", &[]);
+    let tool_pid = read_pids(&partial.join("tool.pid"))[0];
     assert!(
         wait_for(WAIT, || watchdogs_of(tool_pid).len() == 1),
         "one watchdog of the tool's group: {:?}",
@@ -2420,7 +2298,7 @@ fn a_watched_search_starts_its_watchdog_and_ends_it_with_the_search() {
     let (id, rx) = run.start(request(&[&i.mzml], &i.fasta, false, json!({})), None);
     let id = id.unwrap();
     let folder = done_folder(&until_terminal(&rx, WAIT));
-    let pid = read_pids(&folder.join("prose.pid"))[0];
+    let pid = read_pids(&folder.join("tool.pid"))[0];
     assert!(watchdogs_of(pid).is_empty(), "{id}");
 }
 
@@ -2428,8 +2306,8 @@ fn a_watched_search_starts_its_watchdog_and_ends_it_with_the_search() {
 fn cancel_kills_a_process_that_ignores_sigterm() {
     let run = Run::new();
     let i = inputs();
-    let (id, _rx, partial) = start_hanging(&run, &i, "stubborn");
-    let tool_pid = read_pids(&partial.join("prose.pid"))[0];
+    let (id, _rx, partial) = start_hanging(&run, &i, &[], "stubborn", &[]);
+    let tool_pid = read_pids(&partial.join("tool.pid"))[0];
     let children = read_pids(&partial.join("children.pid"));
     run.searches.cancel(&id).unwrap();
     assert!(!process_alive(tool_pid));
@@ -2443,11 +2321,11 @@ fn cancel_kills_a_process_that_ignores_sigterm() {
 fn cancel_all_stops_every_running_search() {
     let run = Run::new();
     let i = inputs();
-    let (_, _rx1, p1) = start_hanging(&run, &i, "hang");
-    let (_, _rx2, p2) = start_hanging(&run, &i, "stubborn");
+    let (_, _rx1, p1) = start_hanging(&run, &i, &[], "hang", &[]);
+    let (_, _rx2, p2) = start_hanging(&run, &i, &[], "stubborn", &[]);
     let pids: Vec<u32> = [&p1, &p2]
         .iter()
-        .flat_map(|p| read_pids(&p.join("prose.pid")))
+        .flat_map(|p| read_pids(&p.join("tool.pid")))
         .collect();
     run.searches.cancel_all();
     assert!(pids.iter().all(|p| !process_alive(*p)));

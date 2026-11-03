@@ -38,9 +38,9 @@
 //!   handler), at the end of its current step; a later start of the app sweeps the folder.
 
 use crate::args::{
-    build_runs_with, humanize, input_placements, input_records_with, outputs_record,
-    plan_database, write_database, DatabasePlan, InputLinks, InputRecord, Placement, SearchRequest,
-    DATABASE_FILE, DATABASE_RECORD, LOG_FILE, OUTPUT_DIR,
+    build_runs_with, humanize, input_placements, input_records_with, outputs_record, plan_database,
+    write_database, DatabasePlan, InputLinks, InputRecord, Placement, SearchRequest, DATABASE_FILE,
+    DATABASE_RECORD, LOG_FILE, OUTPUT_DIR,
 };
 use crate::history::{finish_partial, lock_partial, remove_partial, with_backoff};
 use crate::progress::ProgressTracker;
@@ -372,7 +372,9 @@ mod digest_tests {
             "stty: 'standard input': Inappropriate ioctl for device".to_string(),
         ];
         for k in 0..200 {
-            lines.push(format!("  -NuXL:option{k} <number>   An option (default: '1')"));
+            lines.push(format!(
+                "  -NuXL:option{k} <number>   An option (default: '1')"
+            ));
         }
         lines.push("  --helphelp                                               Shows all options (including advanced)".to_string());
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
@@ -748,7 +750,6 @@ mod sys {
     }
 }
 
-
 /// Lines of a stream, lossily decoded, without the line end; a line longer than [`MAX_LINE`] bytes is cut
 /// there (and ends with "…"), the rest of it dropped unread into memory. A line ends at `\n` or at `\r`:
 /// OpenMS' progress updates end with `\r` alone (`ProgressLogger`), and each is a line of its own. A `\n`
@@ -864,7 +865,11 @@ fn invalid_value(text: &str) -> Option<String> {
         let message = message.strip_suffix(')').unwrap_or(message).trim_end();
         return Some(format!("Error: {message} (the value: {value})"));
     }
-    Some(format!("{}{} (the value: {value})", &text[..at], message.trim_end()))
+    Some(format!(
+        "{}{} (the value: {value})",
+        &text[..at],
+        message.trim_end()
+    ))
 }
 
 /// A line of the tool's stderr as a failure shows it: without OpenMS' source locations (paths of the
@@ -1321,13 +1326,14 @@ fn prepare_folder(
         .map_err(|e| format!("inputs.json cannot be written ({e})."))?;
     let mut notes = Vec::new();
     if plan.copy {
-        let crap = if request.contaminants {
-            Some(crap.ok_or(
-                "The contaminant database (cRAP) is not available in this installation.",
-            )?)
-        } else {
-            None
-        };
+        let crap =
+            if request.contaminants {
+                Some(crap.ok_or(
+                    "The contaminant database (cRAP) is not available in this installation.",
+                )?)
+            } else {
+                None
+            };
         let copy = write_database(
             Path::new(&request.database),
             crap,
@@ -1839,7 +1845,15 @@ mod output_tests {
     fn the_thresholds_of_the_derived_names_have_four_decimals() {
         assert_eq!(threshold("1.0000"), Some(1.0));
         assert_eq!(threshold("0.0100"), Some(0.01));
-        for text in ["1.0", "1", "perc_1.0000", "0.01000", "-0.0100", ".0100", "1.00a0"] {
+        for text in [
+            "1.0",
+            "1",
+            "perc_1.0000",
+            "0.01000",
+            "-0.0100",
+            ".0100",
+            "1.00a0",
+        ] {
             assert_eq!(threshold(text), None, "{text}");
         }
     }
@@ -1861,9 +1875,16 @@ mod output_tests {
         let (percolator, [all, xls, peptides, proteins, report]) = find_outputs(&plain, "1__a");
         assert!(!percolator);
         assert_eq!(all.as_deref(), Some("nuxl/1__a.idXML"));
-        assert_eq!(xls.as_deref(), Some("nuxl/1__a_1.0000_XLs.idXML"), "the highest threshold");
+        assert_eq!(
+            xls.as_deref(),
+            Some("nuxl/1__a_1.0000_XLs.idXML"),
+            "the highest threshold"
+        );
         assert_eq!(peptides.as_deref(), Some("nuxl/1__a_0.0000_peptides.idXML"));
-        assert_eq!(proteins.as_deref(), Some("nuxl/1__a_proteins0.0100_XLs.tsv"));
+        assert_eq!(
+            proteins.as_deref(),
+            Some("nuxl/1__a_proteins0.0100_XLs.tsv")
+        );
         assert_eq!(report.as_deref(), Some("nuxl/1__a.tsv"));
 
         // after Percolator: its files, though the plain ones are there too
@@ -1882,7 +1903,10 @@ mod output_tests {
         assert!(percolator);
         assert_eq!(all.as_deref(), Some("nuxl/1__a.idXML"));
         assert_eq!(xls.as_deref(), Some("nuxl/1__a_perc_1.0000_XLs.idXML"));
-        assert_eq!(peptides.as_deref(), Some("nuxl/1__a_perc_0.0000_peptides.idXML"));
+        assert_eq!(
+            peptides.as_deref(),
+            Some("nuxl/1__a_perc_0.0000_peptides.idXML")
+        );
         assert_eq!(
             proteins.as_deref(),
             Some("nuxl/1__a_perc_proteins0.0100_XLs.tsv"),

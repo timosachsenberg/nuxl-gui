@@ -1,15 +1,17 @@
 //! Project files: a search folder written as a zip entry by entry (`project`), read back here as the front
 //! end reads it: the central directory, then each entry's local header and data (stored or deflated, its CRC).
 //! The zip of the fixture folder below is `src/lib/history/fixtures/rust-project.prose`, which the front end's
-//! tests open with `unpackProject` (fflate): the round trip. `PROSE_WRITE_FIXTURES=1 cargo test --test project`
-//! writes it again after a change of the writer.
+//! tests open with `unpackProject` (fflate): the round trip. `NUXL_WRITE_FIXTURES=1 cargo test --test project`
+//! writes it again after a change of the writer. (The fixture's files are those of ProSE desktop's searches,
+//! which this repository started from: names and contents only matter to the zip, and keeping them keeps the
+//! fixture as the front end's tests have it.)
 
 mod common;
 
 use common::TempDir;
 use flate2::read::DeflateDecoder;
-use prose_desktop_lib::history::save_record;
-use prose_desktop_lib::project::{
+use nuxl_desktop_lib::history::save_record;
+use nuxl_desktop_lib::project::{
     dos_time, project_files, without_paths, write_project, ZipWriter, INPUTS, RECORD,
 };
 use std::fs;
@@ -56,9 +58,13 @@ fn folder(dir: &Path, id: &str) {
         r#"{"path":"/home/me/db.fasta"}"#,
     )
     .unwrap();
-    fs::write(folder.join("prose.log"), "ProSE -in /home/me/runs/a.mzML").unwrap();
+    fs::write(
+        folder.join("nuxl.log"),
+        "$ OpenNuXL -in /home/me/runs/a.mzML",
+    )
+    .unwrap();
     let record = format!(
-        r#"{{"schema":1,"id":"{id}","name":"Fixture","createdAt":"2026-10-24T12:34:56.000Z","appVersion":"0.1.3","toolVersion":"3.7.0","files":["a.mzML","b.mzML"],"database":"db.fasta","psms":2,"psmFdr":0.01,"proteinFdr":0.01,"seconds":1,"design":{{"rows":[],"samples":[],"conditions":[]}},"settings":{{"parameters":{{}},"fixedMods":[],"rescore":true,"peptdeep":false,"contaminants":true}}}}"#
+        r#"{{"schema":1,"id":"{id}","name":"Fixture","createdAt":"2026-10-24T12:34:56.000Z","appVersion":"0.1.3","toolVersion":"3.7.0","files":["a.mzML","b.mzML"],"database":"db.fasta","psms":2,"psmFdr":0.01,"proteinFdr":0.01,"seconds":1,"design":{{"rows":[],"samples":[],"conditions":[]}},"settings":{{"parameters":{{}},"fixedMods":[],"rescore":true,"peptideFdr":0.01,"xlFdr":0.01,"contaminants":true}}}}"#
     );
     save_record(dir, id, &record).unwrap();
 }
@@ -147,7 +153,7 @@ fn a_project_is_the_folder_as_a_zip_written_entry_by_entry() {
     let tmp = TempDir::new("project");
     let dir = tmp.path().join("searches");
     folder(&dir, "1-0");
-    let target = tmp.path().join("out/Fixture.prose");
+    let target = tmp.path().join("out/Fixture.nuxl");
     fs::create_dir_all(target.parent().unwrap()).unwrap();
     let mut reports = Vec::new();
     write_project(
@@ -209,12 +215,12 @@ fn a_project_is_the_folder_as_a_zip_written_entry_by_entry() {
     assert_eq!(reports.last().unwrap().0, total);
 
     // the front end's round trip reads this zip (history.test.ts): it is the fixture
-    if std::env::var_os("PROSE_WRITE_FIXTURES").is_some() {
+    if std::env::var_os("NUXL_WRITE_FIXTURES").is_some() {
         fs::write(fixture_path(), &bytes).unwrap();
     }
     assert!(
         fs::read(fixture_path()).unwrap() == bytes,
-        "the writer changed: PROSE_WRITE_FIXTURES=1 cargo test --test project writes {} again",
+        "the writer changed: NUXL_WRITE_FIXTURES=1 cargo test --test project writes {} again",
         fixture_path().display()
     );
 }
@@ -228,7 +234,7 @@ fn a_project_is_refused_before_anything_is_written() {
     fs::write(dir.join("2-0/qpx/x.parquet"), "x").unwrap();
     let message = project_files(&dir, "2-0").unwrap_err();
     assert!(message.contains("not saved to History"), "{message}");
-    let target = tmp.path().join("x.prose");
+    let target = tmp.path().join("x.nuxl");
     assert!(write_project(&dir, "2-0", &target, fixture_time(), &mut |_, _| {}).is_err());
     assert!(!target.exists());
     // no such search, or not a search
@@ -242,7 +248,7 @@ fn a_project_that_cannot_be_made_leaves_nothing_and_keeps_what_was_there() {
     let dir = tmp.path().join("searches");
     folder(&dir, "1-0");
     fs::write(dir.join("1-0").join(INPUTS), "{ not a list").unwrap();
-    let target = tmp.path().join("old.prose");
+    let target = tmp.path().join("old.nuxl");
     fs::write(&target, "the old project").unwrap();
     let message = write_project(&dir, "1-0", &target, fixture_time(), &mut |_, _| {}).unwrap_err();
     assert!(message.contains("inputs.json cannot be read"), "{message}");
@@ -257,7 +263,7 @@ fn a_project_that_cannot_be_made_leaves_nothing_and_keeps_what_was_there() {
     let message = write_project(
         &dir,
         "3-0",
-        &tmp.path().join("absent/x.prose"),
+        &tmp.path().join("absent/x.nuxl"),
         fixture_time(),
         &mut |_, _| {},
     )

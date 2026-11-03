@@ -1,5 +1,5 @@
 // The example searched through the app's screens: New search with the example, Start, Results.
-// Gated: runs only with PROSE_BIN set (the app inherits it). Every test that needs a result searches the
+// Gated: runs only with NUXL_TOOL set (the app inherits it). Every test that needs a result searches the
 // example itself, so each runs alone; the searches' folders (in the spec's own data folder) are removed
 // after each test.
 import { existsSync, readFileSync } from 'node:fs'
@@ -8,12 +8,12 @@ import { zstdDecompressSync } from 'node:zlib'
 import { parquetReadObjects } from 'hyparquet'
 import { clearSearches, freshForm, openFirstPsm, runExample, searchesDir, waitForResults } from './lib.ts'
 
-const enabled = Boolean(process.env.PROSE_BIN)
+const enabled = Boolean(process.env.NUXL_TOOL)
 
 describe('the example search', () => {
   before(function () {
     if (!enabled) {
-      console.log('skipped: set PROSE_BIN to run the example search through the app')
+      console.log('skipped: set NUXL_TOOL to run the example search through the app')
       this.skip()
     }
   })
@@ -163,7 +163,7 @@ describe('the example search', () => {
     await expect($('button=Start over')).not.toBeExisting()
   })
 
-  it('a parameter set in "All parameters" reaches ProSE', async () => {
+  it('a parameter set in "All parameters" reaches OpenNuXL', async () => {
     await freshForm()
     await $('button=Try the example').click()
     await expect($('[data-testid="fasta-proteins"]')).toHaveText('4,136 proteins')
@@ -183,7 +183,7 @@ describe('the example search', () => {
     await expect($('span=modified')).toBeDisplayed()
     await $('button*=Start search').click()
     const id = await waitForResults()
-    // ProSE's own record of its parameters: the provenance view's configuration
+    // OpenNuXL's own record of its parameters: the provenance view's configuration
     const bytes = readFileSync(join(searchesDir(), id, 'qpx', 'quantms.provenance.parquet'))
     const rows = (await parquetReadObjects({
       file: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
@@ -196,7 +196,7 @@ describe('the example search', () => {
   })
 
   it('the example without PeptDeep still shows the prediction', async () => {
-    // PeptDeep is off for the search (no rescoring features), yet ProSE writes the prediction of every PSM
+    // PeptDeep is off for the search (no rescoring features), yet OpenNuXL writes the prediction of every PSM
     await runExample()
     await openFirstPsm()
     await expect($('[data-testid="bottom-label"]')).toHaveText(expect.stringContaining('PeptDeep'))
@@ -220,7 +220,7 @@ describe('the example search', () => {
     expect(existsSync(join(searchesDir(), searchId, 'search.json'))).toBe(true)
     expect(existsSync(join(searchesDir(), searchId, 'proteins.fasta'))).toBe(true)
     expect(existsSync(join(searchesDir(), searchId, 'database.fasta'))).toBe(false)
-    // the record's PSMs (written when ProSE ended, from its QPX run view) are the result's
+    // the record's PSMs (written when OpenNuXL ended, from its QPX run view) are the result's
     expect(await row().$('[data-column="psms"]').getProperty('textContent')).toBe('154')
 
     await row().$('button=Rename').click()

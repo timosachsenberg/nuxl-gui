@@ -272,7 +272,10 @@ pub fn input_file(
     }
     let meta = fs::metadata(&record.path).map_err(|e| ReadError::io(&record.path, e))?;
     if !meta.is_file() {
-        return Err(ReadError::refused(format!("{} is not a file.", record.path)));
+        return Err(ReadError::refused(format!(
+            "{} is not a file.",
+            record.path
+        )));
     }
     Ok(Some(PathBuf::from(&record.path)))
 }

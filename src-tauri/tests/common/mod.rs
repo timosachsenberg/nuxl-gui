@@ -1,7 +1,7 @@
 //! Helpers of the shim's integration tests: temporary directories, the fake tool, event collection.
 #![allow(dead_code)]
 
-use prose_desktop_lib::run::{SearchEvent, Sink};
+use nuxl_desktop_lib::run::{SearchEvent, Sink};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -16,7 +16,7 @@ impl TempDir {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path =
-            std::env::temp_dir().join(format!("prose-shim-{}-{label}-{n}", std::process::id()));
+            std::env::temp_dir().join(format!("nuxl-shim-{}-{label}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         TempDir(path)
@@ -41,27 +41,27 @@ impl Drop for TempDir {
     }
 }
 
-/// The fake tool: `tests/fake-prose.sh`, or on Windows (and with `PROSE_FAKE_EXE` set) the same as an
-/// executable, `examples/fake_prose.rs`.
-pub fn fake_prose() -> PathBuf {
-    if cfg!(windows) || std::env::var_os("PROSE_FAKE_EXE").is_some() {
-        fake_prose_exe()
+/// The fake tool: `tests/fake-nuxl.sh`, or on Windows (and with `NUXL_FAKE_EXE` set) the same as an
+/// executable, `examples/fake_nuxl.rs`.
+pub fn fake_nuxl() -> PathBuf {
+    if cfg!(windows) || std::env::var_os("NUXL_FAKE_EXE").is_some() {
+        fake_nuxl_exe()
     } else {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake-prose.sh")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake-nuxl.sh")
     }
 }
 
-/// The example `fake_prose`, which `cargo test` builds with the tests (into `<target>/<profile>/examples`,
+/// The example `fake_nuxl`, which `cargo test` builds with the tests (into `<target>/<profile>/examples`,
 /// beside the tests' own `deps` folder).
-pub fn fake_prose_exe() -> PathBuf {
+pub fn fake_nuxl_exe() -> PathBuf {
     let test = std::env::current_exe().unwrap();
     let profile = test.parent().and_then(Path::parent).unwrap();
     let exe = profile
         .join("examples")
-        .join(format!("fake_prose{}", std::env::consts::EXE_SUFFIX));
+        .join(format!("fake_nuxl{}", std::env::consts::EXE_SUFFIX));
     assert!(
         exe.is_file(),
-        "{} is missing: run all of `cargo test` (or `cargo build --example fake_prose`)",
+        "{} is missing: run all of `cargo test` (or `cargo build --example fake_nuxl`)",
         exe.display()
     );
     exe

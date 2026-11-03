@@ -2,7 +2,7 @@
 // of the same name from different folders, and an mzML.gz. The example's run and FASTA are copied into
 // folders made for the spec; the app reads them where they are. They are searched with the example's fragment
 // tolerance of 0.5 Da, set by hand (lib.ts exampleSettings).
-// Gated: runs only with PROSE_BIN set (the app inherits it).
+// Gated: runs only with NUXL_TOOL set (the app inherits it).
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -21,7 +21,7 @@ import {
   waitForResults,
 } from './lib.ts'
 
-const enabled = Boolean(process.env.PROSE_BIN)
+const enabled = Boolean(process.env.NUXL_TOOL)
 
 describe('inputs by path', () => {
   let work: string
@@ -30,10 +30,10 @@ describe('inputs by path', () => {
 
   before(async function () {
     if (!enabled) {
-      console.log('skipped: set PROSE_BIN to run searches through the app')
+      console.log('skipped: set NUXL_TOOL to run searches through the app')
       this.skip()
     }
-    work = mkdtempSync(join(tmpdir(), 'prose-e2e-paths-'))
+    work = mkdtempSync(join(tmpdir(), 'nuxl-e2e-paths-'))
     const dir = join(work, 'Ünï cödé Ordner mit Leerzeichen', 'Läufe 2026')
     mkdirSync(dir, { recursive: true })
     umlautRun = join(dir, 'Probe Größe ä ö ü.mzML')
@@ -98,8 +98,8 @@ describe('inputs by path', () => {
     const count = await search([odd, umlautFasta], 'İstanbul Ⱥ run.mzML.gz')
     expect(count).toBe(plainCount)
     expect(count).not.toMatch(/^\s*0\b/)
-    // Export > idXML: the file's own idXML (ProSE writes the merged one only for several files)
-    const chosen = join(dataHome(), 'chosen.prose')
+    // Export > idXML: the file's own idXML (OpenNuXL writes the merged one only for several files)
+    const chosen = join(dataHome(), 'chosen.nuxl')
     rmSync(chosen, { force: true })
     await $('header').$('button*=Export').click()
     await $('[role="menuitem"]*=idXML').click()

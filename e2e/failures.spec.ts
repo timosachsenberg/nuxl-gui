@@ -1,6 +1,6 @@
-// A search that is cancelled, and one whose ProSE is killed from outside: neither leaves anything in
+// A search that is cancelled, and one whose OpenNuXL is killed from outside: neither leaves anything in
 // History or in the searches folder, the failure names its stage, and the next search runs.
-// Gated: runs only with PROSE_BIN set (the app inherits it).
+// Gated: runs only with NUXL_TOOL set (the app inherits it).
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
@@ -8,7 +8,7 @@ import {
   clearSearches,
   goTo,
   LONG_SEARCH_FILES,
-  proseProcesses,
+  toolProcesses,
   resultsId,
   searchesDir,
   searchFolders,
@@ -17,7 +17,7 @@ import {
   waitForResults,
 } from './lib.ts'
 
-const enabled = Boolean(process.env.PROSE_BIN)
+const enabled = Boolean(process.env.NUXL_TOOL)
 
 /** New search with the example's run as many files (lib.ts startLongSearch), and Start. */
 const startExample = startLongSearch
@@ -53,7 +53,7 @@ async function nextSearchRuns() {
 describe('a search that does not finish', () => {
   before(async function () {
     if (!enabled) {
-      console.log('skipped: set PROSE_BIN to run searches through the app')
+      console.log('skipped: set NUXL_TOOL to run searches through the app')
       this.skip()
     }
     await appReady()
@@ -68,26 +68,26 @@ describe('a search that does not finish', () => {
     await $('button=Cancel').click()
     // the footer is the plan and Start again; the process is gone before the cancel returns
     await $('button*=Start search').waitForDisplayed({ timeout: 30000 })
-    expect(proseProcesses()).toEqual([])
+    expect(toolProcesses()).toEqual([])
     expect(await resultsId()).toBeNull()
     expect(await $$('[data-testid="search-error"]')).toHaveLength(0)
     await expectNothingKept()
     await nextSearchRuns()
   })
 
-  it('a killed ProSE reports and the next search runs', async () => {
+  it('a killed OpenNuXL reports and the next search runs', async () => {
     await startExample()
     await searching()
-    // ProSE is found by its command line, which names the search folder in this spec's data folder
+    // OpenNuXL is found by its command line, which names the search folder in this spec's data folder
     let pid = 0
     await browser.waitUntil(
       () => {
-        const found = proseProcesses()
+        const found = toolProcesses()
         if (found.length === 0) return false
         pid = found[0].pid
         return true
       },
-      { timeout: 20000, timeoutMsg: 'no ProSE process was found' },
+      { timeout: 20000, timeoutMsg: 'no OpenNuXL process was found' },
     )
     process.kill(pid, 'SIGKILL')
 
@@ -95,19 +95,19 @@ describe('a search that does not finish', () => {
     await error.waitForDisplayed({ timeout: 30000 })
     const text = String(await error.getProperty('textContent'))
     expect(text).toContain('The search stopped')
-    // the stage and the file it was searching, and what happened to ProSE
+    // the stage and the file it was searching, and what happened to OpenNuXL
     expect(text).toContain('While searching')
     expect(text).toMatch(/Ecoli_\d+\.mzML/)
-    // how ProSE ended leads the message
-    expect(text).toContain('ProSE crashed (signal 9, SIGKILL')
+    // how OpenNuXL ended leads the message
+    expect(text).toContain('OpenNuXL crashed (signal 9, SIGKILL')
     // its log is kept in the app's data (and named in the details)
     const log = join(dirname(searchesDir()), 'logs', 'last-failure.log')
     expect(existsSync(log)).toBe(true)
-    expect(readFileSync(log, 'utf8')).toMatch(/^\$ .*ProSE/)
+    expect(readFileSync(log, 'utf8')).toMatch(/^\$ .*OpenNuXL/)
     expect(text).toContain(log)
     expect(await resultsId()).toBeNull()
     await expect($('button*=Start search')).toBeDisplayed()
-    expect(proseProcesses()).toEqual([])
+    expect(toolProcesses()).toEqual([])
     await expectNothingKept()
     await nextSearchRuns()
   })

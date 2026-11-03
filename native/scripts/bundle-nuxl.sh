@@ -1,26 +1,26 @@
 #!/bin/bash
-# Bundles the native ProSE tool for the desktop app (Linux, macOS, Windows): the executable, its
-# shared-library closure, the OpenMS share/ data it reads, the PeptDeep models and the licences, plus a
-# build manifest.
+# Bundles OpenNuXL for the desktop app (Linux, macOS, Windows): the OpenNuXL executable and PercolatorAdapter
+# (which OpenNuXL runs for its score recalibration and looks for beside itself, File::findSiblingTOPPExecutable),
+# their shared-library closure, the OpenMS share/ data they read and the licences, plus a build manifest.
 #
-#   bundle-prose.sh <openms-build> <out>
+#   bundle-nuxl.sh <openms-build> <out>
 #
 # <openms-build> is a build directory made by build-openms.sh; <out> is normally
-# src-tauri/resources/prose (tauri.conf.json bundles that folder). <out> is emptied first. The layout:
+# src-tauri/resources/nuxl (tauri.conf.json bundles that folder). <out> is emptied first. The layout:
 #
-#   Linux    bin/ProSE                RPATH $ORIGIN/../lib
-#            lib/*.so*                the closure, RPATH $ORIGIN; system libraries left out (below)
-#   macOS    bin/ProSE                LC_RPATH @loader_path/../lib, ad-hoc signed
+#   Linux    bin/OpenNuXL, bin/PercolatorAdapter     RPATH $ORIGIN/../lib
+#            lib/*.so*                the closure of both, RPATH $ORIGIN; system libraries left out (below)
+#   macOS    bin/OpenNuXL, bin/PercolatorAdapter     LC_RPATH @loader_path/../lib, ad-hoc signed
 #            lib/*.dylib              the closure (one libomp), ids and references @rpath/<name>,
 #                                     LC_RPATH @loader_path, ad-hoc signed; /usr/lib and /System left out
-#   Windows  bin/ProSE.exe, bin/*.dll the closure beside the exe (Windows has no RPATH; the exe's folder
+#   Windows  bin/OpenNuXL.exe, bin/PercolatorAdapter.exe, bin/*.dll
+#                                     the closure beside the exes (Windows has no RPATH; the exe's folder
 #                                     is searched first), with the Visual C++ runtime and vcomp140 (the one
 #                                     OpenMP runtime); the DLLs of Windows left out
 #   share/OpenMS/{CHEMISTRY,CV,MAPPING,SCHEMAS,TOOLS}
-#   share/OpenMS/models/peptdeep_{ms2,rt}_dynamic.onnx    (builds with ONNX only), with AlphaPeptDeep's
-#                                     licence (Apache-2.0, native/licenses) and a NOTICE
+#   share/OpenMS/NUXL/nuxl_presets.json  the cross-linking protocols of NuXL:presets
 #   share/OpenMS/LICENSES/...         OpenMS, its vendored code, the vcpkg ports, the bundled system libraries
-#   build.json                        the manifest the app reads (tool.rs): withOnnx, the OpenMS commit
+#   build.json                        the manifest: the tools, the OpenMS commit, the triplet
 #
 # Runs on the host toolchain (outside in-env.sh; LD_LIBRARY_PATH is ignored for the closure). Needs
 # python3 and, on Linux, patchelf, strip, ldd and dpkg (for the copyright files of the bundled system
@@ -48,15 +48,21 @@ BUILD=$(native "$(cd "$1" && pwd -P)")
 OUT=$(native "$(cd "$2" && pwd -P)")
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CACHE=$BUILD/CMakeCache.txt
-EXE=$BUILD/bin/ProSE
-[ "$PLATFORM" = windows ] && EXE=$BUILD/bin/ProSE.exe
+SUFFIX=
+[ "$PLATFORM" = windows ] && SUFFIX=.exe
+# the tools, OpenNuXL first; PercolatorAdapter has to be beside it
+TOOL_NAMES=(OpenNuXL PercolatorAdapter)
+EXES=()
+for name in "${TOOL_NAMES[@]}"; do EXES+=("$BUILD/bin/$name$SUFFIX"); done
 # (Windows has python, not always python3)
 PY=python3
 "$PY" -c '' 2>/dev/null || PY=python
 
 die() { echo "error: $*" >&2; exit 1; }
 [ -f "$CACHE" ] || die "$BUILD is not a CMake build directory (no CMakeCache.txt)"
-[ -x "$EXE" ] || die "$EXE is missing (build the ProSE target)"
+for exe in "${EXES[@]}"; do
+  [ -x "$exe" ] || die "$exe is missing (build the OpenNuXL and PercolatorAdapter targets)"
+done
 case $PLATFORM in
   linux) tools=(patchelf strip ldd) ;;
   macos) tools=(otool install_name_tool strip codesign) ;;
@@ -69,11 +75,8 @@ done
 cache_value() { sed -n "s/^$1:[A-Z]*=//p" "$CACHE" | head -n 1; }
 SRC=$(cache_value CMAKE_HOME_DIRECTORY)
 TRIPLET=$(cache_value VCPKG_TARGET_TRIPLET)
-case "$(cache_value WITH_ONNX)" in
-  ON|on|TRUE|true|1|YES|yes) WITH_ONNX=true ;;
-  *) WITH_ONNX=false ;;
-esac
 [ -f "$SRC/share/OpenMS/CHEMISTRY/unimod.xml" ] || die "no OpenMS sources at '$SRC' (CMAKE_HOME_DIRECTORY)"
+[ -f "$SRC/share/OpenMS/NUXL/nuxl_presets.json" ] || die "no NUXL presets in '$SRC/share/OpenMS' (an OpenMS without OpenNuXL?)"
 
 COMMIT=$(git -C "$SRC" rev-parse HEAD)
 PIN_FILE=$HERE/../OPENMS_COMMIT
@@ -88,41 +91,49 @@ fi
 # release build is made on ubuntu-22.04, so it needs glibc 2.35, which every Ubuntu 22.04+ has).
 # Everything else is bundled, including
 # - the GCC runtime (libstdc++, libgcc_s): OpenMS needs GCC 13 (C++23), newer than Ubuntu 22.04's own
-#   runtime (GCC 12), and ProSE runs in a process of its own, so its libstdc++ cannot clash with the app's;
+#   runtime (GCC 12), and the tools run in processes of their own, so their libstdc++ cannot clash with the app's;
 # - libgomp, one OpenMP runtime, the one the build linked.
 EXCLUDE='^(linux-vdso\.so\.1|ld-linux-x86-64\.so\.2|libc\.so\.6|libm\.so\.6|libmvec\.so\.1|libdl\.so\.2|libpthread\.so\.0|librt\.so\.1|libutil\.so\.1|libresolv\.so\.2|libanl\.so\.1|libnsl\.so\.1|libnss_[a-z]+\.so\.2|libBrokenLocale\.so\.1|libthread_db\.so\.1)$'
 OPENMP='^lib(gomp|omp|iomp5|omp5)\.so'
 
 closure_linux() {
 
-  # --- The executable and its closure --------------------------------------------------------------
-  # ldd lists the whole closure (transitively) as the build's RUNPATH resolves it.
-  closure=$(env -u LD_LIBRARY_PATH -u LD_PRELOAD ldd "$EXE")
-  if grep -q 'not found' <<<"$closure"; then
-    die "unresolved libraries of $EXE:"$'\n'"$(grep 'not found' <<<"$closure")"
-  fi
-  while read -r name arrow path _; do
-    [ "$arrow" = "=>" ] || continue
-    if [[ $name =~ $EXCLUDE ]]; then
-      excluded+=("$name")
-      continue
+  # --- The executables and their closure ------------------------------------------------------------
+  # ldd lists the whole closure (transitively) as the build's RUNPATH resolves it; the tools share most of it
+  # (libOpenMS), each library is bundled once.
+  local exe closure seen=" "
+  for exe in "${EXES[@]}"; do
+    closure=$(env -u LD_LIBRARY_PATH -u LD_PRELOAD ldd "$exe")
+    if grep -q 'not found' <<<"$closure"; then
+      die "unresolved libraries of $exe:"$'\n'"$(grep 'not found' <<<"$closure")"
     fi
-    [[ $name =~ $OPENMP ]] && omp+=("$name")
-    cp -L "$path" "$OUT/lib/$name"
-    case $path in /lib/* | /usr/lib/*) system_libs+=("$path") ;; esac
-  done <<<"$closure"
+    while read -r name arrow path _; do
+      [ "$arrow" = "=>" ] || continue
+      case $seen in *" $name "*) continue ;; esac
+      seen="$seen$name "
+      if [[ $name =~ $EXCLUDE ]]; then
+        excluded+=("$name")
+        continue
+      fi
+      [[ $name =~ $OPENMP ]] && omp+=("$name")
+      cp -L "$path" "$OUT/lib/$name"
+      case $path in /lib/* | /usr/lib/*) system_libs+=("$path") ;; esac
+    done <<<"$closure"
+    cp "$exe" "$OUT/bin/$(basename "$exe")"
+  done
   [ "${#omp[@]}" -eq 1 ] && [ "${omp[0]}" = libgomp.so.1 ] \
     || die "expected exactly one OpenMP runtime, libgomp.so.1; the closure has: ${omp[*]:-none}"
-  cp "$EXE" "$OUT/bin/ProSE"
-  chmod 0755 "$OUT/bin/ProSE"
+  chmod 0755 "$OUT"/bin/*
   chmod 0644 "$OUT"/lib/*
 
   # Symbol tables are not needed at run time; strip before patchelf (strip can undo patchelf's layout).
-  strip --strip-unneeded "$OUT/bin/ProSE" "$OUT"/lib/*
+  strip --strip-unneeded "$OUT"/bin/* "$OUT"/lib/*
 
   # DT_RPATH (not RUNPATH): it is searched before LD_LIBRARY_PATH, so a library path set around the app
   # (the AppImage runtime, a user's environment) cannot swap in a different libarrow or libOpenMS.
-  patchelf --force-rpath --set-rpath '$ORIGIN/../lib' "$OUT/bin/ProSE"
+  for exe in "$OUT"/bin/*; do
+    patchelf --force-rpath --set-rpath '$ORIGIN/../lib' "$exe"
+  done
   for lib in "$OUT"/lib/*; do
     patchelf --force-rpath --set-rpath '$ORIGIN' "$lib"
   done
@@ -137,8 +148,7 @@ closure_linux() {
   #   with a path of the same length that cannot exist ("/dev/null////..."), as relocating packagers
   #   (conda) rewrite the prefix; OpenMS reads it through a volatile pointer for exactly this reason
   #   (installPath_), so the string in .rodata is the one used.
-  # - the source and build tree (OPENMS_DATA_PATH, OPENMS_BINARY_PATH for the PeptDeep models, the tool
-  #   registry): paths of the build machine (in CI below /home/runner/work), which do not exist on a
+  # - the source and build tree (OPENMS_DATA_PATH, OPENMS_BINARY_PATH, the tool registry): paths of the build machine (in CI below /home/runner/work), which do not exist on a
   #   user's machine. GCC writes these strings into the code as immediates, so they cannot be patched;
   #   smoke-appimage.sh --hide-openms hides them on the build machine to test the bundle as a user's
   #   machine sees it.
@@ -165,7 +175,7 @@ PY
 # Homebrew's libomp is the one OpenMP runtime (Apple's clang has none); vcpkg's dylibs and OpenMS's carry
 # @rpath ids, resolved through the build's LC_RPATHs.
 closure_macos() {
-  "$PY" -I "$HERE/bundle_closure.py" macho "$EXE" "$OUT" \
+  "$PY" -I "$HERE/bundle_closure.py" macho "${EXES[@]}" "$OUT" \
     --search "$BUILD/lib" --search "$BUILD/vcpkg_installed/$TRIPLET/lib" \
     --install-path "$install_data_path"
   omp=(libomp.dylib)
@@ -187,7 +197,7 @@ closure_windows() {
     [ -d "$d" ] && redist+=(--redist "$d")
   done
   [ "${#redist[@]}" -gt 0 ] || die "no x64 runtime folders in $root"
-  "$PY" -I "$HERE/bundle_closure.py" pe "$EXE" "$OUT" \
+  "$PY" -I "$HERE/bundle_closure.py" pe "${EXES[@]}" "$OUT" \
     --search "$BUILD/bin" --search "$BUILD/vcpkg_installed/$TRIPLET/bin" "${redist[@]}" \
     --install-path "$install_data_path"
   rmdir "$OUT/lib"
@@ -207,34 +217,16 @@ system_libs=()
 "closure_$PLATFORM"
 
 # --- share/OpenMS ---------------------------------------------------------------------------------
-# What ProSE reads (checked with strace on the example, with and without PeptDeep): CHEMISTRY (unimod,
-# enzymes, modifications, PSI-MOD, XLMOD), CV (psi-ms and the obo files it imports), MAPPING
-# (ms-mapping.xml), the TOOLS registry; SCHEMAS for the mzML/mzIdentML readers. The metabolomics HMDB
-# tables (49 MB) and the examples are left out.
+# What the tools read: CHEMISTRY (unimod, enzymes, modifications, PSI-MOD, the elements and residues of the
+# nucleotide adducts), CV (psi-ms and the obo files it imports), MAPPING (ms-mapping.xml), the TOOLS registry;
+# SCHEMAS for the mzML and idXML readers and writers; NUXL, the presets of NuXL:presets, which OpenNuXL reads
+# when it registers its options (also for --help). The metabolomics HMDB tables (49 MB) and the examples are left
+# out (the set ProSE desktop's bundle had, checked with strace there, and NUXL).
 share=$OUT/share/OpenMS
 cp -r "$SRC/share/OpenMS/CHEMISTRY" "$SRC/share/OpenMS/CV" "$SRC/share/OpenMS/MAPPING" \
-  "$SRC/share/OpenMS/SCHEMAS" "$share/"
+  "$SRC/share/OpenMS/SCHEMAS" "$SRC/share/OpenMS/NUXL" "$share/"
 rm -f "$share"/CHEMISTRY/HMDB*
 cp -r "$BUILD/share/OpenMS/TOOLS" "$share/"
-models=()
-if [ "$WITH_ONNX" = true ]; then
-  model_dir=$(cache_value OPENMS_PEPTDEEP_MODEL_DIR)
-  mkdir -p "$share/models"
-  # the two ProSE uses (peptdeep:ms2_model, peptdeep:rt_model); the CCS model is for ion mobility
-  for model in peptdeep_ms2_dynamic.onnx peptdeep_rt_dynamic.onnx; do
-    [ -f "$model_dir/$model" ] || die "$model_dir/$model is missing (the configure step downloads it)"
-    cp "$model_dir/$model" "$share/models/"
-    models+=("share/OpenMS/models/$model")
-  done
-  # the models are AlphaPeptDeep's (Apache-2.0): its licence goes with them
-  cp "$HERE/../licenses/AlphaPeptDeep-LICENSE.txt" "$share/models/LICENSE-AlphaPeptDeep.txt"
-  cat > "$share/models/NOTICE.txt" <<'NOTICE'
-peptdeep_ms2_dynamic.onnx and peptdeep_rt_dynamic.onnx are the pretrained MS2 and retention time models of
-AlphaPeptDeep (https://github.com/MannLabs/alphapeptdeep), Copyright 2020 MannLabs, as ONNX models
-(OpenMS, http://archive.openms.de/openms/models). They are licensed under the Apache License 2.0:
-LICENSE-AlphaPeptDeep.txt.
-NOTICE
-fi
 
 # --- Licences -------------------------------------------------------------------------------------
 lic=$share/LICENSES
@@ -289,33 +281,35 @@ for path in ${debian_libs[@]+"${debian_libs[@]}"}; do
 done
 
 # --- The manifest -----------------------------------------------------------------------------------
-"$PY" -I - "$OUT/build.json" "$COMMIT" "$WITH_ONNX" "$TRIPLET" ${models[@]+"${models[@]}"} <<'PY'
+"$PY" -I - "$OUT/build.json" "$COMMIT" "$TRIPLET" "${TOOL_NAMES[@]}" <<'PY'
 import json, sys
-path, commit, onnx, triplet, *models = sys.argv[1:]
-manifest = {"tool": "ProSE", "openmsCommit": commit, "withOnnx": onnx == "true", "triplet": triplet, "models": models}
+path, commit, triplet, *tools = sys.argv[1:]
+manifest = {"tool": tools[0], "tools": tools, "openmsCommit": commit, "triplet": triplet}
 with open(path, "w") as f:
     json.dump(manifest, f, indent=2)
     f.write("\n")
 PY
 
 # --- Checks ---------------------------------------------------------------------------------------
-# Every bundled library resolves inside the bundle, and the tool runs in an empty environment.
+# Every bundled library resolves inside the bundle, and the tools run in an empty environment.
 # - Linux: also with a library path that offers the build's own copies first (DT_RPATH wins).
 # - macOS: every reference is the system's or @rpath/<a bundled dylib>, the LC_RPATHs are the bundle's
 #   only, the signatures are valid; the newest minimum macOS of the files goes into the manifest
 #   (`minimumMacos`; tauri.macos.conf.json's minimumSystemVersion must not be older).
-# - Windows: every import is bundled or Windows' own; the tool runs with only Windows' folders on PATH.
+# - Windows: every import is bundled or Windows' own; the tools run with only Windows' folders on PATH.
 run_empty() { env -i "$@"; }
 case $PLATFORM in
   linux)
-    for env_path in "" "$BUILD/lib:$BUILD/vcpkg_installed/$TRIPLET/lib"; do
-      resolved=$(env -i LD_LIBRARY_PATH="$env_path" ldd "$OUT/bin/ProSE")
-      if grep -q 'not found' <<<"$resolved"; then die "unresolved in the bundle:"$'\n'"$resolved"; fi
-      while read -r name arrow path _; do
-        [ "$arrow" = "=>" ] || continue
-        [[ $name =~ $EXCLUDE ]] && continue
-        [ "$(realpath "$path")" = "$OUT/lib/$name" ] || die "$name resolves to $path, not into the bundle (LD_LIBRARY_PATH=$env_path)"
-      done <<<"$resolved"
+    for exe in "$OUT"/bin/*; do
+      for env_path in "" "$BUILD/lib:$BUILD/vcpkg_installed/$TRIPLET/lib"; do
+        resolved=$(env -i LD_LIBRARY_PATH="$env_path" ldd "$exe")
+        if grep -q 'not found' <<<"$resolved"; then die "unresolved in the bundle ($exe):"$'\n'"$resolved"; fi
+        while read -r name arrow path _; do
+          [ "$arrow" = "=>" ] || continue
+          [[ $name =~ $EXCLUDE ]] && continue
+          [ "$(realpath "$path")" = "$OUT/lib/$name" ] || die "$name of $exe resolves to $path, not into the bundle (LD_LIBRARY_PATH=$env_path)"
+        done <<<"$resolved"
+      done
     done
     ;;
   macos)
@@ -339,15 +333,22 @@ PY
     run_empty() { env -i SYSTEMROOT="$SYSTEMROOT" WINDIR="$WINDIR" PATH="/c/Windows/System32:/c/Windows" "$@"; }
     ;;
 esac
-tool=$OUT/bin/$(basename "$EXE")
-version=$(run_empty "$tool" --help 2>&1 | sed -n 's/^ *Version: *\([^ ]*\).*/\1/p' | head -n 1)
-[ -n "$version" ] || die "the bundled ProSE does not run: $(run_empty "$tool" --help 2>&1 | tail -n 5)"
+# (both: PercolatorAdapter runs only at the end of a search, so a broken one would show late. OpenNuXL's help lists
+# the presets among the valid values of NuXL:presets, which it reads from share/OpenMS/NUXL; the help wraps its
+# lines, so line ends and indentation are squeezed to one space first.)
+for name in "${TOOL_NAMES[@]}"; do
+  tool=$OUT/bin/$name$SUFFIX
+  version=$(run_empty "$tool" --help 2>&1 | sed -n 's/^ *Version: *\([^ ]*\).*/\1/p' | head -n 1)
+  [ -n "$version" ] || die "the bundled $name does not run: $(run_empty "$tool" --help 2>&1 | tail -n 5)"
+done
+run_empty "$OUT/bin/OpenNuXL$SUFFIX" --help 2>&1 | tr -s ' \n' '  ' | grep -q 'RNA-UV (U)' \
+  || die "the bundled OpenNuXL does not list the presets of share/OpenMS/NUXL/nuxl_presets.json"
 
-echo "bundled ProSE $version (OpenMS $COMMIT, ONNX: $WITH_ONNX) into $OUT"
+echo "bundled OpenNuXL and PercolatorAdapter $version (OpenMS $COMMIT) into $OUT"
 [ "${#excluded[@]}" -gt 0 ] && echo "  left out (system): ${excluded[*]}"
 libs=$OUT/lib
 [ "$PLATFORM" = windows ] && libs=$OUT/bin
 echo "  libraries: $(find "$libs" -type f | wc -l | tr -d ' ') (of the system: ${system_libs[*]+${system_libs[*]##*/}}), OpenMP runtime: ${omp[*]}"
-for part in "" /bin /lib /share/OpenMS /share/OpenMS/models; do
+for part in "" /bin /lib /share/OpenMS; do
   if [ -d "$OUT$part" ]; then echo "  $(du -sh "$OUT$part" | cut -f1)	${part:-total}"; fi
 done

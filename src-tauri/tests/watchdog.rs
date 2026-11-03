@@ -2,15 +2,15 @@
 //! on every Unix, so it is tested here on Linux too, with the app's executable as the watchdog.
 #![cfg(unix)]
 
-use prose_desktop_lib::watchdog::{from_args, FLAG};
+use nuxl_desktop_lib::watchdog::{from_args, FLAG};
 use std::ffi::OsString;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-const APP: &str = env!("CARGO_BIN_EXE_prose-desktop");
+const APP: &str = env!("CARGO_BIN_EXE_nuxl-desktop");
 
-/// The "tool": a process group of its own, as the shim starts ProSE.
+/// The "tool": a process group of its own, as the shim starts OpenNuXL.
 fn tool(seconds: u32) -> Child {
     Command::new("sleep")
         .arg(seconds.to_string())
@@ -73,16 +73,16 @@ fn the_watchdog_ends_itself_when_the_search_is_over() {
 #[test]
 fn a_command_line_without_the_flag_is_the_apps() {
     let args = |a: &[&str]| a.iter().map(OsString::from).collect::<Vec<_>>();
-    assert_eq!(from_args(&args(&["prose-desktop"])), None);
-    assert_eq!(from_args(&args(&["prose-desktop", "--smoke-test"])), None);
+    assert_eq!(from_args(&args(&["nuxl-desktop"])), None);
+    assert_eq!(from_args(&args(&["nuxl-desktop", "--smoke-test"])), None);
     // the flag with what is not a pid: refused, and never a group of 1 or below (kill(-1) is everyone's)
     for bad in [
-        &["prose-desktop", FLAG][..],
-        &["prose-desktop", FLAG, "12"],
-        &["prose-desktop", FLAG, "x", "12"],
-        &["prose-desktop", FLAG, "12", "1"],
-        &["prose-desktop", FLAG, "12", "0"],
-        &["prose-desktop", FLAG, "12", "-5"],
+        &["nuxl-desktop", FLAG][..],
+        &["nuxl-desktop", FLAG, "12"],
+        &["nuxl-desktop", FLAG, "x", "12"],
+        &["nuxl-desktop", FLAG, "12", "1"],
+        &["nuxl-desktop", FLAG, "12", "0"],
+        &["nuxl-desktop", FLAG, "12", "-5"],
     ] {
         assert_eq!(from_args(&args(bad)), Some(2), "{bad:?}");
     }

@@ -12,8 +12,8 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
-if [ -z "${PROSE_IN_ENV:-}" ]; then
-  export PROSE_IN_ENV=1
+if [ -z "${NUXL_IN_ENV:-}" ]; then
+  export NUXL_IN_ENV=1
   exec "$ROOT/native/scripts/in-env.sh" "$ROOT/e2e/run.sh" "$@"
 fi
 

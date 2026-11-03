@@ -232,7 +232,11 @@ impl ProgressTracker {
             return self.step(Stage::Autotune, AUTOTUNE, self.label_of("Autotune:", true));
         }
         if line.starts_with("Calculating peptide and XL q-values for percolator results") {
-            return self.step(Stage::Percolator, PERCOLATOR_FDR, self.label_of("FDR:", true));
+            return self.step(
+                Stage::Percolator,
+                PERCOLATOR_FDR,
+                self.label_of("FDR:", true),
+            );
         }
         if line.starts_with("Calculating peptide and XL q-values") {
             return self.step(Stage::Fdr, FDR, self.label_of("FDR:", true));
@@ -454,7 +458,10 @@ mod tests {
     #[test]
     fn each_run_is_an_equal_part_of_the_search() {
         let names = ["a.mzML", "b.mzML", "c.mzML"];
-        let steps = steps(&names, &[run_lines(false), run_lines(true), run_lines(false)]);
+        let steps = steps(
+            &names,
+            &[run_lines(false), run_lines(true), run_lines(false)],
+        );
         for (k, name) in names.iter().enumerate() {
             let start = steps
                 .iter()
@@ -477,7 +484,9 @@ mod tests {
         // only the second run was rescored
         let l = labels(&steps);
         assert_eq!(
-            l.iter().filter(|l| l.starts_with("Percolator:")).collect::<Vec<_>>(),
+            l.iter()
+                .filter(|l| l.starts_with("Percolator:"))
+                .collect::<Vec<_>>(),
             [&"Percolator: b.mzML (2 of 3)..."]
         );
         assert_monotone(&steps);
@@ -494,7 +503,9 @@ mod tests {
         let steps = steps(&["x.mzML"], &[lines]);
         let l = labels(&steps);
         assert_eq!(l[1], "Reading the spectra of x.mzML (1 of 1)...");
-        assert!(!l.iter().any(|l| l.starts_with("Autotune") || l.starts_with("Generating")));
+        assert!(!l
+            .iter()
+            .any(|l| l.starts_with("Autotune") || l.starts_with("Generating")));
         assert_monotone(&steps);
     }
 
@@ -512,9 +523,14 @@ mod tests {
         assert!(tracker.feed("10.00 %").is_none());
         assert!(tracker.feed("50.00 %").is_none());
         let q = tracker.feed("50.70 %").unwrap();
-        assert!(q.fraction > p.fraction && q.label == p.label, "{q:?} after {p:?}");
+        assert!(
+            q.fraction > p.fraction && q.label == p.label,
+            "{q:?} after {p:?}"
+        );
         // a step of an earlier stage, after the scoring began: nothing
-        assert!(tracker.feed("Progress of 'Filtering spectra...':").is_none());
+        assert!(tracker
+            .feed("Progress of 'Filtering spectra...':")
+            .is_none());
         assert!(tracker.feed("Running autotune...").is_none());
     }
 

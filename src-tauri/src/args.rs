@@ -315,9 +315,7 @@ fn stem_key(name: &str) -> String {
 /// output).
 pub fn stems_clash(a: &str, b: &str) -> bool {
     let under = |long: &str, short: &str| {
-        long.len() > short.len()
-            && long.starts_with(short)
-            && long[short.len()..].starts_with('_')
+        long.len() > short.len() && long.starts_with(short) && long[short.len()..].starts_with('_')
     };
     a == b || under(a, b) || under(b, a)
 }
@@ -434,7 +432,17 @@ fn check_input(path: &str) -> Result<(), String> {
         ));
     }
     if !is_spectrum_file(&name) {
-        return Err(format!("The input file {path} is not an mzML file (.mzML)."));
+        return Err(format!(
+            "The input file {path} is not an mzML file (.mzML)."
+        ));
+    }
+    // OpenNuXL names its derived outputs by replacing every ".idXML" of the -out path (`StringUtils::substitute`):
+    // one in the stem would give them names the shim does not find
+    if input_stem(&name).contains(".idXML") {
+        return Err(format!(
+            "OpenNuXL cannot name its result files after {name}, which has \".idXML\" in its name: rename the file \
+             and add it again."
+        ));
     }
     Ok(())
 }
@@ -699,7 +707,8 @@ pub fn build_runs_with(
     } else {
         OsString::from(&req.database)
     };
-    let protein_fdr = (settings.xl_fdr <= MAX_PROTEIN_REPORT_FDR).then(|| settings.xl_fdr.to_string());
+    let protein_fdr =
+        (settings.xl_fdr <= MAX_PROTEIN_REPORT_FDR).then(|| settings.xl_fdr.to_string());
     let records = input_records_with(req, links, out_dir);
     let placements = input_placements(req, links, out_dir);
     let runs = records

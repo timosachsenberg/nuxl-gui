@@ -1,7 +1,7 @@
 // Screenshots of the app for docs/screens, at the web app's screenshot size (1440×900), to compare
 // with the web app's (docs/screens/compare.html). Not part of the e2e run (the name has no `.spec.`):
-//   PROSE_BIN=… e2e/run.sh e2e/screens.shot.ts
-// Runs the example as the web app's screenshots did (PeptDeep on), then the views; removes its search
+//   NUXL_TOOL=… e2e/run.sh e2e/screens.shot.ts
+// Runs the example, then the views; removes its search
 // folder at the end.
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -30,9 +30,7 @@ describe('screens', () => {
     await shot('01-new-search-empty')
 
     await $('button=Try the example').click()
-    await browser.waitUntil(async () => (await text('[data-testid="fasta-proteins"]')).includes('4,136 proteins'), { timeout: 20000 })
-    // as the web app's screenshots: PeptDeep on
-    await $('#peptdeep').click()
+    await browser.waitUntil(async () => (await text('[data-testid="fasta-proteins"]')).includes('5 proteins'), { timeout: 20000 })
     await browser.execute(() => window.scrollTo(0, 0))
     await shot('02-new-search-files')
 

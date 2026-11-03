@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url'
 
 /** The example's run and FASTA, as the app bundles them (src-tauri/resources/example). */
 export const EXAMPLE_DIR = resolve(fileURLToPath(new URL('../src-tauri/resources/example', import.meta.url)))
-export const EXAMPLE_MZML = join(EXAMPLE_DIR, 'Ecoli_MS2_small.mzML')
-export const EXAMPLE_FASTA = join(EXAMPLE_DIR, 'Ecoli_K12_proteome.fasta')
+export const EXAMPLE_MZML = join(EXAMPLE_DIR, 'OpenNuXL_1_input.mzML')
+export const EXAMPLE_FASTA = join(EXAMPLE_DIR, 'OpenNuXL_1_input.fasta')
 
 /** The spec's own data folder (XDG_DATA_HOME of its app; wdio.conf.ts sets it). */
 export function dataHome(): string {
@@ -18,7 +18,7 @@ export function dataHome(): string {
 }
 
 /** The folder of the app's searches, `appDataDir()/searches`. */
-export const searchesDir = () => join(dataHome(), 'org.openms.prose.desktop', 'searches')
+export const searchesDir = () => join(dataHome(), 'org.openms.nuxl.desktop', 'searches')
 
 /** The folders of the searches dir: finished (`<id>`) and running (`<id>.partial`). */
 export function searchFolders(): { finished: string[]; partial: string[] } {
@@ -50,8 +50,8 @@ export function findProcesses(needle: string, comm?: string): Proc[] {
   return found
 }
 
-/** ProSE processes working in the spec's data folder (the tool's command line names the search folder). */
-export const proseProcesses = () => findProcesses(dataHome(), 'ProSE')
+/** OpenNuXL processes working in the spec's data folder (the tool's command line names the search folder). */
+export const toolProcesses = () => findProcesses(dataHome(), 'OpenNuXL')
 
 /** The app processes (the debug build) of the spec's data folder: found by the XDG_DATA_HOME of their environment. */
 export function appProcesses(): Proc[] {
@@ -59,10 +59,10 @@ export function appProcesses(): Proc[] {
   for (const entry of readdirSync('/proc')) {
     if (!/^\d+$/.test(entry)) continue
     try {
-      if (readFileSync(`/proc/${entry}/comm`, 'utf8').trim() !== 'prose-desktop') continue
+      if (readFileSync(`/proc/${entry}/comm`, 'utf8').trim() !== 'nuxl-desktop') continue
       const env = readFileSync(`/proc/${entry}/environ`, 'utf8').split('\0')
       if (env.includes(`XDG_DATA_HOME=${dataHome()}`)) {
-        found.push({ pid: Number(entry), comm: 'prose-desktop', cmdline: readFileSync(`/proc/${entry}/cmdline`, 'utf8').split('\0').join(' ') })
+        found.push({ pid: Number(entry), comm: 'nuxl-desktop', cmdline: readFileSync(`/proc/${entry}/cmdline`, 'utf8').split('\0').join(' ') })
       }
     } catch {
       // ended meanwhile, or not ours to read
@@ -157,7 +157,7 @@ export async function waitForResults(timeout = 180000): Promise<string> {
  */
 export function closeWindowLikeAUser(appPid: number) {
   const tree = execFileSync('xwininfo', ['-root', '-tree']).toString()
-  const ids = [...tree.matchAll(/^\s+(0x[0-9a-f]+) "ProSE":/gm)].map((m) => m[1])
+  const ids = [...tree.matchAll(/^\s+(0x[0-9a-f]+) "NuXL":/gm)].map((m) => m[1])
   const window = ids.find((id) => {
     const pid = /_NET_WM_PID\(CARDINAL\) = (\d+)/.exec(execFileSync('xprop', ['-id', id, '_NET_WM_PID']).toString())?.[1]
     return Number(pid) === appPid
@@ -170,14 +170,11 @@ export function closeWindowLikeAUser(appPid: number) {
  * A finished search of the example, through the screens, for a test that needs a result: a fresh New
  * search form, "Try the example", Start, and the results open. Returns the search's id.
  */
-export async function runExample(options: { peptdeep?: boolean } = {}): Promise<string> {
+export async function runExample(): Promise<string> {
   await freshForm()
   await $('button=Try the example').click()
-  await expect($('[data-testid="fasta-proteins"]')).toHaveText('4,136 proteins')
-  if (options.peptdeep) {
-    await $('#peptdeep').click()
-    await expect($('#peptdeep')).toHaveAttribute('aria-checked', 'true')
-  }
+  // (the example's FASTA, OpenNuXL_1_input.fasta: src-tauri/tests/files.rs)
+  await expect($('[data-testid="fasta-proteins"]')).toHaveText('5 proteins')
   await $('button*=Start search').click()
   const id = await waitForResults()
   await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 30000 })

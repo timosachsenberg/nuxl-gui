@@ -1,9 +1,9 @@
 #!/bin/bash
-# Builds the app's macOS packages, ProSE.app and the .dmg (arm64), with the bundled ProSE in them.
+# Builds the app's macOS packages, NuXL.app and the .dmg (arm64), with the bundled OpenNuXL in them.
 #
-#   package-macos.sh        (src-tauri/resources/prose has to be filled first: bundle-prose.sh)
+#   package-macos.sh        (src-tauri/resources/nuxl has to be filled first: bundle-nuxl.sh)
 #
-# Tauri copies resources/prose into ProSE.app/Contents/Resources/resources/prose as it is (bundle-prose.sh
+# Tauri copies resources/nuxl into NuXL.app/Contents/Resources/resources/nuxl as it is (bundle-nuxl.sh
 # has made the dylibs relocatable and ad-hoc signed them). The app is signed ad hoc too
 # (tauri.macos.conf.json: signingIdentity "-", no hardened runtime): no Developer ID, no notarization;
 # arm64 Macs run no unsigned code, and an ad-hoc signed bundle can be opened after the user's consent
@@ -19,13 +19,13 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-PROSE=$ROOT/src-tauri/resources/prose
+NUXL=$ROOT/src-tauri/resources/nuxl
 BUNDLE_DIR=$ROOT/src-tauri/target/release/bundle
 die() { echo "error: $*" >&2; exit 1; }
-[ -x "$PROSE/bin/ProSE" ] && [ -f "$PROSE/build.json" ] \
-  || die "src-tauri/resources/prose holds no bundled ProSE: run native/scripts/bundle-prose.sh <openms-build> src-tauri/resources/prose"
+[ -x "$NUXL/bin/OpenNuXL" ] && [ -x "$NUXL/bin/PercolatorAdapter" ] && [ -f "$NUXL/build.json" ] \
+  || die "src-tauri/resources/nuxl holds no bundled OpenNuXL: run native/scripts/bundle-nuxl.sh <openms-build> src-tauri/resources/nuxl"
 
-python3 -I - "$PROSE/build.json" "$ROOT/src-tauri/tauri.macos.conf.json" <<'PY'
+python3 -I - "$NUXL/build.json" "$ROOT/src-tauri/tauri.macos.conf.json" <<'PY'
 import json, sys
 need = json.load(open(sys.argv[1])).get("minimumMacos")
 have = json.load(open(sys.argv[2]))["bundle"]["macOS"]["minimumSystemVersion"]
@@ -33,7 +33,7 @@ if not need:
     sys.exit("the bundle's build.json names no minimumMacos")
 key = lambda v: tuple(int(x) for x in v.split("."))
 if key(need) > key(have):
-    sys.exit(f"the bundled ProSE needs macOS {need}, the app says {have} (tauri.macos.conf.json)")
+    sys.exit(f"the bundled OpenNuXL needs macOS {need}, the app says {have} (tauri.macos.conf.json)")
 print(f"minimum macOS: bundle {need}, app {have}")
 PY
 
@@ -47,10 +47,12 @@ done
 
 app=$(find "$BUNDLE_DIR/macos" -maxdepth 1 -name '*.app' | head -n 1)
 [ -n "$app" ] || die "no .app in $BUNDLE_DIR/macos"
-inside=$app/Contents/Resources/resources/prose
-[ -x "$inside/bin/ProSE" ] || die "$inside/bin/ProSE is missing"
-diff <(cd "$PROSE" && find . -type f | sort) <(cd "$inside" && find . -type f | sort) \
-  || die "the app's resources/prose is not the bundle"
+inside=$app/Contents/Resources/resources/nuxl
+for exe in OpenNuXL PercolatorAdapter; do
+  [ -x "$inside/bin/$exe" ] || die "$inside/bin/$exe is missing"
+done
+diff <(cd "$NUXL" && find . -type f | sort) <(cd "$inside" && find . -type f | sort) \
+  || die "the app's resources/nuxl is not the bundle"
 python3 -I "$ROOT/native/scripts/bundle_closure.py" macho-verify "$inside"
 [ -s "$app/Contents/Resources/resources/notices/THIRD-PARTY-NOTICES.txt" ] || die "the app has no third-party notices"
 codesign --verify --verbose=1 "$app"
