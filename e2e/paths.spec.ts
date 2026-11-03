@@ -1,8 +1,8 @@
-// Inputs by path, as the file manager would hand them over: names with spaces and umlauts, two inputs
-// of the same name from different folders, and an mzML.gz. The example's run and FASTA are copied into
-// folders made for the spec; the app reads them where they are. They are searched with the example's fragment
-// tolerance of 0.5 Da, set by hand (lib.ts exampleSettings).
-// Gated: runs only with NUXL_TOOL set (the app inherits it).
+// Inputs by path, as the file manager would hand them over: names with spaces and umlauts, names whose lower case is
+// longer, two inputs of the same name from different folders, and an mzML.gz (which OpenNuXL cannot read: refused
+// with its message). The example's run and FASTA are copied into folders made for the spec; the app reads them where
+// they are. They are searched with the example's precursor tolerance, set by hand (lib.ts exampleSettings).
+// Gated: runs only with NUXL_TOOL set (the app inherits it; NUXL_FAKE=1 sets it to the stand-in, e2e/run.sh).
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -10,12 +10,16 @@ import { gzipSync } from 'node:zlib'
 import {
   appReady,
   clearSearches,
+  countOf,
   dataHome,
   dropFiles,
   EXAMPLE_FASTA as FASTA,
   EXAMPLE_MZML as MZML,
+  EXAMPLE_PROTEINS,
+  EXAMPLE_PSMS,
   exampleSettings,
   goTo,
+  searchesDir,
   searchFolders,
   textOf,
   waitForResults,
@@ -30,7 +34,7 @@ describe('inputs by path', () => {
 
   before(async function () {
     if (!enabled) {
-      console.log('skipped: set NUXL_TOOL to run searches through the app')
+      console.log('skipped: set NUXL_TOOL (or NUXL_FAKE=1) to run searches through the app')
       this.skip()
     }
     work = mkdtempSync(join(tmpdir(), 'nuxl-e2e-paths-'))
@@ -49,25 +53,25 @@ describe('inputs by path', () => {
     if (work) rmSync(work, { recursive: true, force: true })
   })
 
-  /** Drops the paths on New search, starts the search and returns the text of the PSM count. */
-  async function search(paths: string[], fileName: string) {
+  /** Drops the paths on New search, starts the search and returns its PSM count. */
+  async function search(paths: string[], fileName: string): Promise<number> {
     await exampleSettings()
     await dropFiles(paths)
     // the table lists the file (one file has no design summary)
     await browser.waitUntil(async () => (await textOf('[data-testid="design-scroll"]')).includes(fileName), {
       timeoutMsg: `${fileName} is not in the table`,
     })
-    await expect($('[data-testid="fasta-proteins"]')).toHaveText('4,136 proteins')
+    await expect($('[data-testid="fasta-proteins"]')).toHaveText(EXAMPLE_PROTEINS)
     await $('button*=Start search').click()
     await waitForResults()
-    const count = $('[data-testid="psm-count"]')
-    await count.waitForDisplayed({ timeout: 20000 })
-    return textOf('[data-testid="psm-count"]')
+    await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 20000 })
+    return countOf('psm-count')
   }
 
   it('paths with spaces and umlauts', async () => {
     const count = await search([umlautRun, umlautFasta], 'Probe Größe ä ö ü.mzML')
-    expect(count).toMatch(/\d/)
+    expect(count).toBeGreaterThan(0)
+    if (EXAMPLE_PSMS) expect(count).toBe(EXAMPLE_PSMS.psms)
     // the result's name keeps the letters: spaces become "_" and the umlauts stay
     expect(await textOf('[data-testid="result-chip"]')).toContain('Probe_Größe_ä_ö_ü · 1 file')
     await goTo('History')
@@ -82,27 +86,37 @@ describe('inputs by path', () => {
     expect(searchFolders().partial).toEqual([])
   })
 
-  it('an mzML.gz searches like its mzML', async () => {
-    const plainCount = await search([umlautRun, umlautFasta], 'Probe Größe ä ö ü.mzML')
+  it('an mzML.gz is refused with what to do instead (OpenNuXL reads plain mzML only)', async () => {
     const gz = join(work, 'Probe Größe ä ö ü.mzML.gz')
     writeFileSync(gz, gzipSync(readFileSync(MZML)))
-    const count = await search([gz, umlautFasta], 'Probe Größe ä ö ü.mzML.gz')
-    expect(count).toBe(plainCount)
+    await exampleSettings()
+    await dropFiles([gz, umlautFasta])
+    await expect($('[data-testid="fasta-proteins"]')).toHaveText(EXAMPLE_PROTEINS)
+    const notice = 'Probe Größe ä ö ü.mzML.gz is compressed. OpenNuXL reads plain mzML only: decompress it first (e.g. with gunzip), then add the .mzML.'
+    await browser.waitUntil(async () => (await browser.execute(() => document.body.textContent ?? '')).includes(notice), {
+      timeout: 10000,
+      timeoutMsg: 'no notice of the compressed file',
+    })
+    // the file is not added: no spectra, nothing to start
+    await expect($('button=Try the example')).toBeDisplayed()
+    expect(await textOf('[data-testid="search-plan"]')).toBe('No spectra yet')
+    await expect($('button*=Start search')).toBeDisabled()
+    expect(searchFolders()).toEqual({ finished: [], partial: [] })
   })
 
   it('names whose lower case is longer (İ, Ⱥ) keep their PSMs, and one file exports its idXML', async () => {
     // the stem of such a name was cut at the lower-cased copy's offsets, and the reader found no PSMs
     const plainCount = await search([umlautRun, umlautFasta], 'Probe Größe ä ö ü.mzML')
-    const odd = join(work, 'İstanbul Ⱥ run.mzML.gz')
-    writeFileSync(odd, gzipSync(readFileSync(MZML)))
-    const count = await search([odd, umlautFasta], 'İstanbul Ⱥ run.mzML.gz')
+    const odd = join(work, 'İstanbul Ⱥ run.mzML')
+    copyFileSync(MZML, odd)
+    const count = await search([odd, umlautFasta], 'İstanbul Ⱥ run.mzML')
     expect(count).toBe(plainCount)
-    expect(count).not.toMatch(/^\s*0\b/)
-    // Export > idXML: the file's own idXML (OpenNuXL writes the merged one only for several files)
+    expect(count).toBeGreaterThan(0)
+    // Export > idXML: the file's own idXML (every PSM of its OpenNuXL run)
     const chosen = join(dataHome(), 'chosen.nuxl')
     rmSync(chosen, { force: true })
     await $('header').$('button*=Export').click()
-    await $('[role="menuitem"]*=idXML').click()
+    await $('[role="menuitem"]=idXML').click()
     await browser.waitUntil(() => existsSync(chosen) && readFileSync(chosen).length > 0, { timeoutMsg: 'no idXML was written' })
     const idxml = readFileSync(chosen, 'utf8')
     expect(idxml).toContain('<IdXML')
@@ -127,11 +141,13 @@ describe('inputs by path', () => {
     expect(folders).toContain('erste Ablage')
     expect(folders).toContain('zweite Ablage')
     await $('button*=Start search').click()
-    await waitForResults()
-    const count = $('[data-testid="psm-count"]')
-    await count.waitForDisplayed({ timeout: 20000 })
-    // two copies of the run give what the example's two names give
-    await expect(count).toHaveText(expect.stringContaining('154'))
+    const id = await waitForResults()
+    await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 20000 })
+    // one run per file, each with its own outputs (the stems are told apart by their position: 1__Lauf, 2__Lauf)
+    const outputs = readdirSync(join(searchesDir(), id, 'nuxl'))
+    expect(outputs.filter((f) => f.endsWith('.outputs.json')).sort()).toEqual(['1__Lauf.outputs.json', '2__Lauf.outputs.json'])
+    // two copies of the run give twice its PSMs
+    if (EXAMPLE_PSMS) expect(await countOf('psm-count')).toBe(2 * EXAMPLE_PSMS.psms)
     expect(await textOf('[data-testid="result-chip"]')).toContain('2 files')
   })
 })

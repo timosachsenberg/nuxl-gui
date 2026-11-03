@@ -118,8 +118,8 @@
     <div>
       <h1 class="mb-1 text-xl font-semibold tracking-tight">History</h1>
       <p class="text-muted-foreground">
-        Finished searches are saved on this computer with their results and the spectra of their PSMs. Your mzML files
-        stay where they are.
+        Finished searches are saved on this computer with their results. Your mzML files stay where they are: the PSM
+        view reads the spectra from them.
       </p>
     </div>
     <div>

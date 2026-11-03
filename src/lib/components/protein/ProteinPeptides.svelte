@@ -157,7 +157,7 @@
           <th scope="col" rowspan={hasGroups ? 2 : 1} class={th} title="Best PSM q-value">best q</th>
           {#if hasGroups}
             {#each groups as g, i (i)}
-              <th scope="colgroup" colspan={g.size} class="h-7 border-b border-l px-1 pt-1 text-center text-xs font-semibold text-foreground">{g.name ?? ''}</th>
+              <th scope="colgroup" colspan={g.size} class="h-7 truncate border-b border-l px-1 pt-1 text-center text-xs font-semibold text-foreground" title={g.name ?? undefined}>{g.name ?? ''}</th>
             {/each}
           {:else}
             {#each m.samples as s (s.index)}<th scope="col" class={th} title={s.label}>{s.label}</th>{/each}

@@ -1,12 +1,13 @@
 // The window closes during a search: the app asks first; closed, it ends, and no OpenNuXL of its data folder
 // outlives it.
-// Gated: runs only with NUXL_TOOL set (the app inherits it). These tests end the app, so they have a file
+// Gated: runs only with NUXL_TOOL set (the app inherits it; NUXL_FAKE=1 sets it to the stand-in, e2e/run.sh). These tests end the app, so they have a file
 // of their own. Each test starts its own search and ends the app, so each runs alone.
 import {
   appProcesses,
   appReady,
   clearSearches,
   closeWindowLikeAUser,
+  fakeDelay,
   toolProcesses,
   searchFolders,
   startLongSearch,
@@ -19,7 +20,7 @@ const enabled = Boolean(process.env.NUXL_TOOL)
 /** A search (the example's run as many files, lib.ts startLongSearch), started and in a file's step: OpenNuXL runs. */
 async function searchRunning() {
   await startLongSearch()
-  await browser.waitUntil(async () => /Searching/.test(await textOf('[data-testid="search-progress"]')), { timeout: 60000, interval: 100 })
+  await browser.waitUntil(async () => /Searching|Scoring/.test(await textOf('[data-testid="search-progress"]')), { timeout: 60000, interval: 100 })
   expect(toolProcesses()).toHaveLength(1)
   expect(appProcesses()).toHaveLength(1)
   expect(searchFolders().partial).toHaveLength(1)
@@ -30,13 +31,16 @@ const gone = (what: () => unknown[], message: string) => browser.waitUntil(() =>
 describe('closing the window', () => {
   before(async function () {
     if (!enabled) {
-      console.log('skipped: set NUXL_TOOL to run a search through the app')
+      console.log('skipped: set NUXL_TOOL (or NUXL_FAKE=1) to run a search through the app')
       this.skip()
     }
     await appReady()
   })
 
-  afterEach(() => clearSearches())
+  afterEach(() => {
+    fakeDelay(0)
+    clearSearches()
+  })
 
   it('closing the window asks first, and then ends OpenNuXL', async function () {
     const missing = windowCloseToolsMissing()

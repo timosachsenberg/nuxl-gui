@@ -442,7 +442,7 @@
     </p>
   </div>
   <!-- the cross-link: adduct, residue (the candidates of the localization marked), FDR group and q-value at its FDR -->
-  <p class="-mt-1 mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-muted-foreground tabular-nums" data-testid="psm-crosslink" title={crossLinkText}>
+  <p class="mt-1 mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-muted-foreground tabular-nums" data-testid="psm-crosslink" title={crossLinkText}>
     <span class="sr-only">{crossLinkText}.</span>
     <span aria-hidden="true" class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
       {#if isXL}

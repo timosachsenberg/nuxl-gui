@@ -1,11 +1,11 @@
 // The Rust shim through the app's IPC: tool_info, start_search with its events, cancel_search.
-// Gated: runs only with NUXL_TOOL set (the app inherits it) and the example data (NUXL_EXAMPLE_DIR, default the
+// Gated: runs only with NUXL_TOOL set (or NUXL_FAKE=1: e2e/run.sh sets NUXL_TOOL to the fake) (the app inherits it) and the example data (NUXL_EXAMPLE_DIR, default the
 // app's src-tauri/resources/example). It writes the finished search into the app data folder and removes it at the
 // end.
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { EXAMPLE_DIR } from './lib.ts'
+import { EXAMPLE_DIR, fakeDelay } from './lib.ts'
 
 const example = process.env.NUXL_EXAMPLE_DIR ?? EXAMPLE_DIR
 const mzml = join(example, 'OpenNuXL_1_input.mzML')
@@ -115,12 +115,15 @@ describe('the shim', () => {
       const e = (window as any).__events
       e.progress.length = e.done.length = e.failed.length = 0
     })
-    // (the example takes seconds; with adducts of up to four nucleotides it runs long enough to be cancelled)
+    // (the example takes seconds; with adducts of up to four nucleotides it runs long enough to be cancelled; the
+    // fake takes its time per scoring step)
+    fakeDelay(5)
     const { result } = await invoke('start_search', { request: request('', { 'NuXL:length': 4 }).request })
     await browser.waitUntil(async () => (await events()).progress.some((p: any) => p.label.startsWith('Searching')), { timeout: 30000 })
     const { failure } = await invoke('cancel_search', { searchId: result.searchId })
     expect(failure).toBeUndefined()
     await browser.pause(1500)
+    fakeDelay(0)
     const e = await events()
     expect(e.done).toEqual([])
     expect(e.failed).toEqual([])

@@ -71,7 +71,7 @@ export function columnSpecs(m: ResultModel, level: Level): ColumnSpec[] {
   if (level === 'peptides') {
     return [
       col('peptide', 'Peptide', 'auto', 'left', { sortKey: 'sequence' }),
-      col('adduct', 'Adduct', 110, 'left', { csv: ['adduct', 'crossLink'], optional: 'shown', title: 'Nucleic acid adduct of the precursor (OpenNuXL)' }),
+      col('adduct', 'Adduct', 150, 'left', { csv: ['adduct', 'crossLink'], optional: 'shown', title: 'Nucleic acid adduct of the precursor (OpenNuXL)' }),
       col('proteins', 'Proteins', 190, 'left'),
       col('psms', 'PSMs', 84, 'right', { title: 'PSMs that pass the Best PSM q-value filter' }),
       ...sampleSpecs(m),
@@ -82,7 +82,7 @@ export function columnSpecs(m: ResultModel, level: Level): ColumnSpec[] {
   }
   return [
     col('peptide', 'Peptide', 'auto', 'left', { sortKey: 'sequence' }),
-    col('adduct', 'Adduct', 110, 'left', { csv: ['crossLink', 'adduct', 'adductMass', 'nucleotide'], optional: 'shown', title: 'Nucleic acid adduct of the precursor (OpenNuXL)' }),
+    col('adduct', 'Adduct', 150, 'left', { csv: ['crossLink', 'adduct', 'adductMass', 'nucleotide'], optional: 'shown', title: 'Nucleic acid adduct of the precursor (OpenNuXL)' }),
     col('site', 'Site', 64, 'left', { csv: ['site', 'siteScore'], optional: 'shown', title: 'Cross-linked residue (OpenNuXL’s best localization)' }),
     col('proteins', 'Proteins', 150, 'left'),
     col('sample', 'Sample', 96, 'left'),

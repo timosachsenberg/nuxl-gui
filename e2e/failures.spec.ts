@@ -1,11 +1,22 @@
 // A search that is cancelled, and one whose OpenNuXL is killed from outside: neither leaves anything in
 // History or in the searches folder, the failure names its stage, and the next search runs.
-// Gated: runs only with NUXL_TOOL set (the app inherits it).
-import { existsSync, readFileSync } from 'node:fs'
+// With the fake (NUXL_FAKE=1), also an OpenNuXL that fails: the app shows OpenNuXL's own message.
+// Gated: runs only with NUXL_TOOL set (the app inherits it; NUXL_FAKE=1 sets it to the stand-in, e2e/run.sh).
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
   appReady,
   clearSearches,
+  countOf,
+  dataHome,
+  dropFiles,
+  EXAMPLE_FASTA,
+  EXAMPLE_MZML,
+  EXAMPLE_PROTEINS,
+  EXAMPLE_PSMS,
+  exampleSettings,
+  FAKE,
+  fakeDelay,
   goTo,
   LONG_SEARCH_FILES,
   toolProcesses,
@@ -22,9 +33,9 @@ const enabled = Boolean(process.env.NUXL_TOOL)
 /** New search with the example's run as many files (lib.ts startLongSearch), and Start. */
 const startExample = startLongSearch
 
-/** The search is in a file's step (the file is being searched). */
+/** The search is in a file's step (the file is being searched or scored). */
 const searching = () =>
-  browser.waitUntil(async () => /Searching/.test(await textOf('[data-testid="search-progress"]')), {
+  browser.waitUntil(async () => /Searching|Scoring/.test(await textOf('[data-testid="search-progress"]')), {
     timeout: 60000,
     interval: 100,
     timeoutMsg: 'the search never got to a file',
@@ -39,13 +50,16 @@ async function expectNothingKept() {
 
 /** The next search runs: the same files once more, to its results. */
 async function nextSearchRuns() {
+  fakeDelay(0)
   await goTo('New search')
   // New search kept the files and the choices; Start again
   await $('button*=Start search').waitForClickable({ timeout: 20000 })
   await $('button*=Start search').click()
   await waitForResults()
-  // each copy of the example's run has the example's 77 PSMs
-  await expect($('[data-testid="psm-count"]')).toHaveText(expect.stringContaining((77 * LONG_SEARCH_FILES).toLocaleString('en-US')))
+  await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 30000 })
+  expect(await textOf('[data-testid="result-chip"]')).toContain(`${LONG_SEARCH_FILES} files`)
+  // each copy of the example's run has the example's PSMs
+  if (EXAMPLE_PSMS) expect(await countOf('psm-count')).toBe(EXAMPLE_PSMS.psms * LONG_SEARCH_FILES)
   expect(searchFolders().finished).toHaveLength(1)
   expect(searchFolders().partial).toEqual([])
 }
@@ -53,13 +67,16 @@ async function nextSearchRuns() {
 describe('a search that does not finish', () => {
   before(async function () {
     if (!enabled) {
-      console.log('skipped: set NUXL_TOOL to run searches through the app')
+      console.log('skipped: set NUXL_TOOL (or NUXL_FAKE=1) to run searches through the app')
       this.skip()
     }
     await appReady()
   })
 
-  afterEach(() => clearSearches())
+  afterEach(() => {
+    fakeDelay(0)
+    clearSearches()
+  })
 
   it('cancel leaves nothing in History and the next search runs', async () => {
     await startExample()
@@ -97,7 +114,7 @@ describe('a search that does not finish', () => {
     expect(text).toContain('The search stopped')
     // the stage and the file it was searching, and what happened to OpenNuXL
     expect(text).toContain('While searching')
-    expect(text).toMatch(/Ecoli_\d+\.mzML/)
+    expect(text).toMatch(/XL_run_\d+\.mzML/)
     // how OpenNuXL ended leads the message
     expect(text).toContain('OpenNuXL crashed (signal 9, SIGKILL')
     // its log is kept in the app's data (and named in the details)
@@ -110,5 +127,31 @@ describe('a search that does not finish', () => {
     expect(toolProcesses()).toEqual([])
     await expectNothingKept()
     await nextSearchRuns()
+  })
+
+  it("an OpenNuXL that fails shows OpenNuXL's message, and keeps nothing", async function () {
+    if (!FAKE) {
+      console.log('skipped: needs the fake OpenNuXL (NUXL_FAKE=1), which fails for an input named crash.mzML')
+      return this.skip()
+    }
+    const dir = join(dataHome(), 'failing')
+    mkdirSync(dir, { recursive: true })
+    const crash = join(dir, 'crash.mzML')
+    copyFileSync(EXAMPLE_MZML, crash)
+    await exampleSettings()
+    await dropFiles([crash, EXAMPLE_FASTA])
+    await expect($('[data-testid="fasta-proteins"]')).toHaveText(EXAMPLE_PROTEINS)
+    await $('button*=Start search').click()
+    const error = $('[data-testid="search-error"]')
+    await error.waitForDisplayed({ timeout: 30000 })
+    const text = String(await error.getProperty('textContent'))
+    expect(text).toContain('The search stopped')
+    expect(text).toContain('crash.mzML')
+    // OpenNuXL's own error line (stderr), and how it ended
+    expect(text).toContain('Unable to read file')
+    expect(text).toContain('OpenNuXL ended with exit code 3')
+    expect(await resultsId()).toBeNull()
+    expect(toolProcesses()).toEqual([])
+    await expectNothingKept()
   })
 })

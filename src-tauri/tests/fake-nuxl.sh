@@ -19,6 +19,14 @@
 # In the search folder (the parent of <out>'s folder) it appends a line to inputs.txt (the -in path and the file
 # it resolves to) and leaves tool.pid (its pid) and, for hang and stubborn, children.pid; beside <out> it leaves
 # <stem>.argv.txt (one argument per line). `--help` prints OpenMS' version line (to stderr, as TOPPBase does).
+#
+# With FAKE_NUXL_RESULTS set to a folder of OpenNuXL outputs (the e2e specs' fake: e2e/fake/OpenNuXL, with
+# src/lib/results/fixtures/example/nuxl) a search writes real ones: <dir>/<n>__<name>_1.0000_XLs.idXML and
+# <dir>/<n>__<name>_0.0000_peptides.idXML of the input's name (without .mzML; else the first such pair of the
+# folder) become every XLs file, the peptides file and <out>; Percolator is skipped as OpenNuXL skips it for a run
+# of fewer than 1000 PSMs ("Too few PSMs ..."). A file fake-nuxl.delay in the app's data folder (two folders above
+# the search folder) holds the seconds that each step of the scoring takes (a search that runs long enough to be
+# seen, cancelled or closed).
 set -u
 
 if [ "${1:-}" = --help ]; then
@@ -113,9 +121,13 @@ for step in "Filtering spectra..." "Calculate Nucleotide Tags..." "Calculate int
   progress "$step"
   done_line
 done
+results=${FAKE_NUXL_RESULTS:-}
+delay=0
+[ -n "$results" ] && [ -f "$folder/../../fake-nuxl.delay" ] && delay=$(cat "$folder/../../fake-nuxl.delay")
 progress "Scoring peptide models against spectra..."
 for pct in 0.00 33.33 66.67 99.99; do
   printf '\r%s %%               ' "$pct"
+  [ "$delay" = 0 ] || sleep "$delay"
 done
 done_line
 for step in "Post-processing PSMs... (spectra filtering)" "Post-processing PSMs... (localization of cross-links)" \
@@ -123,6 +135,28 @@ for step in "Post-processing PSMs... (spectra filtering)" "Post-processing PSMs.
   progress "$step"
   done_line
 done
+
+if [ -n "$results" ]; then
+  key=${name%.mzML}
+  xls=$(ls "$results"/*__"$key"_1.0000_XLs.idXML 2>/dev/null | head -n 1)
+  [ -n "$xls" ] || xls=$(ls "$results"/*_1.0000_XLs.idXML | head -n 1)
+  peptides=${xls%_1.0000_XLs.idXML}_0.0000_peptides.idXML
+  echo "Calculating peptide and XL q-values."
+  cp "$xls" "$out"
+  cp "$peptides" "${base}_0.0000_peptides.idXML"
+  for q in "${xl_fdr[@]}"; do
+    q=$(printf '%.4f' "$q")
+    cp "$xls" "${base}_${q}_XLs.idXML"
+    if awk "BEGIN { exit !($q <= 0.1) }"; then
+      printf 'protein\tXLs\n' > "${base}_proteins${q}_XLs.tsv"
+    fi
+  done
+  echo "done."
+  [ "$backend" != none ] && echo "Too few PSMs for score recalibration. Skipped." >&2
+  [ -n "$out_tsv" ] && printf 'report\n' > "$out_tsv"
+  echo "OpenNuXL took 0.10 s (wall), 0.10 s (CPU), 0.00 s (system), 0.10 s (user); Peak Memory Usage: 10 MB."
+  exit 0
+fi
 
 idxml() { printf '<?xml version="1.0" encoding="UTF-8"?>\n<IdXML version="1.5"><!-- %s --></IdXML>\n' "$1" > "$2"; }
 write_fdr_outputs() { # <prefix>
