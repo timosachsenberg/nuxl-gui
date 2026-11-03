@@ -346,6 +346,9 @@ export type NuxlIonCell = {
   matched: boolean
   /** all the shifted ions of this number, for its tooltip */
   title?: string
+  /** a shifted ion's shift as it reads ("+U-H₃PO₄"), and how many more shifted ions of its number there are */
+  shift?: string
+  more?: number
 }
 export type NuxlIonTable = {
   /** The columns left of the residue (N-terminal ions) and right of it (C-terminal ions). */
@@ -394,7 +397,8 @@ export function nuxlIonTable(theoretical: TheoreticalIon[], shown: NuxlMatch[], 
       const list = shiftedOf.get(k)
       if (!list) return null
       const best = list.reduce((p, q) => (q.intensity > p.intensity ? q : p))
-      return { ion: best.text, mz: best.mz, matched: true, title: list.map((m) => `${m.text} m/z ${m.mz.toFixed(4)}`).join('\n') }
+      const title = list.map((m) => `${m.text} m/z ${m.mz.toFixed(4)}`).join('\n')
+      return { ion: best.text, mz: best.mz, matched: true, title, shift: `+${nuxlLabel(best.ion.shift)}`, more: list.length - 1 }
     }
     const t = mzOf.get(k)
     return t ? { ion: t.ion, mz: t.mz, matched: annotated.has(k) } : null

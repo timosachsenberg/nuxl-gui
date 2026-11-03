@@ -4,6 +4,7 @@
   // the modifications; OpenNuXL's main scores; where else its peptide was found; and every feature of the search,
   // in groups (scores first), under "All features".
   import { signedNumber } from '$lib/format/number'
+  import { adductLabel } from '$lib/format/peptide'
   import { formatCount, formatQValue, formatScore } from '$lib/results/display'
   import type { ResultModel } from '$lib/results/model'
   import { featureValue, modificationList } from '$lib/psm/psm'
@@ -80,7 +81,7 @@
     }
     if (adduct !== '') {
       const mass = xl.adductMass[row]
-      list.push({ name: 'Adduct', value: Number.isFinite(mass) && mass !== 0 ? `${adduct} (${signedNumber(mass, 4)} Da)` : adduct, title: 'The nucleic acid adduct of the precursor (NuXL:NA)' })
+      list.push({ name: 'Adduct', value: Number.isFinite(mass) && mass !== 0 ? `${adductLabel(adduct)} (${signedNumber(mass, 4)} Da)` : adductLabel(adduct), title: 'The nucleic acid adduct of the precursor (NuXL:NA)' })
       if (xl.nucleotide[row]) list.push({ name: 'Cross-linked nucleotide', value: xl.nucleotide[row] })
       if (xl.adductLength[row] > 0) list.push({ name: 'Adduct length', value: `${xl.adductLength[row]} nt` })
     }

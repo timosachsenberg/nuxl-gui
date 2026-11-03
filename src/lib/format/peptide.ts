@@ -45,6 +45,25 @@ export function shortModLabel(name: string): string {
   return adduct ? adduct[1] : name.slice(0, 3).toLowerCase()
 }
 
+const SUBSCRIPT: Record<string, string> = { '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉' }
+
+/** One formula of an adduct as chemists write it: no counts of one, subscripts, and phosphates H₃PO₄, HPO₃. */
+function formulaText(formula: string): string {
+  const parts = [...formula.matchAll(/([A-Z][a-z]?)(\d*)/g)].map(([, element, n]) => ({ element, n: n === '1' ? '' : n }))
+  if (parts.map((p) => p.element).join() === 'H,O,P') parts.splice(1, 2, parts[2], parts[1]) // H3O4P1 is H₃PO₄
+  return parts.map((p) => p.element + p.n.replace(/\d/g, (d) => SUBSCRIPT[d])).join('')
+}
+
+/**
+ * How an adduct of OpenNuXL (NuXL:NA) reads: its nucleotides, then its formulas without counts of one, in
+ * subscripts ('U-H2O1' is 'U-H₂O', 'U-H3O4P1' is 'U-H₃PO₄', 'UU-H2O1' is 'UU-H₂O'); '' stays ''. The tables' CSV
+ * keep OpenNuXL's own text.
+ */
+export function adductLabel(adduct: string): string {
+  const head = /^[^-+]*/.exec(adduct)?.[0] ?? ''
+  return head + adduct.slice(head.length).replace(/(?:[A-Z][a-z]?\d*)+/g, formulaText)
+}
+
 /** A modification's hover title: "Oxidation (Unimod:35) +15.9949". */
 export function modTitle(mod: ModInfo): string {
   const unimod = mod.unimod > 0 ? ` (Unimod:${mod.unimod})` : ''

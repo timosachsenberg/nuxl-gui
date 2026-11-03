@@ -4,7 +4,7 @@
   // hidden), the adduct in monospace with its mass in the tooltip. A decoy is marked after its sequence, as the
   // Proteins table marks a decoy protein.
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
-  import { peptideView } from '$lib/format/peptide'
+  import { adductLabel, peptideView } from '$lib/format/peptide'
   import { formatCount, formatQValue } from '$lib/results/display'
   import type { LevelState, ResultsView } from '$lib/results/view.svelte'
   import { adductTitle, tableColumns, sampleIndex, type CellDef } from './cells'
@@ -35,7 +35,7 @@
         return {
           cell: () => peptideCell,
           cellTitle: (k) => {
-            const marks = [pt.isXL[k] ? `cross-link${pt.adduct[k] ? ` with ${pt.adduct[k]}` : ''}` : null, pt.decoy[k] ? 'decoy' : null].filter((x) => x !== null)
+            const marks = [pt.isXL[k] ? `cross-link${pt.adduct[k] ? ` with ${adductLabel(pt.adduct[k])}` : ''}` : null, pt.decoy[k] ? 'decoy' : null].filter((x) => x !== null)
             return marks.length > 0 ? `${pt.proforma[k]} (${marks.join(', ')})` : pt.proforma[k]
           },
         }
@@ -75,7 +75,7 @@
 {/snippet}
 
 {#snippet adductCell(k: number)}
-  {#if pt.isXL[k]}<Marker text="XL" strong class="mr-1.5 ml-0" />{/if}<span class="font-mono text-[12.5px]">{pt.adduct[k] || '–'}</span>
+  {#if pt.isXL[k]}<Marker text="XL" strong class="mr-1.5 ml-0" />{/if}<span class="font-mono text-[12.5px]">{adductLabel(pt.adduct[k]) || '–'}</span>
 {/snippet}
 
 {#snippet proteinsCell(k: number)}

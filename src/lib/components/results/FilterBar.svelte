@@ -8,6 +8,7 @@
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import * as Popover from '$lib/components/ui/popover'
   import { formatPercent, formatQ } from '$lib/format/fdr'
+  import { adductLabel } from '$lib/format/peptide'
   import { formatCount, parseAccession } from '$lib/results/display'
   import { crossLinkChoices, type Kind } from '$lib/results/filters'
   import type { LevelState, ResultsView } from '$lib/results/view.svelte'
@@ -49,11 +50,11 @@
   const choices = $derived(crossLinkChoices(m))
   const adductOptions = $derived([
     { value: ANY, label: 'Any adduct' },
-    ...choices.adducts.map((c) => ({ value: c.value, label: `${c.value} (${formatCount(c.psms)})` })),
+    ...choices.adducts.map((c) => ({ value: c.value, label: `${adductLabel(c.value)} (${formatCount(c.psms)})` })),
   ])
   const nucleotideOptions = $derived([
     { value: ANY, label: 'Any nucleotide' },
-    ...choices.nucleotides.map((c) => ({ value: c.value, label: `${c.value} (${formatCount(c.psms)})` })),
+    ...choices.nucleotides.map((c) => ({ value: c.value, label: `${adductLabel(c.value)} (${formatCount(c.psms)})` })),
   ])
   /** The cutoff popover's trigger: the peptide PSMs' and, with cross-links, theirs. */
   const qSummary = $derived(

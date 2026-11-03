@@ -87,10 +87,10 @@ describe('the cross-link cells', () => {
     const rows = cells(target)
     expect(rows.map((r) => [r.Peptide, r.Adduct, r.Site, r['FDR group']])).toEqual([
       ['AAAK', '–', '–', 'Peptide'],
-      ['CCCK', 'XLU-H3O4P1', 'K4', 'Short cross-link'],
+      ['CCCK', 'XLU-H₃PO₄', 'K4', 'Short cross-link'],
     ])
-    const adduct = target.querySelector('[title^="U-H3O4P1"]')
-    expect(adduct?.getAttribute('title')).toBe('U-H3O4P1 · +226.0590 Da · nucleotide U')
+    const adduct = target.querySelector('[title^="U-H₃PO₄"]')
+    expect(adduct?.getAttribute('title')).toBe('U-H₃PO₄ · +226.0590 Da · nucleotide U')
     expect(target.querySelector('[title^="Cross-linked residue K4"]')?.getAttribute('title')).toBe('Cross-linked residue K4 (localization score 0.93)')
   })
 

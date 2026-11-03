@@ -139,7 +139,9 @@ in it; on a machine without that toolchain (no sysroot) it uses the host's (carg
 Without OpenNuXL, `NUXL_FAKE=1 e2e/run.sh` runs the specs that search against a stand-in (`e2e/fake/OpenNuXL`, i.e.
 `src-tauri/tests/fake-nuxl.sh`, which writes the example's outputs of `src/lib/results/fixtures/example` for every
 input; an input named `crash.mzML` fails as OpenNuXL does). Screenshots for `docs/screens` at device scale factor 2:
-`GDK_SCALE=2 E2E_SCREEN=3000x2000x24 NUXL_FAKE=1 e2e/run.sh e2e/screens.shot.ts`.
+`GDK_SCALE=2 E2E_SCREEN=3000x2000x24 NUXL_FAKE=1 e2e/run.sh e2e/screens.shot.ts`; for them the fake writes
+`src/lib/results/fixtures/screens` instead (`FAKE_NUXL_RESULTS=screens`: OpenMS' OpenNuXL test 3 at 10 ppm, made by
+`node scripts/results-fixtures.mjs`).
 
 The specs that run searches need the tool: `NUXL_TOOL=/path/to/OpenNuXL` (without it they skip), with
 PercolatorAdapter beside it (`src-tauri/resources/nuxl/bin/OpenNuXL`, or `<build>/bin/OpenNuXL`). Each spec file gets

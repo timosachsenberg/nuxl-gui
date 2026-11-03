@@ -5,7 +5,7 @@
 // The coverage is computed by `markCovered`, which `buildModel` uses for the Coverage column of the
 // table: the panel cannot disagree with it.
 
-import { modTitle, peptideView, type ModInfo } from '../format/peptide'
+import { adductLabel, modTitle, peptideView, type ModInfo } from '../format/peptide'
 import { psmCutoff, psmPasses, type ResultModel } from './model'
 
 /** A stretch of a protein's sequence: residues `start` to `end - 1` (0-based). */
@@ -221,9 +221,9 @@ export type CrossLinkedSite = {
 /** A site as the panel names it: "K123". */
 export const siteLabel = (site: CrossLinkedSite) => `${site.residue}${site.position + 1}`
 
-/** "K123 (U-H3O4P1 ×3, UU-H2O ×1)": the site with the adducts of its PSMs. */
+/** "K123 (U-H₃PO₄ ×3, UU-H₂O ×1)": the site with the adducts of its PSMs. */
 export function crossLinkTitle(site: CrossLinkedSite): string {
-  return `${siteLabel(site)} (${site.adducts.map((a) => `${a.adduct || 'no adduct'} ×${a.psms}`).join(', ')})`
+  return `${siteLabel(site)} (${site.adducts.map((a) => `${adductLabel(a.adduct) || 'no adduct'} ×${a.psms}`).join(', ')})`
 }
 
 /** Per peptide: its localized cross-link PSMs within the search's cutoffs (decoys left out), once per model. */

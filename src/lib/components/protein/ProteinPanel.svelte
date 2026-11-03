@@ -10,6 +10,7 @@
   import { Button } from '$lib/components/ui/button'
   import * as Tabs from '$lib/components/ui/tabs'
   import { displaySettings } from '$lib/format/settings.svelte'
+  import { adductLabel } from '$lib/format/peptide'
   import { formatCount, parseAccession, parseDescription } from '$lib/results/display'
   import { proteinDetail, siteLabel } from '$lib/results/protein'
   import type { ResultsView } from '$lib/results/view.svelte'
@@ -42,6 +43,10 @@
   const detail = $derived(proteinDetail(m, protein, fixedMods))
   const accession = $derived(parseAccession(pr.accession[protein]))
   const description = $derived(parseDescription(pr.description[protein]))
+  /** The line above the heading: accession (unless the heading is it, without a description), entry name, length. */
+  const subline = $derived(
+    [description.name ? accession.id : null, accession.entry, detail.length > 0 ? `${formatCount(detail.length)} aa` : null].filter((x): x is string => !!x),
+  )
   const decoy = $derived(pr.decoy[protein] === 1)
   const fixedText = $derived(fixedMods.length > 0 ? fixedMods.join(', ') : 'none')
 
@@ -75,7 +80,8 @@
   <header class="flex items-start justify-between gap-2">
     <div class="min-w-0">
       <div class="truncate font-mono text-xs text-muted-foreground" title={pr.accession[protein]}>
-        <span data-testid="panel-accession">{accession.id}</span>{#if accession.entry}{' · '}{accession.entry}{/if}{#if detail.length > 0}{' · '}{formatCount(detail.length)} aa{/if}{#if accession.contaminant}<Marker text="contaminant" />{/if}{#if decoy}<span data-testid="panel-decoy"><Marker text="decoy" /></span>{/if}
+        <!-- without a description the heading is the accession: the line above it does not repeat it -->
+        {#each subline as part, j (j)}{j > 0 ? ' · ' : ''}{#if part === accession.id && j === 0 && description.name}<span data-testid="panel-accession">{part}</span>{:else}{part}{/if}{/each}{#if accession.contaminant}<Marker text="contaminant" />{/if}{#if decoy}<span data-testid="panel-decoy"><Marker text="decoy" /></span>{/if}
       </div>
       <h2
         bind:this={heading}
@@ -134,7 +140,7 @@
             <span class="font-medium">Cross-linked sites:</span>
             {#each detail.xlSites as site, i (site.position)}<span class="whitespace-nowrap"
                 ><span class="font-mono font-medium text-violet-800 dark:text-violet-300">{siteLabel(site)}</span>
-                <span class="text-muted-foreground">({site.adducts.map((a) => `${a.adduct || 'no adduct'} ×${a.psms}`).join(', ')})</span></span
+                <span class="text-muted-foreground">({site.adducts.map((a) => `${adductLabel(a.adduct) || 'no adduct'} ×${a.psms}`).join(', ')})</span></span
               >{#if i < detail.xlSites.length - 1}{', '}{/if}{/each}
           </p>
         {:else if detail.xlPsms > 0}

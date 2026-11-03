@@ -26,7 +26,8 @@
     },
     {
       value: formatCount(figures.psms),
-      note: ['PSMs', `peptides ${fdr(figures.peptideFdr)}`, share].filter(Boolean).join(' · '),
+      // the split, each part at its own FDR (the tooltip says which): "PSMs · 0 peptide + 20 XL"
+      note: ['PSMs', `${formatCount(figures.psms - figures.xlPsms)} peptide + ${formatCount(figures.xlPsms)} XL`, share].filter(Boolean).join(' · '),
       title:
         `Target PSMs at the search's cutoffs: ${formatCount(figures.psms - figures.xlPsms)} peptide PSMs at the peptide FDR (${formatPercent(figures.peptideFdr)}) ` +
         `and ${formatCount(figures.xlPsms)} cross-link PSMs at the cross-link FDR (${formatPercent(figures.xlFdr)}).` +

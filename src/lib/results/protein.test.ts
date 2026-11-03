@@ -336,10 +336,10 @@ describe('cross-linked sites', () => {
     const m = crossLinked()
     const sites = crossLinkedSites(m, 0)
     expect(sites.map(siteLabel)).toEqual(['C6', 'D10', 'K12', 'C14'])
-    expect(sites.map(crossLinkTitle)).toEqual(['C6 (U-H3O4P1 ×2)', 'D10 (UU-H2O ×1)', 'K12 (U-H3O4P1 ×1)', 'C14 (U-H3O4P1 ×2)'])
+    expect(sites.map(crossLinkTitle)).toEqual(['C6 (U-H₃PO₄ ×2)', 'D10 (UU-H₂O ×1)', 'K12 (U-H₃PO₄ ×1)', 'C14 (U-H₃PO₄ ×2)'])
     expect(sites.map((s) => s.psms)).toEqual([2, 1, 1, 2])
     // the shared peptide's sites in P2
-    expect(crossLinkedSites(m, 1).map(crossLinkTitle)).toEqual(['D2 (UU-H2O ×1)', 'K4 (U-H3O4P1 ×1)'])
+    expect(crossLinkedSites(m, 1).map(crossLinkTitle)).toEqual(['D2 (UU-H₂O ×1)', 'K4 (U-H₃PO₄ ×1)'])
   })
 
   it('lists the adducts of a site by their PSMs', () => {

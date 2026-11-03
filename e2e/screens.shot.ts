@@ -3,7 +3,9 @@
 //   NUXL_FAKE=1 e2e/run.sh e2e/screens.shot.ts                                         (or NUXL_TOOL=…)
 //   GDK_SCALE=2 E2E_SCREEN=3000x2000x24 NUXL_FAKE=1 e2e/run.sh e2e/screens.shot.ts     (at device scale factor 2)
 // GDK_SCALE=2 makes WebKitGTK render at twice the pixels (the screen of xvfb-run has to hold the window: E2E_SCREEN).
-// Runs the example, then the views; removes its search folder at the end.
+// Runs the example, then the views; removes its search folder at the end. With the fake, e2e/run.sh serves the
+// outputs of src/lib/results/fixtures/screens (FAKE_NUXL_RESULTS=screens: OpenNuXL's test 3 on the example, 10 ppm,
+// with decoys) in place of the specs' fixtures/example (test 6, searched at 1e9 ppm: unrealistic precursor errors).
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
@@ -17,6 +19,9 @@ async function shot(name: string) {
   mkdirSync(dir, { recursive: true })
   writeFileSync(resolve(dir, `${name}.png`), Buffer.from(await browser.takeScreenshot(), 'base64'))
 }
+
+/** The PSM of 08-psm-view: its sequence as the PSMs grid shows it (a row with it, else the first row). */
+const PSM = process.env.FAKE_NUXL_RESULTS === 'screens' ? 'AWQQLDNGSCAQIR' : 'XL'
 
 const text = async (selector: string) => String(await $(selector).getProperty('textContent'))
 
@@ -41,6 +46,7 @@ describe('screens', () => {
 
   it('takes the screenshots', async () => {
     if (!process.env.NUXL_TOOL) throw new Error('set NUXL_TOOL (or NUXL_FAKE=1): the screenshots need a search')
+    if (process.env.NUXL_FAKE && process.env.FAKE_NUXL_RESULTS !== 'screens') console.warn('the fake serves', process.env.FAKE_NUXL_RESULTS, 'not the screens set')
     await $('header').waitForDisplayed({ timeout: 20000 })
     await browser.setWindowSize(1440, 900).catch(() => {})
     const size = await browser.execute(() => [window.innerWidth, window.innerHeight, window.devicePixelRatio])
@@ -83,9 +89,10 @@ describe('screens', () => {
     await shot('07-protein-panel')
     await browser.keys('Escape')
 
-    // the PSM view of the best cross-link PSM
+    // the PSM view of a localized cross-link with shifted and marker ions (of the screens set: the best one,
+    // AWQQLDNGSC(U)AQIR, U at C22 of Cse2); else the first cross-link
     await tab('PSMs')
-    await jsClick(await rowWith('PSMs', 'XL'))
+    await jsClick(await rowWith('PSMs', PSM))
     await $('[data-testid="psm-view"]').waitForDisplayed({ timeout: 10000 })
     await browser.waitUntil(async () => !(await $('[data-testid="spectrum-loading"]').isExisting()), { timeout: 10000 })
     await shot('08-psm-view')

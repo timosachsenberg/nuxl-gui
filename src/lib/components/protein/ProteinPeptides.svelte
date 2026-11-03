@@ -7,8 +7,8 @@
   // peptide's expander, the last new PSM's button.
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
   import { Button } from '$lib/components/ui/button'
-  import { peptideView } from '$lib/format/peptide'
-  import { formatCount, formatQValue, sampleHeader, spectrumLabel } from '$lib/results/display'
+  import { adductLabel, peptideView } from '$lib/format/peptide'
+  import { formatCount, formatQValue, sampleHeader, spectrumLabel, spectrumName } from '$lib/results/display'
   import { peptidePsms, type ProteinDetail } from '$lib/results/protein'
   import type { ResultsView } from '$lib/results/view.svelte'
   import { cn } from '$lib/utils'
@@ -63,6 +63,20 @@
   })
   const hasGroups = $derived(groups.some((g) => g.name !== null))
 
+  /**
+   * The width of each sample's count column: wider where its condition's name (over few samples: one condition
+   * "example" of one sample) would not fit in the group's columns (about 7 px a character of its bold xs text).
+   */
+  const sampleWidths = $derived.by(() => {
+    const out: number[] = []
+    for (const g of groups) {
+      const name = hasGroups && g.name ? Math.min(g.name.length, 16) * 7 + 12 : 0
+      for (let k = 0; k < g.size; k++) out.push(Math.max(sampleWidth, Math.ceil(name / g.size)))
+    }
+    return out
+  })
+  const samplesWidth = $derived(sampleWidths.reduce((a, b) => a + b, 0))
+
   /** "F2" next to the sample when the design has fractions. */
   const fractions = $derived(m.design.rows.some((r) => r.fraction > 1))
 
@@ -109,7 +123,7 @@
   function describe(i: number): string {
     const parts: string[] = [m.samples[m.psmSample[i]].label]
     if (fractions) parts.push(`F${m.design.rows[ps.file[i]].fraction}`)
-    parts.push(`scan ${spectrumLabel(ps.nativeId[i])}`, `${ps.charge[i]}+`)
+    parts.push(spectrumName(ps.nativeId[i]), `${ps.charge[i]}+`)
     if (ps.precursorErrorPpm[i] === ps.precursorErrorPpm[i]) parts.push(`Δ ${signed(ps.precursorErrorPpm[i], 1)} ppm`)
     return parts.join(' · ')
   }
@@ -140,14 +154,14 @@
   <div class="overflow-x-auto">
     <table
       class="w-full table-fixed border-separate border-spacing-0 text-[12.5px] tabular-nums"
-      style:min-width="{154 + sampleWidth * nS + 170}px"
+      style:min-width="{154 + samplesWidth + 170}px"
       aria-label="Peptides of the protein">
       <colgroup>
         <col />
         <col style:width="46px" />
         <col style:width="48px" />
         <col style:width="60px" />
-        {#each m.samples as s (s.index)}<col style:width="{sampleWidth}px" />{/each}
+        {#each m.samples as s, k (s.index)}<col style:width="{sampleWidths[k]}px" />{/each}
       </colgroup>
       <thead class="sticky top-0 z-10 bg-background">
         <tr>
@@ -195,7 +209,7 @@
                     text="XL"
                     strong
                     class="shrink-0"
-                    title="Cross-link{pt.adduct[e.peptide] ? ` with ${pt.adduct[e.peptide]}` : ''}" />{/if}<span class="sr-only">, {e.psms} PSMs</span>
+                    title="Cross-link{pt.adduct[e.peptide] ? ` with ${adductLabel(pt.adduct[e.peptide])}` : ''}" />{/if}<span class="sr-only">, {e.psms} PSMs</span>
               </button>
             </td>
             <td class={td} data-column="start" title={e.located ? `Residues ${e.spans.map((s) => `${s.start + 1}–${s.end}`).join(', ')}` : 'The search did not record where this peptide is in the sequence'}>
@@ -222,7 +236,7 @@
                     id="{uid}-psm-{i}"
                     data-psm={i}
                     class="rounded-sm px-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                    aria-label="Open the PSM of scan {spectrumLabel(ps.nativeId[i])}"
+                    aria-label="Open the PSM of {spectrumName(ps.nativeId[i])}"
                     onclick={() => onOpenPsm(i)}>PSM ›</button>
                 </td>
               </tr>

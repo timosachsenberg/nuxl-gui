@@ -1,6 +1,7 @@
 // Helpers of the results tables' columns.
 
 import { signedNumber } from '$lib/format/number'
+import { adductLabel } from '$lib/format/peptide'
 import type { ColumnSpec } from '$lib/results/table-columns'
 import type { Column } from './DataTable.svelte'
 
@@ -43,12 +44,12 @@ export function fdrGroupLabel(group: string): string {
 }
 
 /**
- * The tooltip of an adduct cell: the adduct, its mass and the cross-linked nucleotide(s) ("U-H3O4P1 · +306.0253 Da ·
+ * The tooltip of an adduct cell: the adduct, its mass and the cross-linked nucleotide(s) ("U-H₃PO₄ · +306.0253 Da ·
  * nucleotide U"); a peptide whose adduct is no cross-link says so. '' for no adduct.
  */
 export function adductTitle(adduct: string, mass: number, nucleotide: string, isXL: boolean): string {
   if (adduct === '') return ''
-  const parts = [adduct]
+  const parts = [adductLabel(adduct)]
   if (mass === mass) parts.push(`${signed(mass, 4)} Da`)
   if (nucleotide !== '') parts.push(`${nucleotide.includes(',') ? 'nucleotides' : 'nucleotide'} ${nucleotide.replaceAll(',', ', ')}`)
   if (!isXL) parts.push('not a cross-link')

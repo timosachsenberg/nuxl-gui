@@ -101,8 +101,8 @@ export function columnSpecs(m: ResultModel, level: Level): ColumnSpec[] {
 }
 
 /**
- * The columns hidden at first: the optional ones marked 'hidden', and the gene column when no
- * description names a gene (GN=).
+ * The columns hidden at first: the optional ones marked 'hidden', the gene column when no
+ * description names a gene (GN=), and the description column when the FASTA has no descriptions (bare headers).
  */
 export function defaultHidden(specs: ColumnSpec[], m: ResultModel): string[] {
   const hidden: string[] = []
@@ -110,6 +110,8 @@ export function defaultHidden(specs: ColumnSpec[], m: ResultModel): string[] {
     if (s.id === 'gene') {
       const named = m.tables.proteins.description.some((d) => parseDescription(d).gene !== null)
       if (!named) hidden.push(s.id)
+    } else if (s.id === 'description') {
+      if (m.tables.proteins.description.every((d) => parseDescription(d).name === '')) hidden.push(s.id)
     } else if (s.optional === 'hidden') {
       hidden.push(s.id)
     }

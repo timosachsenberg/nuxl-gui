@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ResultTables } from '../results/types'
-import { modTitle, peptideView, shortModLabel } from './peptide'
+import { adductLabel, modTitle, peptideView, shortModLabel } from './peptide'
 
 type Mod = { position: number; name: string; unimod: number; mass: number }
 type PeptideSpec = { openms: string; proforma: string; sequence: string; mods: Mod[] }
@@ -192,6 +192,19 @@ describe('peptideView', () => {
     const sty = peptideView(table(phospho), 0, ['Phospho (STY)'])
     expect(sty.residues.slice(0, 3).map((r) => r.mod)).toEqual([undefined, undefined, undefined])
     expect(peptideView(table(phospho), 0, ['Phospho (ST)']).residues[2].mod?.label).toBe('ph')
+  })
+})
+
+describe('adductLabel', () => {
+  it('writes an adduct as chemists do: no counts of one, subscripts, phosphates as H₃PO₄', () => {
+    expect(adductLabel('U-H2O1')).toBe('U-H₂O')
+    expect(adductLabel('GU-H2O1')).toBe('GU-H₂O')
+    expect(adductLabel('U-H3O4P1')).toBe('U-H₃PO₄')
+    expect(adductLabel('U-H1O3P1')).toBe('U-HPO₃')
+    expect(adductLabel('U+C2H3')).toBe('U+C₂H₃')
+    expect(adductLabel('U')).toBe('U')
+    expect(adductLabel('AU')).toBe('AU')
+    expect(adductLabel('')).toBe('')
   })
 })
 

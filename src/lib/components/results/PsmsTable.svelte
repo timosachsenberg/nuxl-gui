@@ -5,7 +5,7 @@
   // the PSM view (`onOpen`); while it is open, the table is the list beside it (`compact`): peptide, charge,
   // sample, q-value and precursor error, as in the mockup. A decoy PSM is marked after the peptide.
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
-  import { peptideView } from '$lib/format/peptide'
+  import { adductLabel, peptideView } from '$lib/format/peptide'
   import { siteName } from '$lib/results/columns'
   import { baseName } from '$lib/results/model'
   import { formatQCompact, formatQValue, formatScore, spectrumLabel } from '$lib/results/display'
@@ -31,7 +31,7 @@
 
   /** The peptide's tooltip, with what its markers say (they may be cut off in a narrow column). */
   function withMarks(text: string, i: number): string {
-    const marks = [xl.isXL[i] ? `cross-link${xl.adduct[i] ? ` with ${xl.adduct[i]}` : ''}` : null, ps.decoy[i] ? 'decoy' : null].filter(
+    const marks = [xl.isXL[i] ? `cross-link${xl.adduct[i] ? ` with ${adductLabel(xl.adduct[i])}` : ''}` : null, ps.decoy[i] ? 'decoy' : null].filter(
       (x) => x !== null,
     )
     return marks.length > 0 ? `${text} (${marks.join(', ')})` : text
@@ -154,7 +154,7 @@
 
 {#snippet adductCell(i: number)}
   {#if xl.isXL[i]}<Marker text="XL" strong class="mr-1.5 ml-0" />{/if}<span class="font-mono text-[12.5px]"
-    >{xl.adduct[i] || '–'}</span>
+    >{adductLabel(xl.adduct[i]) || '–'}</span>
 {/snippet}
 
 {#snippet proteinsCell(i: number)}

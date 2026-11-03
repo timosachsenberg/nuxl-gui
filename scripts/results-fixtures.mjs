@@ -1,6 +1,6 @@
 // Makes the search folders of the results reader's fixtures (src/lib/results/fixtures/<case>/) from OpenNuXL's own
-// test outputs (src/lib/results/fixtures/nuxl/, copies of OpenMS src/tests/topp/OpenNuXL_{1,6}_output.idXML) and the
-// app's example (src-tauri/resources/example/OpenNuXL_1_input.{mzML,fasta}, the input of both runs):
+// test outputs (src/lib/results/fixtures/nuxl/, copies of OpenMS src/tests/topp/OpenNuXL_{1,3,6}_output.idXML) and the
+// app's example (src-tauri/resources/example/OpenNuXL_1_input.{mzML,fasta}, the input of all three runs):
 //
 //   node scripts/results-fixtures.mjs
 //
@@ -32,7 +32,11 @@
 //            is the decoy FDKAGEHVASGR, which gives the peptides below it q-value 0.2);
 //   runs     three inputs: OpenNuXL_6, OpenNuXL_1 (no decoys: every q-value 0) and one whose run did not finish
 //            (no outputs.json);
-//   empty    two inputs whose runs found nothing (filtered files without identifications).
+//   empty    two inputs whose runs found nothing (filtered files without identifications);
+//   screens  one input (OpenNuXL_3: precursor tolerance 10 ppm, decoys, the top 3 hits per spectrum, -NuXL:scoring
+//            fast), taken as it is (no LINEAR): realistic precursor errors (OpenNuXL_6 searched with a tolerance of
+//            1e9 ppm) for the screenshots of docs/screens (e2e/screens.shot.ts; the fake serves it with
+//            FAKE_NUXL_RESULTS=screens). Every top hit is a cross-link, so its peptides file holds no PSM.
 // And spectra/OpenNuXL_1_input.indexed.mzML: the example's mzML as an indexedmzML, its arrays zlib-compressed (the
 // reader's spectrum load by the index; the plain file is read by scanning).
 
@@ -254,6 +258,9 @@ writeFolder(
   [input(0, 'OpenNuXL_1_input.mzML'), input(1, 'no_decoys.mzML'), input(2, 'unfinished.mzML')],
   [{ ...six, outputs: { notes: [TOO_FEW] } }, { ...one, outputs: { notes: [TOO_FEW], seconds: 2.5 } }, null],
 )
+const three = filtered(SOURCE(3))
+console.log('OpenNuXL_3:', three.counts)
+writeFolder('screens', [input(0, 'OpenNuXL_1_input.mzML')], [{ ...three, outputs: { notes: [TOO_FEW] } }])
 const nothing = withoutIds(SOURCE(6))
 writeFolder('empty', [input(0, 'a.mzML'), input(1, 'b.mzML')], [
   { xls: nothing, peptides: nothing, outputs: { notes: [TOO_FEW] } },

@@ -1,8 +1,9 @@
 /// <reference types="node" />
 // The results reader on search folders as the shim leaves them (fixtures/<case>/, made by scripts/results-fixtures.mjs
 // from OpenNuXL's own test outputs): example (one input, peptides and cross-links), runs (three inputs, one without
-// decoys and one that did not finish), empty (two inputs without PSMs); the input mzML is the app's example
-// (src-tauri/resources/example), as it is and as an indexed, zlib-compressed copy (fixtures/spectra).
+// decoys and one that did not finish), empty (two inputs without PSMs), screens (the screenshots' set, OpenNuXL's test 3);
+// the input mzML is the app's example (src-tauri/resources/example), as it is and as an indexed, zlib-compressed copy
+// (fixtures/spectra).
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -202,6 +203,24 @@ describe('readSearch: the example', () => {
       notes: [['Too few PSMs for score recalibration. Skipped.']],
     })
     expect(await countTargetPsms(folder('example').files)).toBe(17)
+  })
+})
+
+describe('readSearch: the screenshots\' set (OpenNuXL test 3: 10 ppm, decoys)', () => {
+  test('20 cross-link PSMs of 5 proteins, no peptide PSM, precursor errors within the tolerance', async () => {
+    const r = await readSearch(folder('screens').files)
+    const { psms } = r.tables
+    expect(r.warnings).toEqual([])
+    expect(psms.count).toBe(20)
+    expect(Array.from(psms.xl.isXL).every((x) => x === 1)).toBe(true)
+    expect(Array.from(psms.decoy).every((d) => d === 0)).toBe(true)
+    expect(r.tables.proteins.count).toBe(5)
+    const ppm = Array.from(psms.precursorErrorPpm)
+    expect(ppm.every((e) => Number.isFinite(e) && Math.abs(e) <= 10)).toBe(true)
+    // the PSM of docs/screens/08-psm-view.png: U at C of AWQQLDNGSCAQIR, localized
+    const i = psms.xl.siteSequence.indexOf('AWQQLDNGScAQIR')
+    expect(i).toBeGreaterThanOrEqual(0)
+    expect([psms.xl.adduct[i], psms.xl.site[i]]).toEqual(['U', 9])
   })
 })
 

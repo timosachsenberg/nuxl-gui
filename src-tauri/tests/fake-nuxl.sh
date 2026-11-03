@@ -28,12 +28,23 @@
 # folder) become every XLs file, the peptides file and <out>; Percolator is skipped as OpenNuXL skips it for a run
 # of fewer than 1000 PSMs ("Too few PSMs ..."). A file fake-nuxl.delay in the app's data folder (two folders above
 # the search folder) holds the seconds that each step of the scoring takes (a search that runs long enough to be
-# seen, cancelled or closed).
+# seen, cancelled or closed). FAKE_NUXL_RESULTS can also name a case of the results reader's fixtures in place of a
+# folder (a name without "/": example, screens, ...): src/lib/results/fixtures/<name>/nuxl of this repository (the
+# screenshots of e2e/screens.shot.ts take `screens`, OpenNuXL's test 3 with realistic precursor errors).
 set -u
 
 if [ "${1:-}" = --help ]; then
+  # 9.9.9; with FAKE_NUXL_RESULTS the version of the OpenNuXL that wrote those outputs (their search_engine_version,
+  # "3.5.0-pre-..." is 3.5.0), so that the screenshots name a real one
+  version=9.9.9
+  if [ -n "${FAKE_NUXL_RESULTS:-}" ]; then
+    dir=$FAKE_NUXL_RESULTS
+    [[ "$dir" == */* ]] || dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../src/lib/results/fixtures/$dir/nuxl"
+    v=$(cat "$dir"/*.idXML 2>/dev/null | grep -o -m1 'search_engine_version="[0-9][0-9.]*' | sed 's/.*"//')
+    [ -n "$v" ] && version=$v
+  fi
   echo "OpenNuXL -- a stand-in for the shim's tests" >&2
-  echo "Version: 9.9.9 Oct 20 2026, 12:00:00" >&2
+  echo "Version: $version Oct 20 2026, 12:00:00" >&2
   exit 0
 fi
 
@@ -131,6 +142,12 @@ for step in "Filtering spectra..." "Calculate Nucleotide Tags..." "Calculate int
   fi
 done
 results=${FAKE_NUXL_RESULTS:-}
+if [ -n "$results" ] && [[ "$results" != */* ]]; then
+  # (a fixture's name: beside this script's real path, tests/ of src-tauri)
+  here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+  results="$here/../../src/lib/results/fixtures/$results/nuxl"
+  [ -d "$results" ] || { echo "Error: no fixture $FAKE_NUXL_RESULTS ($results)" >&2; exit 2; }
+fi
 delay=0
 [ -n "$results" ] && [ -f "$folder/../../fake-nuxl.delay" ] && delay=$(cat "$folder/../../fake-nuxl.delay")
 progress "Scoring peptide models against spectra..."

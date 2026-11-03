@@ -13,6 +13,7 @@ import {
   sampleHeader,
   scanNumber,
   spectrumLabel,
+  spectrumName,
 } from './display'
 import type { ResultSample } from './model'
 
@@ -66,22 +67,22 @@ describe('cell formats', () => {
     expect(formatCount(0)).toBe('0')
   })
 
-  it('formats q-values: two significant digits, tiny ones in scientific notation, missing as a dash', () => {
+  it('formats q-values: two significant digits, below 0.001 as "< 0.001", missing as a dash', () => {
     expect(formatQValue(0.0123)).toBe('0.012')
     expect(formatQValue(0.001)).toBe('0.001')
-    expect(formatQValue(0.00002)).toBe('2.0e-5')
-    expect(formatQValue(0)).toBe('0')
+    expect(formatQValue(0.00002)).toBe('< 0.001')
+    expect(formatQValue(0)).toBe('< 0.001')
     expect(formatQValue(NaN)).toBe('–')
   })
 
   it('formats q-values for the narrow list beside the PSM view in six characters at most', () => {
     expect(formatQCompact(0.0031)).toBe('3.1e-3')
-    expect(formatQCompact(0.00002)).toBe('2.0e-5')
+    expect(formatQCompact(0.00002)).toBe('<0.001')
     expect(formatQCompact(0.0123)).toBe('0.012')
     expect(formatQCompact(0.5)).toBe('0.5')
-    expect(formatQCompact(0)).toBe('0')
+    expect(formatQCompact(0)).toBe('<0.001')
     expect(formatQCompact(NaN)).toBe('–')
-    expect(formatQCompact(1e-12)).toBe('<1e-9')
+    expect(formatQCompact(1e-12)).toBe('<0.001')
     for (const q of [1e-12, 0.0099, 0.01, 0.0999, 0.999]) expect(formatQCompact(q).length).toBeLessThanOrEqual(6)
   })
 
@@ -173,6 +174,16 @@ describe('spectrumLabel', () => {
     expect(spectrumLabel('frame=5 scan=12')).toBe('12')
     expect(spectrumLabel('merged=3 frame=5')).toBe('merged=3 frame=5')
     expect(spectrumLabel('scan=12a')).toBe('scan=12a')
+  })
+})
+
+describe('spectrumName', () => {
+  it('names a scan a scan, and a spectrum= or index= term (0-based) by its own term', () => {
+    expect(spectrumName('controllerType=0 controllerNumber=1 scan=4711')).toBe('scan 4711')
+    expect(spectrumName('spectrum=19')).toBe('spectrum 19')
+    expect(spectrumName('index=0')).toBe('index 0')
+    expect(spectrumName('merged=3 frame=5')).toBe('spectrum merged=3 frame=5')
+    expect(spectrumName('')).toBe('spectrum not referenced')
   })
 })
 

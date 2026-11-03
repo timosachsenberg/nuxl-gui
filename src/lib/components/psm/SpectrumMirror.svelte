@@ -154,9 +154,11 @@
     const ys = placeLabels(
       order.map((g) => {
         const r = g.intensity / ref
-        return { x: x(g.mz), y: upper(Math.min(1, r)) - (r > 1 ? 9 : 4), width: textWidth(g.label, 11) + 8 }
+        // (the labels are semibold: a tenth wider than the estimate, and room between them on both axes, so that
+        // the shifted ions of a cross-link stay apart where they crowd)
+        return { x: x(g.mz), y: upper(Math.min(1, r)) - (r > 1 ? 9 : 4), width: textWidth(g.label, 11) * 1.1 + 12 }
       }),
-      { lineHeight: 12, tries: 4, top: plotTop + 10 },
+      { lineHeight: 15, tries: 4, top: plotTop + 10 },
     )
     const out: { x: number; y: number; text: string; ions: string; key: number }[] = []
     order.forEach((g, i) => {

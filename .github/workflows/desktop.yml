@@ -832,7 +832,7 @@ jobs:
           files of one name can be searched together only when they are on the drive of the app's data (usually
           C:); otherwise the app asks to rename one of them.
           NOTES
-          # the packages under the names Tauri gives them, with the version (NuXL_0.1.4_x64-setup.exe, ...)
+          # the packages under the names Tauri gives them, with the version (NuXL_0.1.0_x64-setup.exe, ...)
           gh release create "$TAG" --draft --verify-tag --title "NuXL desktop ${TAG#desktop-native-v}" \
             --notes-file notes.md \
             $(find packages -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' -o -name '*-setup.exe' \))

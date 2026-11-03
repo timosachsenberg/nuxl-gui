@@ -3,10 +3,11 @@
   // number (left of the residue) and of its C-terminal ions counted from the other end (right of it), for the series
   // and charges shown; the ions NuXL annotated marked by a tint of their series' colour, bold, and for screen readers
   // in words. Beside a series with ions shifted by the nucleotide, a column of those NuXL annotated (their m/z as
-  // observed, in the cross-link's colour; the shifts in the tooltip). A real table: it is the spectrum's table view too.
+  // observed, in the cross-link's colour, with the shift of each beside it; all of a number's in the tooltip). A real
+  // table: it is the spectrum's table view too.
   import { modTitle, type PeptideView } from '$lib/format/peptide'
   import { isNTerminal } from '$lib/psm/psm'
-  import type { NuxlIonColumn, NuxlIonTable } from './nuxl-psm'
+  import type { NuxlIonCell, NuxlIonColumn, NuxlIonTable } from './nuxl-psm'
 
   let { table, peptide, label }: { table: NuxlIonTable; peptide: PeptideView; label: string } = $props()
 
@@ -17,6 +18,10 @@
     return col.shifted ? 'matched ms' : isNTerminal(col.type) ? 'matched mb' : 'matched my'
   }
 </script>
+
+{#snippet shiftOf(cell: NuxlIonCell)}
+  <span class="shift" aria-hidden="true">{cell.shift}{#if cell.more}<span class="more"> +{cell.more}</span>{/if}</span><span class="sr-only"> {cell.ion}</span>
+{/snippet}
 
 <div class="overflow-x-auto">
   <table class="ions w-full border-separate border-spacing-0 text-xs tabular-nums" data-testid="ion-table">
@@ -45,7 +50,7 @@
               data-shifted={table.n[j].shifted ? '' : undefined}
               title={cell?.title}
               class={cell ? cellClass(table.n[j], cell.matched) : ''}
-              >{#if cell}{cell.mz.toFixed(4)}{#if table.n[j].shifted}<span class="sr-only"> {cell.ion}</span>{:else if cell.matched}<span class="sr-only"> annotated</span>{/if}{/if}</td>
+              >{#if cell}{cell.mz.toFixed(4)}{#if table.n[j].shifted}{@render shiftOf(cell)}{:else if cell.matched}<span class="sr-only"> annotated</span>{/if}{/if}</td>
           {/each}
           <th scope="row" class="aa" title={r.mod ? modTitle(r.mod) : undefined}
             >{#if r.mod}<span class="m">{r.residue}<sup>{r.mod.label}</sup></span>{:else}{r.residue}{/if}</th>
@@ -57,7 +62,7 @@
               data-shifted={table.c[j].shifted ? '' : undefined}
               title={cell?.title}
               class={cell ? cellClass(table.c[j], cell.matched) : ''}
-              >{#if cell}{cell.mz.toFixed(4)}{#if table.c[j].shifted}<span class="sr-only"> {cell.ion}</span>{:else if cell.matched}<span class="sr-only"> annotated</span>{/if}{/if}</td>
+              >{#if cell}{cell.mz.toFixed(4)}{#if table.c[j].shifted}{@render shiftOf(cell)}{:else if cell.matched}<span class="sr-only"> annotated</span>{/if}{/if}</td>
           {/each}
           <td class="text-muted-foreground">{n - row.index}</td>
         </tr>
@@ -66,7 +71,8 @@
   </table>
   {#if table.n.some((c) => c.shifted) || table.c.some((c) => c.shifted)}
     <p class="px-[7px] pt-1.5 text-[11px] text-muted-foreground" data-testid="shifted-note">
-      * Ions shifted by a fragment of the cross-linked nucleotide, at the m/z NuXL annotated (the shifts in their tooltips).
+      * Ions shifted by a fragment of the cross-linked nucleotide, at the m/z NuXL annotated, each with its shift (+1: one
+      more shifted ion of that number, in the tooltip).
     </p>
   {/if}
 </div>
@@ -89,6 +95,14 @@
   }
   .ions thead th.sh {
     color: var(--mod-fg);
+  }
+  .shift {
+    margin-left: 5px;
+    font-size: 10px;
+    font-weight: 500;
+  }
+  .shift .more {
+    opacity: 0.7;
   }
   .sh-mark {
     margin-left: 1px;

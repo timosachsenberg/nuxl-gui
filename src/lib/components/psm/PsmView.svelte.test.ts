@@ -85,16 +85,16 @@ describe('the PSM view', () => {
   it('says that the PSM is a cross-link, with its adduct, residue, FDR group and q-value at the cross-link FDR', async () => {
     const { target, text } = await show(true, 'DYHTVLGAR')
     expect(text('xl-badge')).toBe('cross-link')
-    expect(text('psm-adduct')).toBe('adduct U-H3O4P1 (+226.0590 Da)')
+    expect(text('psm-adduct')).toBe('adduct U-H₃PO₄ (+226.0590 Da)')
     expect(text('psm-site')).toBe('on Y2 (score 0.82)')
     const residues = Array.from(target.querySelectorAll('[data-testid="site-sequence"] span'))
     expect(residues.map((r) => r.textContent).join('')).toBe('DYHTVLGAR')
     expect(residues.filter((r) => r.classList.contains('candidate')).map((r) => r.textContent)).toEqual(['Y'])
     expect(residues.filter((r) => r.classList.contains('site')).map((r) => r.textContent)).toEqual(['Y'])
     expect(text('psm-crosslink')).toContain('FDR group XL')
-    expect(text('psm-q')).toBe('· q 1.6e-6 at the cross-link FDR of 1 %')
+    expect(text('psm-q')).toBe('· q < 0.001 at the cross-link FDR of 1 %')
     // the screen reader's sentence
-    expect(text('psm-crosslink')).toContain('Cross-link with U-H3O4P1 (+226.0590 Da), on Y2 (localization score 0.82).')
+    expect(text('psm-crosslink')).toContain('Cross-link with U-H₃PO₄ (+226.0590 Da), on Y2 (localization score 0.82).')
   })
 
   it("shows the observed peaks with NuXL's annotation, and the linear peptide below", async () => {
@@ -115,6 +115,7 @@ describe('the PSM view', () => {
     // the ion table has the shifted b ions beside the theoretical ones
     expect(target.querySelector('[data-testid="ion-table"] th[aria-label="b⁺ shifted"]')).not.toBeNull()
     expect(target.querySelector('[data-testid="ion-table"] td[data-shifted][data-ion="b2+U-H₃PO₄+"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="ion-table"] td[data-ion="b2+U-H₃PO₄+"] .shift')?.textContent).toContain('+U-H₃PO₄')
     expect(target.querySelector('[data-testid="fragment-ladder"] [data-shifted]')).not.toBeNull()
     expect(text('nuxl-scores')).toContain('total_loss_score')
     // no PeptDeep any more
@@ -137,7 +138,7 @@ describe('the PSM view', () => {
   it('says when a cross-link is not localized, and when a peptide PSM is above the peptide FDR', async () => {
     const xl = await show(true, 'VEDVHPISERPQYFSGDGK')
     expect(xl.text('psm-site')).toBe('not localized')
-    expect(xl.text('psm-adduct')).toBe('adduct UU-H3O4P1 (+532.0843 Da)')
+    expect(xl.text('psm-adduct')).toBe('adduct UU-H₃PO₄ (+532.0843 Da)')
     unmount(shown!)
     shown = null
     releaseResultsView()

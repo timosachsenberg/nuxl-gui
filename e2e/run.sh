@@ -12,7 +12,9 @@
 # E2E_SKIP_BUILD=1 skips the build (the binary is up to date). E2E_SCREEN is the screen of xvfb-run (default
 # 1920x1080x24; e2e/screens.shot.ts at GDK_SCALE=2 needs a larger one).
 # NUXL_FAKE=1 runs the specs that search against the stand-in for OpenNuXL (e2e/fake/OpenNuXL, which writes the
-# example's outputs, src/lib/results/fixtures/example) in place of a real tool: NUXL_TOOL is set to it.
+# example's outputs, src/lib/results/fixtures/example) in place of a real tool: NUXL_TOOL is set to it. The
+# screenshots (e2e/screens.shot.ts) get the outputs of fixtures/screens (OpenNuXL's test 3: realistic precursor
+# errors) instead; FAKE_NUXL_RESULTS (a folder, or a fixture's name) chooses others.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -24,7 +26,13 @@ fi
 
 if [ -n "${NUXL_FAKE:-}" ]; then
   export NUXL_TOOL="$ROOT/e2e/fake/OpenNuXL"
-  export FAKE_NUXL_RESULTS="$ROOT/src/lib/results/fixtures/example/nuxl"
+  if [ -z "${FAKE_NUXL_RESULTS:-}" ]; then
+    FAKE_NUXL_RESULTS=example
+    for a in "$@"; do
+      case $a in *screens.shot.ts) FAKE_NUXL_RESULTS=screens ;; esac
+    done
+  fi
+  export FAKE_NUXL_RESULTS
 fi
 
 cd "$ROOT"

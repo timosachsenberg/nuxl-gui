@@ -318,7 +318,7 @@ in the script).
 ## AppImage smoke test
 
 ```bash
-native/scripts/smoke-appimage.sh src-tauri/target/release/bundle/appimage/NuXL_0.1.4_amd64.AppImage \
+native/scripts/smoke-appimage.sh src-tauri/target/release/bundle/appimage/NuXL_0.1.0_amd64.AppImage \
   --hide-openms <OpenMS checkout>/build
 ```
 
@@ -376,6 +376,6 @@ A tag `desktop-native-v*` builds nothing (it releases the packages that were bui
 release job looks up the successful `main` run of the tagged commit, downloads that run's packages, the ones its
 tests, smoke test and start tests passed on, and makes a draft release of them. All six packages are required (the
 AppImage and the `.deb` of Linux x64 and of arm64, the `.dmg`, the Windows installer), each from its platform's
-artifact; the release carries them under their versioned names only (`NuXL_0.1.4_x64-setup.exe`,
-`NuXL_0.1.4_aarch64.dmg`, ...). It fails with a message when there is no such run (tag a commit of `main` whose run
+artifact; the release carries them under their versioned names only (`NuXL_0.1.0_x64-setup.exe`,
+`NuXL_0.1.0_aarch64.dmg`, ...). It fails with a message when there is no such run (tag a commit of `main` whose run
 passed), a package is missing or its artifact has expired (`gh run rerun <run>`, then re-run the release job).

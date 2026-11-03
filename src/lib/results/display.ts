@@ -56,6 +56,18 @@ export function scanNumber(nativeId: string): number | null {
   return digits === undefined ? null : Number(digits)
 }
 
+const termName: Record<string, string> = { scan: 'scan', spectrum: 'spectrum', index: 'index' }
+
+/**
+ * A native ID in words: "scan 4711" of a `scan=` term, "spectrum 19" of `spectrum=` and "index 19" of `index=`
+ * (those two count the file's spectra from 0, no scan number of the instrument); else "spectrum <native ID>".
+ */
+export function spectrumName(nativeId: string): string {
+  const m = /(?:^|\s)(scan|spectrum|index)=(\d+)(?=\s|$)/.exec(nativeId)
+  if (m) return `${termName[m[1]]} ${m[2]}`
+  return nativeId ? `spectrum ${nativeId}` : 'spectrum not referenced'
+}
+
 /**
  * A sort key that puts text in natural order by plain comparison: case-insensitive, with every run of
  * digits padded to the same width, so that "frame=5" comes before "frame=12".
@@ -71,21 +83,22 @@ export function formatCount(n: number): string {
   return counts.format(n)
 }
 
-/** A q-value in a cell: two significant digits, below 0.001 in scientific notation ("2.0e-5"); NaN is "–". */
+/**
+ * A q-value in a cell: two significant digits, below 0.001 "< 0.001" (also 0: no decoy scored as high; the
+ * digits below are NuXLFDR's tie-break of up to 1e-5 by score, not an error rate); NaN is "–".
+ */
 export function formatQValue(q: number): string {
   if (q !== q) return '–'
-  if (q === 0) return '0'
-  return q < 1e-3 ? q.toExponential(1) : String(Number(q.toPrecision(2)))
+  return q < 1e-3 ? '< 0.001' : String(Number(q.toPrecision(2)))
 }
 
 /**
  * A q-value in a narrow cell (the list beside the PSM view): at most six characters, below 0.01 in scientific
- * notation with one decimal ("3.1e-3"; "<1e-9" below that), else two significant digits ("0.012", "0.5"); NaN is "–".
+ * notation with one decimal ("3.1e-3"; "<0.001" below 0.001, as `formatQValue`), else two significant digits ("0.012", "0.5"); NaN is "–".
  */
 export function formatQCompact(q: number): string {
   if (q !== q) return '–'
-  if (q === 0) return '0'
-  if (q < 1e-9) return '<1e-9'
+  if (q < 1e-3) return '<0.001'
   return q < 0.01 ? q.toExponential(1) : String(Number(q.toPrecision(2)))
 }
 

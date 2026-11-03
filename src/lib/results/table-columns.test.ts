@@ -82,6 +82,13 @@ describe('defaultHidden', () => {
     const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, ...cutoffs })
     expect(defaultHidden(columnSpecs(m, 'proteins'), m)).toEqual(['score', 'length'])
   })
+
+  it('hides the description when the FASTA has none', () => {
+    const tables = sampleTables()
+    tables.proteins.description.fill('')
+    const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, ...cutoffs })
+    expect(defaultHidden(columnSpecs(m, 'proteins'), m)).toEqual(['gene', 'description', 'score', 'length'])
+  })
 })
 
 describe('visibleSpecs and csvColumns', () => {

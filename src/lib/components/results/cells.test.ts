@@ -39,7 +39,7 @@ describe('cross-link cells', () => {
   })
 
   it('say what an adduct is in its tooltip', () => {
-    expect(adductTitle('U-H3O4P1', 226.058973, 'U', true)).toBe('U-H3O4P1 · +226.0590 Da · nucleotide U')
+    expect(adductTitle('U-H3O4P1', 226.058973, 'U', true)).toBe('U-H₃PO₄ · +226.0590 Da · nucleotide U')
     expect(adductTitle('UC', 611.0, 'U,C', true)).toBe('UC · +611.0000 Da · nucleotides U, C')
     expect(adductTitle('U', NaN, '', false)).toBe('U · not a cross-link')
     expect(adductTitle('', 0, '', false)).toBe('')

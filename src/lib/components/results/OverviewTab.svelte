@@ -9,9 +9,12 @@
   import * as Table from '$lib/components/ui/table'
   import { COLORS } from '$lib/psm/psm'
   import { formatCount } from '$lib/results/display'
+  import { adductLabel } from '$lib/format/peptide'
   import { adductCounts, cutoffText, fdrFacts, fileRows, formatSeconds, residueCounts, totalsOf, type EngineNote } from '$lib/results/overview'
   import type { ResultsView } from '$lib/results/view.svelte'
   import { toolState } from '$lib/search/tool.svelte'
+  import { NUXL_PARAMETERS } from '$lib/settings/nuxl'
+  import { defaultsOf } from '$lib/settings/parameters'
 
   let { view }: { view: ResultsView } = $props()
 
@@ -48,11 +51,30 @@
     }
   })
 
+  // a parameter of the search: as the request gave it (only those that differ from OpenNuXL's defaults), else the default
+  const defaults = defaultsOf(NUXL_PARAMETERS)
+  const param = (name: string): unknown => settings.parameters[name] ?? defaults[name]
+  const list = (name: string): string => {
+    const v = param(name)
+    return Array.isArray(v) && v.length > 0 ? v.join(', ') : 'none'
+  }
+  const tolerance = (what: 'precursor' | 'fragment') => `${param(`${what}:mass_tolerance`)} ${param(`${what}:mass_tolerance_unit`)}`
+  const length = $derived(Number(param('NuXL:length')))
+  const scoring = $derived(String(param('NuXL:scoring')))
+
   const facts: { name: string; value: string; title?: string }[] = $derived([
     { name: 'Database', value: `${settings.database}${settings.contaminants ? ' + contaminants' : ''}` },
     { name: 'Protocol (NuXL preset)', value: preset },
+    {
+      name: 'Adducts',
+      value: length === 0 ? 'none (peptides only)' : `up to ${length} ${length === 1 ? 'nucleotide' : 'nucleotides'} · ${scoring} scoring`,
+      title: `Longest nucleotide adduct (NuXL:length ${length}); scoring ${scoring} (fast: total loss only, slow: all losses)`,
+    },
     ...fdrFacts(m),
+    { name: 'Mass tolerance', value: `precursor ${tolerance('precursor')} · fragment ${tolerance('fragment')}` },
+    { name: 'Enzyme', value: `${param('peptide:enzyme')} · ${param('peptide:missed_cleavages')} missed cleavages` },
     { name: 'Fixed modifications', value: settings.fixedMods.length > 0 ? settings.fixedMods.join(', ') : 'none' },
+    { name: 'Variable modifications', value: list('modifications:variable') },
     { name: 'Rescoring', value: rescoring },
     { name: 'Total time', value: formatSeconds(result.outcome.seconds) },
     { name: 'Engine', ...engine },
@@ -176,13 +198,13 @@
               { id: 'psms', header: 'PSMs' },
               { id: 'share', header: 'Share' },
             ],
-            rows: adducts.map((a) => [a.name, formatCount(a.count), share(a.count, xlTotal)]),
+            rows: adducts.map((a) => [adductLabel(a.name), formatCount(a.count), share(a.count, xlTotal)]),
           }}>
           <FileBars
             testid="adduct-chart"
             title="Cross-link PSMs per adduct"
             description="Bar chart of the {formatCount(xlTotal)} target cross-link PSMs by their nucleic acid adduct, {adducts.length} adducts{range(adducts)}."
-            items={adducts.map((a) => ({ file: a.name, count: a.count }))}
+            items={adducts.map((a) => ({ file: adductLabel(a.name), count: a.count }))}
             color={COLORS.b}
             mono />
         </ChartCard>

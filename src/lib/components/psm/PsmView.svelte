@@ -12,12 +12,12 @@
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import Marker from '$lib/components/results/Marker.svelte'
   import { download } from '$lib/download'
-  import { peptideView, type PeptideView } from '$lib/format/peptide'
+  import { adductLabel, peptideView, type PeptideView } from '$lib/format/peptide'
   import { annotatePeaks, type ModificationMass } from '$lib/psm/annotate'
   import { fragmentTolerance, modificationList, spectrumPeaks, svgFileName, ION_TYPES, type IonType } from '$lib/psm/psm'
   import { exportSpectrumSvg } from '$lib/psm/svg-export'
   import { baseName, passesPeptideQ } from '$lib/results/model'
-  import { formatQValue, parseAccession, parseDescription, scanNumber } from '$lib/results/display'
+  import { formatQValue, parseAccession, parseDescription, spectrumName as nameOfSpectrum } from '$lib/results/display'
   import type { LoadedSpectra, PsmSpectra } from '$lib/results/read'
   import type { PeakAnnotationResult } from '$lib/results/types'
   import type { ResultsView } from '$lib/results/view.svelte'
@@ -75,12 +75,11 @@
   const sequence = $derived(pt.sequence[k])
   const fixedMods = $derived(view.result.settings.fixedMods)
   const peptide: PeptideView = $derived(peptideView(pt, k, fixedMods))
-  const scan = $derived(scanNumber(ps.nativeId[row]))
-  const spectrumName = $derived(scan !== null ? `scan ${scan}` : ps.nativeId[row] ? `spectrum ${ps.nativeId[row]}` : 'spectrum not referenced')
+  const spectrumName = $derived(nameOfSpectrum(ps.nativeId[row]))
 
   // the cross-link
   const isXL = $derived(xl.isXL[row] === 1)
-  const adduct = $derived(xl.adduct[row] ?? '')
+  const adduct = $derived(adductLabel(xl.adduct[row] ?? ''))
   const adductMass = $derived(xl.adductMass[row])
   const site = $derived(xl.site[row])
   const localized = $derived(isXL && site >= 0 && site < sequence.length)

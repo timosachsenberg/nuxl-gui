@@ -141,7 +141,7 @@ describe('the linear peptide', () => {
     const table = nuxlIonTable(theoretical, matches, 4, o)
     expect(table.n.map((c) => c.header)).toEqual(['b⁺', 'b⁺ shifted'])
     expect(table.c.map((c) => c.header)).toEqual(['y⁺'])
-    expect(table.rows[1].n).toEqual([{ ion: 'b2', mz: 279.0975, matched: false }, { ion: "b2+U'+", mz: 500, matched: true, title: "b2+U'+ m/z 500.0000" }])
+    expect(table.rows[1].n).toEqual([{ ion: 'b2', mz: 279.0975, matched: false }, { ion: "b2+U'+", mz: 500, matched: true, title: "b2+U'+ m/z 500.0000", shift: "+U'", more: 0 }])
     expect(table.rows[2].n[0]).toEqual({ ion: 'b3', mz: 416.1564, matched: true })
     expect(table.rows[3].c[0]).toEqual({ ion: 'y1', mz: 175.119, matched: true })
   })
