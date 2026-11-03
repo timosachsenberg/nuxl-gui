@@ -1,0 +1,253 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn-svelte/tailwind.css";
+@import "@fontsource-variable/inter";
+
+@custom-variant dark (&:is(.dark *));
+
+/* The monospace fonts (src/assets/fonts/README.txt), bundled so that WebKitGTK does not fall back to a
+   wider system monospace: Liberation Mono for font-mono, as the web app's screenshots rendered it, and
+   the 0.5 em wide Inconsolata for peptide sequences (--font-sequence), as wide as the screenshots'
+   sequences. SIL OFL: Liberation Mono as released upstream (unmodified), Inconsolata as fontsource's
+   Latin subset. */
+@font-face {
+	font-family: 'Liberation Mono';
+	font-style: normal;
+	font-weight: 400;
+	font-display: block;
+	src: url('./assets/fonts/LiberationMono-Regular.ttf') format('truetype');
+}
+@font-face {
+	font-family: 'Liberation Mono';
+	font-style: normal;
+	font-weight: 700;
+	font-display: block;
+	src: url('./assets/fonts/LiberationMono-Bold.ttf') format('truetype');
+}
+@font-face {
+	font-family: 'Inconsolata';
+	font-style: normal;
+	font-weight: 400;
+	font-display: block;
+	src: url('./assets/fonts/Inconsolata-Regular-latin.woff') format('woff');
+}
+@font-face {
+	font-family: 'Inconsolata';
+	font-style: normal;
+	font-weight: 700;
+	font-display: block;
+	src: url('./assets/fonts/Inconsolata-Bold-latin.woff') format('woff');
+}
+
+:root {
+	/* peptide sequences (PeptideSequence, the fragment ladder, the ion table, the coverage map) */
+	--font-sequence: 'Inconsolata', ui-monospace, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+	--background: oklch(1 0 0);
+	--foreground: oklch(0.141 0.005 285.823);
+	--card: oklch(1 0 0);
+	--card-foreground: oklch(0.141 0.005 285.823);
+	--popover: oklch(1 0 0);
+	--popover-foreground: oklch(0.141 0.005 285.823);
+	--primary: oklch(0.21 0.006 285.885);
+	--primary-foreground: oklch(0.985 0 0);
+	--secondary: oklch(0.967 0.001 286.375);
+	--secondary-foreground: oklch(0.21 0.006 285.885);
+	--muted: oklch(0.967 0.001 286.375);
+	--muted-foreground: oklch(0.552 0.016 285.938);
+	--accent: oklch(0.967 0.001 286.375);
+	--accent-foreground: oklch(0.21 0.006 285.885);
+	--destructive: oklch(0.577 0.245 27.325);
+	--border: oklch(0.92 0.004 286.32);
+	--input: oklch(0.92 0.004 286.32);
+	--ring: oklch(0.705 0.015 286.067);
+	--chart-1: oklch(0.87 0 0);
+	--chart-2: oklch(0.556 0 0);
+	--chart-3: oklch(0.439 0 0);
+	--chart-4: oklch(0.371 0 0);
+	--chart-5: oklch(0.269 0 0);
+	--radius: 0.625rem;
+	--sidebar: oklch(0.985 0 0);
+	--sidebar-foreground: oklch(0.141 0.005 285.823);
+	--sidebar-primary: oklch(0.21 0.006 285.885);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.967 0.001 286.375);
+	--sidebar-accent-foreground: oklch(0.21 0.006 285.885);
+	--sidebar-border: oklch(0.92 0.004 286.32);
+	--sidebar-ring: oklch(0.705 0.015 286.067);
+	/* The colours of the charts, the spectrum and the sequences (dark: below). The ion series are the
+	   palette's b blue and y orange (src/lib/psm/psm.ts); a modified residue is aqua. These light values
+	   are also those of "Export spectrum (SVG)", whatever the theme (src/lib/psm/svg-export.ts). */
+	--ion-b: #2a78d6;
+	--ion-y: #eb6834;
+	--ion-other: #52525b;
+	--ion-unmatched: #a1a1aa;
+	--mod: #1baf7a;
+	/* tints with a text colour of their own (matched ions in the ion table, a modified residue, coverage) */
+	--ion-b-bg: #eff6ff;
+	--ion-b-fg: #1e40af;
+	--ion-y-bg: #fff7ed;
+	--ion-y-fg: #9a3412;
+	--ion-other-bg: #f4f4f5;
+	--ion-other-fg: #27272a;
+	--mod-bg: #d7f5ea;
+	--mod-fg: #065f46;
+	--mod-border: #a7e9cf;
+	--coverage-bg: #dbeafe;
+	--coverage-fg: #1e3a8a;
+	--coverage-light: #93c5fd;
+	/* the charts' ink (labels), muted text (ticks, axis titles), hairlines and bands, from faint to strong;
+	   the halo is the ring around labels and dots, the surface the charts stand on (--background, in hex:
+	   the SVG export writes it as it is, and not every program reads oklch) */
+	--plot-ink: #3f3f46;
+	--plot-muted: #71717a;
+	--plot-grid: #f1f1f3;
+	--plot-band: #f4f4f5;
+	--plot-rule: #e4e4e7;
+	--plot-axis: #d4d4d8;
+	--plot-zero: #a1a1aa;
+	--plot-halo: #ffffff;
+	/* a placeholder ("–") in the tables; the rows of a protein's PSMs */
+	--faint: #d4d4d8;
+	--subtle: #fafafa;
+}
+
+.dark {
+	--background: oklch(0.141 0.005 285.823);
+	--foreground: oklch(0.985 0 0);
+	--card: oklch(0.21 0.006 285.885);
+	--card-foreground: oklch(0.985 0 0);
+	--popover: oklch(0.21 0.006 285.885);
+	--popover-foreground: oklch(0.985 0 0);
+	--primary: oklch(0.92 0.004 286.32);
+	--primary-foreground: oklch(0.21 0.006 285.885);
+	--secondary: oklch(0.274 0.006 286.033);
+	--secondary-foreground: oklch(0.985 0 0);
+	--muted: oklch(0.274 0.006 286.033);
+	--muted-foreground: oklch(0.705 0.015 286.067);
+	--accent: oklch(0.274 0.006 286.033);
+	--accent-foreground: oklch(0.985 0 0);
+	--destructive: oklch(0.704 0.191 22.216);
+	--border: oklch(1 0 0 / 10%);
+	--input: oklch(1 0 0 / 15%);
+	--ring: oklch(0.552 0.016 285.938);
+	--chart-1: oklch(0.87 0 0);
+	--chart-2: oklch(0.556 0 0);
+	--chart-3: oklch(0.439 0 0);
+	--chart-4: oklch(0.371 0 0);
+	--chart-5: oklch(0.269 0 0);
+	--sidebar: oklch(0.21 0.006 285.885);
+	--sidebar-foreground: oklch(0.985 0 0);
+	--sidebar-primary: oklch(0.488 0.243 264.376);
+	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-accent: oklch(0.274 0.006 286.033);
+	--sidebar-accent-foreground: oklch(0.985 0 0);
+	--sidebar-border: oklch(1 0 0 / 10%);
+	--sidebar-ring: oklch(0.552 0.016 285.938);
+	/* the same hues, stepped for the dark card (the palette's dark steps; the neutrals swap ends) */
+	--ion-b: #3987e5;
+	--ion-y: #e8693a;
+	--ion-other: #d4d4d8;
+	--ion-unmatched: #63636b;
+	--mod: #22b583;
+	--ion-b-bg: #172a4a;
+	--ion-b-fg: #a8cbf7;
+	--ion-y-bg: #3d2114;
+	--ion-y-fg: #fcbf94;
+	--ion-other-bg: #2c2c31;
+	--ion-other-fg: #e4e4e7;
+	--mod-bg: #0f3b2d;
+	--mod-fg: #8be6c3;
+	--mod-border: #1d5c47;
+	--coverage-bg: #1b3358;
+	--coverage-fg: #c3dafa;
+	--coverage-light: #2f5a94;
+	--plot-ink: #d4d4d8;
+	--plot-muted: #a1a1aa;
+	--plot-grid: #2a2a2f;
+	--plot-band: #26262b;
+	--plot-rule: #3a3a40;
+	--plot-axis: #46464d;
+	--plot-zero: #71717a;
+	--plot-halo: #09090b;
+	--faint: #52525b;
+	--subtle: oklch(0.185 0.006 285.885);
+}
+
+@theme inline {
+	--font-sans: 'Inter Variable', sans-serif;
+	--font-mono: 'Liberation Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Courier New', monospace;
+	/* the mockups' body text is 13px/1.45: text-sm (inputs, buttons, menus) follows it */
+	--text-sm: 0.8125rem;
+	--text-sm--line-height: 1.45;
+	--color-sidebar-ring: var(--sidebar-ring);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+	--color-sidebar-primary: var(--sidebar-primary);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar: var(--sidebar);
+	--color-ion-b: var(--ion-b);
+	--color-ion-y: var(--ion-y);
+	--color-mod: var(--mod);
+	--color-mod-bg: var(--mod-bg);
+	--color-mod-fg: var(--mod-fg);
+	--color-mod-border: var(--mod-border);
+	--color-coverage-light: var(--coverage-light);
+	--color-faint: var(--faint);
+	--color-subtle: var(--subtle);
+	--color-chart-5: var(--chart-5);
+	--color-chart-4: var(--chart-4);
+	--color-chart-3: var(--chart-3);
+	--color-chart-2: var(--chart-2);
+	--color-chart-1: var(--chart-1);
+	--color-ring: var(--ring);
+	--color-input: var(--input);
+	--color-border: var(--border);
+	--color-destructive: var(--destructive);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-accent: var(--accent);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-muted: var(--muted);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-secondary: var(--secondary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-primary: var(--primary);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-popover: var(--popover);
+	--color-card-foreground: var(--card-foreground);
+	--color-card: var(--card);
+	--color-foreground: var(--foreground);
+	--color-background: var(--background);
+	--radius-sm: calc(var(--radius) * 0.6);
+	--radius-md: calc(var(--radius) * 0.8);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) * 1.4);
+	--radius-2xl: calc(var(--radius) * 1.8);
+	--radius-3xl: calc(var(--radius) * 2.2);
+	--radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+	body {
+		@apply bg-background text-foreground;
+		font-size: 13px;
+		line-height: 1.45;
+		-webkit-font-smoothing: antialiased;
+	}
+	html {
+		@apply font-sans;
+	}
+}
+
+@keyframes progress-indeterminate {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(300%);
+	}
+}

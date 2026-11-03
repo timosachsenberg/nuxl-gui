@@ -1,0 +1,68 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ProSE",
+  "version": "0.1.4",
+  "identifier": "org.openms.prose.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "ProSE",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 720,
+        "minHeight": 520
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "appimage",
+      "deb"
+    ],
+    "resources": [
+      "resources/fasta/crap.fasta",
+      "resources/example/Ecoli_MS2_small.mzML",
+      "resources/example/Ecoli_K12_proteome.fasta",
+      "resources/notices/",
+      "resources/prose/"
+    ],
+    "license": "BSD-3-Clause",
+    "licenseFile": "../LICENSE",
+    "copyright": "Copyright OpenMS Inc. -- Eberhard Karls University Tuebingen, ETH Zurich, and Freie Universitaet Berlin 2002-present",
+    "icon": [
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "shortDescription": "ProSE: the OpenMS search engine for bottom-up proteomics",
+    "longDescription": "ProSE searches MS/MS spectra (mzML) against a protein database (FASTA) with the ProSE engine of OpenMS, rescores with Percolator and PeptDeep, and shows the PSMs, peptides and proteins with annotated spectra. Everything runs on this computer.",
+    "publisher": "OpenMS",
+    "homepage": "https://openms.de",
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false,
+        "files": {}
+      },
+      "deb": {
+        "section": "science",
+        "files": {
+          "/usr/share/doc/prose/copyright": "resources/notices/copyright"
+        }
+      }
+    }
+  }
+}

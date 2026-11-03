@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window: the app's commands, events and drag and drop (core), the open dialog for inputs (the save dialog runs in Rust), the window's theme (the theme menu's Light or Dark)",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:window:allow-set-theme", "dialog:allow-open"]
+}

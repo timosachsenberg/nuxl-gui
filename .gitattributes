@@ -1,0 +1,6 @@
+# Shell scripts and the test fixtures keep LF line ends everywhere, also in a Windows checkout
+# (Git for Windows converts to CRLF by default, which bash and the byte-exact tests refuse).
+*.sh text eol=lf
+*.py text eol=lf
+src-tauri/tests/fixtures/** -text
+src-tauri/resources/** -text
