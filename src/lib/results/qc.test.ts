@@ -120,8 +120,8 @@ describe('precursorErrors', () => {
 describe('psmsPerFile', () => {
   it("counts the target PSMs at the cutoff per searched file, in the order of the search", () => {
     expect(psmsPerFile(model({ psmFdr: 0.01 }))).toEqual([
-      { file: 'ctrl_a.mzML', count: 3 }, // PSMs 0 1 3 (the decoy is out)
-      { file: 'egf_a.mzML', count: 4 }, // PSMs 4 5 6 7 (PSM 2 has q 0.02)
+      { file: 'ctrl_a.mzML', count: 3, parts: [3, 0] }, // PSMs 0 1 3 (the decoy is out)
+      { file: 'egf_a.mzML', count: 4, parts: [4, 0] }, // PSMs 4 5 6 7 (PSM 2 has q 0.02)
     ])
     expect(psmsPerFile(model({ psmFdr: 1 })).map((f) => f.count)).toEqual([3, 4 + 1]) // PSM 2 now counts
   })

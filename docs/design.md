@@ -111,7 +111,7 @@ OpenNuXL prints OpenMS' progress lines on stdout: `Progress of '<label>':`, then
 `{ label, file, fraction }`: the file `k` of `n` and a fraction over all runs, each run weighted equally and split
 into its stages (reading and preprocessing the spectra, the database and decoys, scoring — the long stage, with
 its percentages —, post-processing, FDR, Percolator). Labels as in ProSE desktop: "Searching <name> (2 of 3)...",
-"Scoring <name> (2 of 3)... 45 %", "Percolator: <name> (2 of 3)...". The autotune's own load of the spectra (the filter `spectrumclusterfilter`,
+"Scoring <name> (2 of 3)... this step 45 %" (the percentage of the scoring step, which OpenNuXL reports; the bar and the percentage beside it are the whole search's), "Percolator: <name> (2 of 3)...". The autotune's own load of the spectra (the filter `spectrumclusterfilter`,
 before `IDFilter excludes <n> spectra.`) is part of the autotune.
 
 ## 5. Results (the front end)

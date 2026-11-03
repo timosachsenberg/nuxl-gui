@@ -33,7 +33,7 @@
 
 <SearchError />
 
-<div class="fixed inset-x-0 bottom-0 z-40 h-[60px] border-t bg-background/95 backdrop-blur-sm">
+<div class="fixed inset-x-0 bottom-0 z-40 h-[60px] border-t bg-background/95 backdrop-blur-sm" data-testid="search-footer">
   <div class="mx-auto flex h-full max-w-[1120px] items-center gap-3 px-5">
     {#if searchRun.status === 'running'}
       <SearchProgress class="flex-1" />

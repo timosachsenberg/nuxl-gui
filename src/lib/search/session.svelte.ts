@@ -123,7 +123,7 @@ class ProgressView {
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
   })
   /**
-   * The step as the shim says it ("Scoring run.mzML (2 of 3)… 45 %"), with its file when the search has several and
+   * The step as the shim says it ("Scoring run.mzML (2 of 3)… this step 45 %"), with its file when the search has several and
    * the label does not name it ("File 2 of 3 · Post-processing…").
    */
   label = $derived.by(() => {

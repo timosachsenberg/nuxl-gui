@@ -1389,7 +1389,7 @@ fn a_search_ends_with_done_its_outputs_recorded_and_the_partial_folder_becomes_t
     );
     let labels: Vec<&str> = progress.iter().map(|p| p.0.as_str()).collect();
     for label in [
-        "Scoring a.mzML (1 of 1)... 33 %",
+        "Scoring a.mzML (1 of 1)... this step 33 %",
         "Percolator: a.mzML (1 of 1)...",
     ] {
         assert!(labels.contains(&label), "{label} in {labels:?}");
@@ -1999,7 +1999,7 @@ fn a_failure_names_the_cause_and_the_outputs_without_the_search_folder() {
          file failed (e.g. disk full or I/O error))"
     );
     assert_eq!(f.ended.as_deref(), Some("OpenNuXL ended with exit code 12"));
-    assert_eq!(f.stage, "Scoring diskfull.mzML (1 of 1)... 0 %");
+    assert_eq!(f.stage, "Scoring diskfull.mzML (1 of 1)... this step 0 %");
     let detail = f.detail.as_deref().unwrap();
     assert!(!detail.contains(".partial"), "{detail}");
 }

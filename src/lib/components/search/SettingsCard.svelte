@@ -146,7 +146,7 @@
           {form.value<number>('NuXL:length') === 1 ? 'nucleotide' : 'nucleotides'}
         </InputGroup.Addon>
       </InputGroup.Root>
-      <p class="text-xs text-muted-foreground">0 searches peptides without adducts.</p>
+      <p class="text-xs text-muted-foreground">Set 0 to search linear peptides only.</p>
     </div>
     <div class="grid min-w-0 content-start gap-1">
       <Label for="scoring" class="text-xs">Scoring</Label>

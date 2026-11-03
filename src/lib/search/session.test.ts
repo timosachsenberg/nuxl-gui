@@ -105,8 +105,8 @@ describe('runSearch', () => {
     expect(searchProgress.label).toBe('Searching b.mzML (2 of 2)…')
     expect(searchProgress.percent).toBe(50)
     // the scoring's own percentage stays in the label; a label without the file gets it
-    search.progress({ label: 'Scoring b.mzML (2 of 2)… 45 %', file: 1, fraction: 0.7 })
-    expect(searchProgress.label).toBe('Scoring b.mzML (2 of 2)… 45 %')
+    search.progress({ label: 'Scoring b.mzML (2 of 2)… this step 45 %', file: 1, fraction: 0.7 })
+    expect(searchProgress.label).toBe('Scoring b.mzML (2 of 2)… this step 45 %')
     search.progress({ label: 'Post-processing...', file: 1, fraction: 0.8 })
     expect(searchProgress.label).toBe('File 2 of 2 · Post-processing…')
     search.done.resolve({ folder: '/data/searches/17-0' })

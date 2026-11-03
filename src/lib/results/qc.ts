@@ -162,12 +162,17 @@ export function precursorErrors(m: ResultModel): PrecursorErrors | null {
   }
 }
 
-export type FileCount = { file: string; count: number }
+/** `parts`: of `count`, the peptide PSMs and the cross-link PSMs. */
+export type FileCount = { file: string; count: number; parts: [number, number] }
 
-/** The target PSMs at the search's cutoffs in each searched file, in the order of the search. */
+/** The target PSMs at the search's cutoffs in each searched file, in the order of the search, peptides and cross-links apart. */
 export function psmsPerFile(m: ResultModel): FileCount[] {
   const counts = new Array<number>(m.tables.files.length).fill(0)
-  const file = m.tables.psms.file
-  for (const i of levelRows(m, 'psms', false)) counts[file[i]]++
-  return m.tables.files.map((path, f) => ({ file: baseName(path), count: counts[f] }))
+  const xls = new Array<number>(m.tables.files.length).fill(0)
+  const { file, xl } = m.tables.psms
+  for (const i of levelRows(m, 'psms', false)) {
+    counts[file[i]]++
+    if (xl.isXL[i] === 1) xls[file[i]]++
+  }
+  return m.tables.files.map((path, f) => ({ file: baseName(path), count: counts[f], parts: [counts[f] - xls[f], xls[f]] }))
 }

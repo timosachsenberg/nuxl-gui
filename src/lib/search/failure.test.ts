@@ -61,7 +61,7 @@ describe('describeFailure', () => {
 
   it('keeps the app\'s own messages whole', () => {
     const own = 'The search folder cannot be finished (Access is denied. (os error 5)).'
-    const f = describeFailure({ label: 'Scoring run.mzML (1 of 2)… 45 %', file: 0, files, silentMs: 0 }, own)
+    const f = describeFailure({ label: 'Scoring run.mzML (1 of 2)… this step 45 %', file: 0, files, silentMs: 0 }, own)
     expect(f.summary).toBe(own)
     expect(f.detail).toBeNull()
   })

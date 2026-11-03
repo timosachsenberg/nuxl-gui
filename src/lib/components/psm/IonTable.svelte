@@ -20,7 +20,7 @@
 </script>
 
 {#snippet shiftOf(cell: NuxlIonCell)}
-  <span class="shift" aria-hidden="true">{cell.shift}{#if cell.more}<span class="more"> +{cell.more}</span>{/if}</span><span class="sr-only"> {cell.ion}</span>
+  <span class="shift" aria-hidden="true">{cell.shift}{#if cell.more}<span class="more">&nbsp;· {cell.more} more</span>{/if}</span><span class="sr-only"> {cell.ion}</span>
 {/snippet}
 
 <div class="overflow-x-auto">
@@ -71,8 +71,8 @@
   </table>
   {#if table.n.some((c) => c.shifted) || table.c.some((c) => c.shifted)}
     <p class="px-[7px] pt-1.5 text-[11px] text-muted-foreground" data-testid="shifted-note">
-      * Ions shifted by a fragment of the cross-linked nucleotide, at the m/z NuXL annotated, each with its shift (+1: one
-      more shifted ion of that number, in the tooltip).
+      * Ions shifted by a fragment of the cross-linked nucleotide, at the m/z NuXL annotated, each with its shift (and how many
+      more shifted ions of that number there are: all in the tooltip).
     </p>
   {/if}
 </div>
@@ -102,7 +102,8 @@
     font-weight: 500;
   }
   .shift .more {
-    opacity: 0.7;
+    font-weight: 400;
+    opacity: 0.75;
   }
   .sh-mark {
     margin-left: 1px;

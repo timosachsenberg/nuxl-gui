@@ -2,7 +2,8 @@
   // The QC tab: three charts of the search's quality, each for the target PSMs the search kept (peptide
   // PSMs at the peptide FDR, cross-link PSMs at the cross-link FDR): how the peptide PSMs and the cross-link
   // PSMs score, how far the precursor masses are off, and how many PSMs each file gave. Peptide PSMs are
-  // blue and cross-links orange (a validated pair); every chart says in its subtitle which PSMs it shows
+  // blue and cross-links orange (a validated pair) wherever they are told apart (the PSMs per file stacked); the
+  // precursor errors of all of them are neutral grey; every chart says in its subtitle which PSMs it shows
   // and has a table of its numbers. (OpenNuXL's filtered files hold no decoys, so none is plotted.)
   import ChartCard from '$lib/components/charts/ChartCard.svelte'
   import FileBars from '$lib/components/charts/FileBars.svelte'
@@ -22,6 +23,8 @@
 
   const targetColor = COLORS.b
   const xlColor = COLORS.y
+  /** all PSMs, peptides and cross-links together */
+  const allColor = 'var(--plot-neutral)'
 
   const score = $derived(scoreDistribution(m))
   const errors = $derived(precursorErrors(m))
@@ -107,8 +110,8 @@
         xLabel="Precursor error (ppm)"
         unit="ppm"
         zeroLine
-        marker={{ x: errors.median, label: `median precursor error ${signedNumber(errors.median, 1)} ppm` }}
-        series={[{ name: 'Target PSMs', color: targetColor, counts: errors.counts, testid: 'error-bar' }]} />
+        marker={{ x: errors.median, label: `signed median ${signedNumber(errors.median, 1)} ppm` }}
+        series={[{ name: 'Target PSMs', color: allColor, counts: errors.counts, testid: 'error-bar' }]} />
     </ChartCard>
   {:else}
     <ChartCard testid="qc-precursor" title="Precursor mass error" subtitle="Target PSMs at the search's cutoffs ({fdr})">
@@ -122,14 +125,28 @@
     title="PSMs per file"
     subtitle="Target PSMs at the search's cutoffs ({fdr})"
     class="xl:col-span-2"
+    legend={[
+      { label: 'Peptide PSMs', color: targetColor, value: formatCount(files.reduce((n, f) => n + f.parts[0], 0)) },
+      { label: 'Cross-link PSMs', color: xlColor, value: formatCount(files.reduce((n, f) => n + f.parts[1], 0)) },
+    ]}
     table={{
       name: 'PSMs per file',
       columns: [
         { id: 'file', header: 'File', align: 'left' },
+        { id: 'peptides', header: 'Peptide PSMs' },
+        { id: 'crosslinks', header: 'Cross-link PSMs' },
         { id: 'psms', header: 'PSMs' },
       ],
-      rows: files.map((f) => [f.file, formatCount(f.count)]),
+      rows: files.map((f) => [f.file, formatCount(f.parts[0]), formatCount(f.parts[1]), formatCount(f.count)]),
     }}>
-    <FileBars title="Target PSMs per file" description={filesDescription} items={files} color={targetColor} />
+    <FileBars
+      title="Target PSMs per file"
+      description={filesDescription}
+      items={files}
+      color={targetColor}
+      segments={[
+        { name: 'Peptide PSMs', color: targetColor },
+        { name: 'Cross-link PSMs', color: xlColor },
+      ]} />
   </ChartCard>
 </div>

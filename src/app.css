@@ -106,6 +106,8 @@
 	--plot-axis: #d4d4d8;
 	--plot-zero: #a1a1aa;
 	--plot-halo: #ffffff;
+	/* the bars of all PSMs together (peptides blue, cross-links orange: these are neither) */
+	--plot-neutral: #71717a;
 	/* a placeholder ("–") in the tables; the rows of a protein's PSMs */
 	--faint: #d4d4d8;
 	--subtle: #fafafa;
@@ -169,6 +171,7 @@
 	--plot-axis: #46464d;
 	--plot-zero: #71717a;
 	--plot-halo: #09090b;
+	--plot-neutral: #a1a1aa;
 	--faint: #52525b;
 	--subtle: oklch(0.185 0.006 285.885);
 }

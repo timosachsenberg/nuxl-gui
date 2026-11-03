@@ -20,7 +20,7 @@
 //! | `Progress of 'Filtering spectra...'`, `'Calculate Nucleotide Tags...'`, `'Calculate intensity ranks...'`, `'Calculate AA Tags...'`, `'Mapping precursors to scan...'`, `'Indexing spectra...'` | `Preparing the spectra of <name> (k of n)...` | 0.13 to 0.18 |
 //! | `Progress of 'Load database from FASTA file...'`                        | `Reading the database (k of n)...`          | 0.19         |
 //! | `Progress of 'Generating decoys...'`                                    | `Generating decoys (k of n)...`             | 0.20         |
-//! | `Progress of 'Scoring peptide models against spectra...'`, its `%`      | `Scoring <name> (k of n)... 45 %`           | 0.22 to 0.80 |
+//! | `Progress of 'Scoring peptide models against spectra...'`, its `%`      | `Scoring <name> (k of n)... this step 45 %` | 0.22 to 0.80 |
 //! | `Progress of 'Post-processing PSMs... (spectra filtering)'`, `(localization of cross-links)`, `(annotation)` | `Post-processing <name> (k of n)...` | 0.80, 0.82, 0.86 |
 //! | `Calculating peptide and XL q-values.`                                  | `FDR: <name> (k of n)...`                   | 0.90         |
 //! | `Running percolator.`                                                   | `Percolator: <name> (k of n)...`            | 0.92         |
@@ -223,7 +223,7 @@ impl ProgressTracker {
             if self.stage == Stage::Scoring && fraction > self.scored {
                 self.scored = fraction;
                 let label = format!(
-                    "{} {} %",
+                    "{} this step {} %",
                     self.label_of("Scoring", true),
                     (fraction * 100.0).floor() as u32
                 );
@@ -302,7 +302,7 @@ impl ProgressTracker {
             );
         }
         if label.starts_with("Scoring peptide models against spectra") {
-            let label = format!("{} 0 %", self.label_of("Scoring", true));
+            let label = format!("{} this step 0 %", self.label_of("Scoring", true));
             return self.step(Stage::Scoring, SCORING_START, label);
         }
         if let Some(rest) = label.strip_prefix("Post-processing PSMs...") {
@@ -438,10 +438,10 @@ mod tests {
                 "Preparing the spectra of RNA_UV.mzML (1 of 1)...",
                 "Reading the database (1 of 1)...",
                 "Generating decoys (1 of 1)...",
-                "Scoring RNA_UV.mzML (1 of 1)... 0 %",
-                "Scoring RNA_UV.mzML (1 of 1)... 12 %",
-                "Scoring RNA_UV.mzML (1 of 1)... 56 %",
-                "Scoring RNA_UV.mzML (1 of 1)... 99 %",
+                "Scoring RNA_UV.mzML (1 of 1)... this step 0 %",
+                "Scoring RNA_UV.mzML (1 of 1)... this step 12 %",
+                "Scoring RNA_UV.mzML (1 of 1)... this step 56 %",
+                "Scoring RNA_UV.mzML (1 of 1)... this step 99 %",
                 "Post-processing RNA_UV.mzML (1 of 1)...",
                 "FDR: RNA_UV.mzML (1 of 1)...",
                 "Percolator: RNA_UV.mzML (1 of 1)...",
@@ -450,8 +450,8 @@ mod tests {
         );
         assert!(steps.iter().all(|s| s.1 == 0), "{steps:?}");
         let at = |label: &str| steps.iter().find(|s| s.0 == label).unwrap().2;
-        assert!((at("Scoring RNA_UV.mzML (1 of 1)... 0 %") - SCORING_START).abs() < 1e-9);
-        let half = at("Scoring RNA_UV.mzML (1 of 1)... 56 %");
+        assert!((at("Scoring RNA_UV.mzML (1 of 1)... this step 0 %") - SCORING_START).abs() < 1e-9);
+        let half = at("Scoring RNA_UV.mzML (1 of 1)... this step 56 %");
         assert!(
             (half - (SCORING_START + 0.5678 * (SCORING_END - SCORING_START))).abs() < 1e-9,
             "{half}"
@@ -580,7 +580,7 @@ mod tests {
         assert!(tracker.feed("45.00 %   ").is_none());
         tracker.feed("Progress of 'Scoring peptide models against spectra...':");
         let p = tracker.feed("50.00 %               ").unwrap();
-        assert_eq!(p.label, "Scoring a.mzML (1 of 1)... 50 %");
+        assert_eq!(p.label, "Scoring a.mzML (1 of 1)... this step 50 %");
         // a lower percentage, or the same again: nothing
         assert!(tracker.feed("10.00 %").is_none());
         assert!(tracker.feed("50.00 %").is_none());

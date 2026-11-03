@@ -205,7 +205,7 @@
             title="Cross-link PSMs per adduct"
             description="Bar chart of the {formatCount(xlTotal)} target cross-link PSMs by their nucleic acid adduct, {adducts.length} adducts{range(adducts)}."
             items={adducts.map((a) => ({ file: adductLabel(a.name), count: a.count }))}
-            color={COLORS.b}
+            color={COLORS.y}
             mono />
         </ChartCard>
         <ChartCard
