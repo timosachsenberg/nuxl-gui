@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SearchProgress, SearchRequest } from '../desktop'
 
 // The run of a search in the session, against a fake shim: its progress, the result read from its
-// folder, a failure with ProSE's stage and file, and a cancel (also one that races the end).
+// folder, a failure with OpenNuXL's stage and file, and a cancel (also one that races the end).
 
 const fake = vi.hoisted(() => ({
   start: vi.fn(),
@@ -50,17 +50,17 @@ const {
 const request: SearchRequest = {
   files: [
     { id: 'f1', path: '/runs/a.mzML' },
-    { id: 'f2', path: '/runs/b.mzML.gz' },
+    { id: 'f2', path: '/runs/b.mzML' },
   ],
   database: '/db/human.fasta',
   contaminants: true,
-  settings: { parameters: {}, rescore: true, peptdeep: false, threads: 0 },
+  settings: { parameters: { 'NuXL:presets': 'RNA-UV (U)' }, rescore: true, threads: 0, peptideFdr: 0.01, xlFdr: 0.01 },
 }
 const meta = {
   design: { rows: [], samples: [], conditions: [] } as never,
   psmFdr: 0.01,
-  proteinFdr: 0.01,
-  settings: { parameters: {}, fixedMods: [], database: 'human.fasta', rescore: true, peptdeep: false, contaminants: true },
+  proteinFdr: 1,
+  settings: { parameters: {}, fixedMods: [], database: 'human.fasta', rescore: true, contaminants: true, peptideFdr: 0.01, xlFdr: 0.01 },
 }
 
 function deferred<T>() {
@@ -98,12 +98,17 @@ describe('runSearch', () => {
     const run = runSearch(request, meta)
     await settle()
     expect(searchRun.status).toBe('running')
-    expect(searchRun.files).toEqual(['a.mzML', 'b.mzML.gz'])
-    expect(searchProgress.label).toBe('Starting ProSE…')
+    expect(searchRun.files).toEqual(['a.mzML', 'b.mzML'])
+    expect(searchProgress.label).toBe('Starting OpenNuXL…')
     expect(searchProgress.threads).toBe('all threads')
-    search.progress({ label: 'Searching b.mzML.gz (2 of 2)...', file: 1, fraction: 0.5 })
-    expect(searchProgress.label).toBe('Searching b.mzML.gz (2 of 2)…')
+    search.progress({ label: 'Searching b.mzML (2 of 2)...', file: 1, fraction: 0.5 })
+    expect(searchProgress.label).toBe('Searching b.mzML (2 of 2)…')
     expect(searchProgress.percent).toBe(50)
+    // the scoring's own percentage stays in the label; a label without the file gets it
+    search.progress({ label: 'Scoring b.mzML (2 of 2)… 45 %', file: 1, fraction: 0.7 })
+    expect(searchProgress.label).toBe('Scoring b.mzML (2 of 2)… 45 %')
+    search.progress({ label: 'Post-processing...', file: 1, fraction: 0.8 })
+    expect(searchProgress.label).toBe('File 2 of 2 · Post-processing…')
     search.done.resolve({ folder: '/data/searches/17-0' })
     expect(await run).toBe('17-0')
     expect(fake.read).toHaveBeenCalledWith('files of 17-0')
@@ -150,33 +155,33 @@ describe('runSearch', () => {
     expect(openResult.current?.id).toBe('22-0')
   })
 
-  it('a failure says where: the stage and the file ProSE was at', async () => {
+  it('a failure says where: the stage and the file OpenNuXL was at', async () => {
     const search = started()
     const run = runSearch(request, meta)
     await settle()
-    search.done.reject(new SearchFailed('Error: Unable to read file (broken)', 'Searching b.mzML.gz (2 of 2)...', 1))
+    search.done.reject(new SearchFailed('Error: Unable to read file (broken)', 'Searching b.mzML (2 of 2)...', 1))
     expect(await run).toBeNull()
     expect(searchRun.status).toBe('failed')
-    expect(searchRun.failure?.context).toBe('While searching file 2 of 2 (b.mzML.gz)')
+    expect(searchRun.failure?.context).toBe('While searching file 2 of 2 (b.mzML)')
     expect(searchRun.failure?.summary).toBe('Error: Unable to read file (broken)')
   })
 
-  it('a crash leads with how ProSE ended, with its last lines and the kept log', async () => {
+  it('a crash leads with how OpenNuXL ended, with its last lines and the kept log', async () => {
     const search = started()
     const run = runSearch(request, meta)
     await settle()
     search.done.reject(
-      new (SearchFailed as unknown as new (...a: unknown[]) => Error)('Reading b.mzML.gz ...', 'Searching b.mzML.gz (2 of 2)...', 1, {
-        ended: 'ProSE crashed (signal 11, SIGSEGV)',
-        detail: 'Reading b.mzML.gz ...',
+      new (SearchFailed as unknown as new (...a: unknown[]) => Error)('Reading b.mzML ...', 'Searching b.mzML (2 of 2)...', 1, {
+        ended: 'OpenNuXL crashed (signal 11, SIGSEGV)',
+        detail: 'Reading b.mzML ...',
         log: '/data/logs/last-failure.log',
       }),
     )
     expect(await run).toBeNull()
     expect(searchRun.failure).toEqual({
-      context: 'While searching file 2 of 2 (b.mzML.gz)',
-      summary: 'ProSE crashed (signal 11, SIGSEGV): Reading b.mzML.gz ...',
-      detail: 'Reading b.mzML.gz ...',
+      context: 'While searching file 2 of 2 (b.mzML)',
+      summary: 'OpenNuXL crashed (signal 11, SIGSEGV): Reading b.mzML ...',
+      detail: 'Reading b.mzML ...',
       log: '/data/logs/last-failure.log',
     })
   })
@@ -290,7 +295,7 @@ describe('runSearch', () => {
     expect(searchRun.failure).toEqual({ context: 'While reading the results', summary: 'qpx/runs/1__a.psm.parquet: not a Parquet file', detail: null, searchId: '17-0' })
   })
 
-  it('once ProSE has ended, Cancel does nothing: the done won, and the search is read and opened', async () => {
+  it('once OpenNuXL has ended, Cancel does nothing: the done won, and the search is read and opened', async () => {
     const search = started('24-0')
     const read = deferred<unknown>()
     fake.read.mockReturnValueOnce(read.promise)

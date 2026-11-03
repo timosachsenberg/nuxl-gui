@@ -1,6 +1,6 @@
 import type { ParamEntry } from './parameters'
 
-// Modifications as ProSE names them ("Oxidation (M)", "Acetyl (Protein N-term)", "Gln->pyro-Glu (N-term Q)"):
+// Modifications as OpenMS names them ("Oxidation (M)", "Acetyl (Protein N-term)", "Gln->pyro-Glu (N-term Q)"):
 // one residue per name. The page shows the residues of one modification together ("Phospho (STY)") and
 // accepts such a name as input, expanded to one modification per residue.
 
@@ -41,7 +41,7 @@ export function expandModification(text: string): string[] {
 
 /**
  * The modifications for display: residue modifications of the same name are shown as one
- * ("Phospho (STY)"), at the place of the first; terminal ones stay apart. `specs` are ProSE's names.
+ * ("Phospho (STY)"), at the place of the first; terminal ones stay apart. `specs` are OpenMS' names.
  */
 export function groupModifications(specs: string[]): { label: string; specs: string[] }[] {
   const groups: { label: string; specs: string[]; parsed: ParsedModification | null }[] = []
@@ -67,7 +67,7 @@ export function groupModifications(specs: string[]): { label: string; specs: str
 }
 
 /**
- * The fixed and variable modifications of `values` that are not among ProSE's names (the allowed
+ * The fixed and variable modifications of `values` that are not among OpenMS' names (the allowed
  * values of its parameter definitions). Nothing without the definitions (OpenMS not loaded yet).
  */
 export function unknownModifications(values: Record<string, unknown>, entries: ParamEntry[]): string[] {

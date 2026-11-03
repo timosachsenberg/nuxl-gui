@@ -5,7 +5,7 @@
 //
 //   node scripts/unimod-table.mjs <OpenMS checkout of the pin>
 //
-// No output of ProSE has the masses of the modifications (docs/parity.md, peptides.modMass).
+// The results name modifications as OpenMS does (its ids); this table gives their mass deltas.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'

@@ -14,7 +14,7 @@ describe('modifications', () => {
     expect(parseModification('weird')).toBeNull()
   })
 
-  it('expands several residues into one modification per residue, as ProSE names them', () => {
+  it('expands several residues into one modification per residue, as OpenMS names them', () => {
     expect(expandModification('Phospho (STY)')).toEqual(['Phospho (S)', 'Phospho (T)', 'Phospho (Y)'])
     expect(expandModification('Deamidated (NQ)')).toEqual(['Deamidated (N)', 'Deamidated (Q)'])
     expect(expandModification('Oxidation (M)')).toEqual(['Oxidation (M)'])
@@ -54,7 +54,7 @@ describe('modifications', () => {
 })
 
 describe('unknownModifications', () => {
-  it('lists the fixed and variable modifications that are not among ProSE\'s names', () => {
+  it('lists the fixed and variable modifications that are not among OpenMS\' names', () => {
     const valid = ['Carbamidomethyl (C)', 'Oxidation (M)', 'Phospho (S)']
     const entries: ParamEntry[] = ['modifications:fixed', 'modifications:variable'].map((name) => ({
       name,

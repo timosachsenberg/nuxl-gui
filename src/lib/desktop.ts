@@ -19,8 +19,8 @@ import type { HistoryBackend, HistoryEntry } from './history/history'
 import type { ByteRange, SearchFiles } from './results/read'
 import { errorText } from './format/error'
 
-/** The ProSE tool the app runs: its version, where it is, and whether it has ONNX Runtime (PeptDeep). */
-export type ToolInfo = { version: string; path: string; onnx: boolean }
+/** The OpenNuXL tool the app runs: its version and where it is. */
+export type ToolInfo = { version: string; path: string }
 
 /** A file the user chose, by path (never read by the page; the shim reads it where it is). */
 export type InputFile = { path: string; name: string; size: number }
@@ -35,26 +35,37 @@ export type FileFacts = InputFile & {
   /** Why the file cannot be used (missing, unreadable). */
   error: string | null
   /**
-   * Why ProSE cannot search the file, which is there (src-tauri/src/content.rs): an mzML that is not one, is cut off
+   * Why OpenNuXL cannot search the file, which is there (src-tauri/src/content.rs): an mzML that is not one, is cut off
    * or has no spectra; a FASTA without entries, with an accession twice, a protein too long. Sentences, the file named.
    */
   problem: string | null
-  /** What ProSE treats specially (a FASTA's entries listed twice, which it searches once): sentences, not blocking. */
+  /** What the search treats specially (a FASTA's entries listed twice, which it searches once): sentences, not blocking. */
   warnings: string[]
 }
 
-/** The search request of the shim (src-tauri/src/args.rs `SearchRequest`, camelCase). */
+/** A value of an OpenNuXL parameter in the request: a number, a string, a switch (a flag, or a "true"/"false" choice), a list. */
+export type ParameterValue = number | string | boolean | string[] | number[]
+
+/** The search request of the shim (src-tauri/src/args.rs `SearchRequest`, camelCase; docs/design.md §3). */
 export type SearchRequest = {
   files: { id: string; path: string }[]
   database: string
+  /** Append the bundled cRAP to the database, with `CON__` accessions. */
   contaminants: boolean
   settings: {
-    /** ProSE's `Search:` parameters by name without the prefix (args.rs `PARAMETERS`). */
-    parameters: Record<string, unknown>
+    /**
+     * OpenNuXL's options by their full name (`precursor:mass_tolerance`, `NuXL:presets`; args.rs `PARAMETERS`), those
+     * that differ from OpenNuXL's defaults. Never the shim's own (`-in`, `-out*`, `-threads`, the FDR and Percolator
+     * options, `NuXL:decoys`).
+     */
+    parameters: Record<string, ParameterValue>
+    /** Percolator (`-percolator_backend builtin`; false: `none`). */
     rescore: boolean
-    peptdeep: boolean
     /** `-threads`; 0: all cores. */
     threads: number
+    /** The FDR of the peptide PSMs and of the cross-link PSMs, fractions in (0, 1]. */
+    peptideFdr: number
+    xlFdr: number
   }
 }
 
@@ -63,15 +74,15 @@ export type SearchProgress = { label: string; file: number; fraction: number }
 
 /** What `search://failed` says beyond the message (src-tauri/src/run.rs `FailedEvent`). */
 export type FailureDetails = {
-  /** How ProSE ended: "ProSE crashed (signal 11, SIGSEGV)", "ProSE ended with exit code 3". */
+  /** How OpenNuXL ended: "OpenNuXL crashed (signal 11, SIGSEGV)", "OpenNuXL ended with exit code 3". */
   ended?: string
-  /** ProSE's last lines on stderr. */
+  /** OpenNuXL's last lines on stderr. */
   detail?: string
   /** Where the search's whole log was kept (`logs/last-failure.log` of the app's data). */
   log?: string
 }
 
-/** How a search ended badly (`search://failed`): ProSE's message, the step and the file, and how it ended. */
+/** How a search ended badly (`search://failed`): OpenNuXL's message, the step and the file, and how it ended. */
 export class SearchFailed extends Error {
   constructor(
     message: string,
@@ -183,7 +194,7 @@ export function cpuCount(): Promise<number> {
   return invoke<number>('cpu_count')
 }
 
-/** The bundled example: the run as two named files, and its FASTA. */
+/** The bundled example: OpenNuXL's test run (one mzML) and its FASTA. */
 export function exampleFiles(): Promise<{ spectra: string[]; database: string }> {
   return invoke('example_files')
 }
@@ -193,7 +204,7 @@ export function chooseFiles(kind: 'spectra' | 'database'): Promise<string[]> {
   return oneDialog<string[]>([], async () => {
     const chosen = await open(
       kind === 'spectra'
-        ? { multiple: true, title: 'Add mzML files', filters: [{ name: 'mzML', extensions: ['mzML', 'mzml', 'gz'] }] }
+        ? { multiple: true, title: 'Add mzML files', filters: [{ name: 'mzML', extensions: ['mzML', 'mzml'] }] }
         : { multiple: false, title: 'Choose a FASTA database', filters: [{ name: 'FASTA', extensions: ['fasta', 'fa', 'faa'] }] },
     )
     if (chosen === null) return []
@@ -226,14 +237,15 @@ export function saveText(name: string, contents: string): Promise<string | null>
   return oneDialog(null, () => invoke<string | null>('save_text', { name, contents }))
 }
 
-/** Copies a file of a search (e.g. `merged.idXML`) to where the user chooses, suggesting `suggested`. */
+/** Copies a file of a search (e.g. `nuxl/run.idXML`) to where the user chooses, suggesting `suggested`. */
 export function saveSearchFile(searchId: string, name: string, suggested: string): Promise<string | null> {
   return oneDialog(null, () => invoke<string | null>('save_search_file', { searchId, name, suggested }))
 }
 
 /**
- * History's disk: the Rust commands (src-tauri/src/history.rs). A project file is written by the Rust side
- * (src-tauri/src/project.rs); an opened one and the entries of an import go as raw bodies, not as JSON numbers.
+ * History's disk: the Rust commands (src-tauri/src/history.rs). A project file (`<name>.nuxl`: the search folder as a
+ * zip) is written by the Rust side (src-tauri/src/project.rs); an opened one and the entries of an import go as raw
+ * bodies, not as JSON numbers.
  */
 export const desktopBackend: HistoryBackend = {
   list: () => invoke<HistoryEntry[]>('history_list'),

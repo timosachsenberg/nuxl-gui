@@ -91,7 +91,7 @@
     ...(saveError ? [{ message: saveError, onDismiss: () => (saveError = null) }] : []),
   ])
 
-  /** The files ProSE cannot search (`FileRow.problem`), as the Spectra card lists them. */
+  /** The files OpenNuXL cannot search (`FileRow.problem`), as the Spectra card lists them. */
   const problems = $derived(form.files.filter((r) => r.problem).map((r) => `${r.problem} Remove it to start the search.`))
 
   const headerButton = 'h-7 px-2.5 text-xs'
@@ -266,7 +266,7 @@
     {/if}
 
     {#if problems.length > 0}
-      <!-- what ProSE cannot search: the search does not start until these files are removed -->
+      <!-- what OpenNuXL cannot search: the search does not start until these files are removed -->
       <ul class="flex flex-col gap-1 text-[12.5px] text-destructive" data-testid="file-problems">
         {#each problems as problem, k (k)}<li>{problem}</li>{/each}
       </ul>

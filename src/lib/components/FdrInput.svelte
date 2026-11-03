@@ -16,7 +16,7 @@
     value?: number
     /** the largest cutoff allowed (a q-value): longer values are rejected and their chips disabled */
     max?: number
-    /** 0 is allowed and means no cutoff (the protein FDR: ProSE applies none): the field says "off", with an Off chip */
+    /** 0 is allowed and means no cutoff: the field says "off", with an Off chip */
     off?: boolean
     /** not editable (the value shows, the chips are disabled) */
     disabled?: boolean
@@ -39,7 +39,7 @@
   const tooLarge = (q: number) => max !== undefined && q > max * (1 + 1e-9)
   /** a q-value the field takes: above 0 (or 0 where it can be off), at most 1 */
   const inRange = (q: number) => Number.isFinite(q) && (q > 0 || (off && q === 0)) && q <= 1
-  // (the value itself can be out of range too: ProSE's default PSM FDR is 0, which a reset to the default sets)
+  // (the value itself can be out of range too: a preset or a reset may set 0 where the field cannot be off)
   const invalid = $derived(!disabled && (typed === null || !inRange(typed) || tooLarge(typed)))
   /** the field holds the word "off" (no percent sign then) */
   const saysOff = $derived(/^\s*off\s*$/i.test(text))

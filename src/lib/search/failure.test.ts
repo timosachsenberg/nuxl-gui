@@ -8,25 +8,25 @@ const parseError =
   'void OpenMS::Internal::XMLHandler::fatalError(ActionMode, const std::string &, UInt, UInt) const'
 
 describe('describeFailure', () => {
-  it('leads with how ProSE ended, and keeps its last lines and log as the detail', () => {
+  it('leads with how OpenNuXL ended, and keeps its last lines and log as the detail', () => {
     const stage = { label: 'Searching broken.mzML (2 of 2)...', file: 1, files, silentMs: 0 }
     const crashed = describeFailure(stage, 'Reading /data/broken.mzML ...', {
-      ended: 'ProSE crashed (signal 11, SIGSEGV)',
+      ended: 'OpenNuXL crashed (signal 11, SIGSEGV)',
       detail: 'Loading /data/broken.mzML\nReading /data/broken.mzML ...',
-      log: '/home/me/.local/share/org.openms.prose.desktop/logs/last-failure.log',
+      log: '/home/me/.local/share/org.openms.nuxl.desktop/logs/last-failure.log',
     })
     expect(crashed).toEqual({
       context: 'While searching file 2 of 2 (broken.mzML)',
-      summary: 'ProSE crashed (signal 11, SIGSEGV): Reading /data/broken.mzML ...',
+      summary: 'OpenNuXL crashed (signal 11, SIGSEGV): Reading /data/broken.mzML ...',
       detail: 'Loading /data/broken.mzML\nReading /data/broken.mzML ...',
-      log: '/home/me/.local/share/org.openms.prose.desktop/logs/last-failure.log',
+      log: '/home/me/.local/share/org.openms.nuxl.desktop/logs/last-failure.log',
     })
     // an exit code, with an OpenMS exception shortened (its "Error:" left out after the lead)
-    const exited = describeFailure(stage, `Error: ${parseError}`, { ended: 'ProSE ended with exit code 3', detail: `x\nError: ${parseError}` })
-    expect(exited.summary).toBe('ProSE ended with exit code 3: Parse Error. The file may be incomplete or not valid mzML.')
+    const exited = describeFailure(stage, `Error: ${parseError}`, { ended: 'OpenNuXL ended with exit code 3', detail: `x\nError: ${parseError}` })
+    expect(exited.summary).toBe('OpenNuXL ended with exit code 3: Parse Error. The file may be incomplete or not valid mzML.')
     expect(exited.detail).toBe(`x\nError: ${parseError}`)
     // nothing said: the lead alone
-    expect(describeFailure(stage, '', { ended: 'ProSE crashed (signal 9, SIGKILL)' }).summary).toBe('ProSE crashed (signal 9, SIGKILL).')
+    expect(describeFailure(stage, '', { ended: 'OpenNuXL crashed (signal 9, SIGKILL)' }).summary).toBe('OpenNuXL crashed (signal 9, SIGKILL).')
     // without how it ended (the shim's own failures), as before
     expect(describeFailure(stage, 'The search folder cannot be finished (busy).')).toEqual({
       context: 'While searching file 2 of 2 (broken.mzML)',
@@ -52,21 +52,16 @@ describe('describeFailure', () => {
     expect(stage('Reading the files...')).toBe('While reading the files')
     expect(stage('Starting OpenMS...')).toBe('While starting OpenMS')
     // the shim's steps (src-tauri/src/progress.rs)
-    expect(stage('Starting ProSE...')).toBe('While starting ProSE')
-    expect(stage('Reading the spectra...')).toBe('While reading the spectra')
+    expect(stage('Starting OpenNuXL...')).toBe('While starting OpenNuXL')
+    expect(stage('Preparing the database…')).toBe('While preparing the database')
     expect(stage('Reading the results...')).toBe('While reading the results')
     expect(stage('Writing the results...')).toBe('During “Writing the results”')
-    expect(stage('Loading the PeptDeep models...')).toBe('While loading the PeptDeep models')
-    expect(stage('Reading the spectra of the PSMs...')).toBe('While reading the spectra of the PSMs')
-    expect(stage('Building fragment index...')).toBe('During “Building fragment index”')
-    expect(stage('Preparing the spectrum view (file 2 of 3)…')).toBe('While preparing the spectrum view of file 2 of 3')
-    expect(stage('Preparing the spectrum view…')).toBe('While preparing the spectrum view')
     expect(stage('')).toBe('During the search')
   })
 
   it('keeps the app\'s own messages whole', () => {
     const own = 'The search folder cannot be finished (Access is denied. (os error 5)).'
-    const f = describeFailure({ label: 'Scoring peptide models against spectra...', file: 0, files, silentMs: 0 }, own)
+    const f = describeFailure({ label: 'Scoring run.mzML (1 of 2)… 45 %', file: 0, files, silentMs: 0 }, own)
     expect(f.summary).toBe(own)
     expect(f.detail).toBeNull()
   })
@@ -80,28 +75,20 @@ describe('describeFailure', () => {
 
   it('shortens OpenMS exceptions to their message', () => {
     const invalid =
-      'InvalidValue: the value of FDR:PSM is out of range - due to that error of type InvalidValue in: /a.cpp@1-f()'
+      'InvalidValue: the value of NuXL:length is out of range - due to that error of type InvalidValue in: /a.cpp@1-f()'
     const f = describeFailure({ label: 'Reading the files...', file: -1, files, silentMs: 0 }, invalid)
-    expect(f.summary).toBe('InvalidValue: the value of FDR:PSM is out of range.')
+    expect(f.summary).toBe('InvalidValue: the value of NuXL:length is out of range.')
     expect(f.detail).toBe(invalid)
   })
 
-  it('does not blame a file for the check after all files: partial rescoring by Percolator', () => {
-    // reproduced: small.mzML (12 spectra) then good.mzML; Percolator reports no progress, and the check
-    // comes after the step of the last file ended
-    const partial =
-      'Percolator could rescore only some of the files, and their scores cannot be pooled with the others ' +
-      '(not rescored: small.mzML (Only 3 PSMs, Percolator rescoring needs at least 100.)). Switch Percolator off, ' +
-      'or leave out the files it could not rescore.'
-    const stage = { label: 'Searching good.mzML (2 of 2)...', file: 1, files: ['small.mzML', 'good.mzML'], silentMs: 0 }
-    const f = describeFailure(stage, partial)
-    expect(f.context).toBe('While rescoring with Percolator')
-    expect(f.summary).toBe(partial)
-    expect(f.context).not.toContain('good.mzML')
+  it("names Percolator's step of a file", () => {
+    const stage = { label: 'Percolator: good.mzML (2 of 2)…', file: 1, files: ['small.mzML', 'good.mzML'], silentMs: stalled }
+    expect(describeFailure(stage, 'x').context).toBe('While rescoring file 2 of 2 (good.mzML) with Percolator')
+    expect(describeFailure({ ...stage, files: ['good.mzML'], file: 0 }, 'x').context).toBe('While rescoring good.mzML with Percolator')
   })
 
   it('names the file whose step ended last: its end report comes before its own error', () => {
-    // reproduced: good.mzML then broken.mzML; ProSE ends the step of broken.mzML (0.95), then throws
+    // reproduced: good.mzML then broken.mzML; OpenNuXL ends the step of broken.mzML (0.95), then throws
     const f = describeFailure({ label: 'Searching broken.mzML (2 of 2)...', file: 1, files, silentMs: 0 }, parseError)
     expect(f.context).toBe('While searching file 2 of 2 (broken.mzML)')
   })

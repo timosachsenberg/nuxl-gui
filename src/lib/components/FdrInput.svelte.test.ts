@@ -129,7 +129,7 @@ describe('an invalid entry', () => {
 })
 
 describe('a value it does not take', () => {
-  it('is marked invalid: a PSM FDR of 0 (ProSE\'s default, which "reset to default" sets) is not "0 % off"', () => {
+  it('is marked invalid: an FDR of 0 (which a preset may hold) is not "0 % off"', () => {
     const { input, field } = show(0, false)
     expect(input.getAttribute('aria-invalid')).toBe('true')
     expect(field.getAttribute('aria-invalid')).toBe('true')
@@ -139,7 +139,7 @@ describe('a value it does not take', () => {
 })
 
 
-describe('a disabled FDR field (no FDR without decoys)', () => {
+describe('a disabled FDR field', () => {
   it('says off, takes no input and its chips are disabled', () => {
     shown = mount(FdrInput, { target: document.body, props: { id: 'fdr', off: true, disabled: true, value: 0, 'aria-describedby': 'why' } })
     flushSync()

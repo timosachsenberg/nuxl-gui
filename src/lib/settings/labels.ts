@@ -1,23 +1,16 @@
-// Labels for people of the allowed values of some ProSE parameters, the same on the page and in the
+// Labels for people of the allowed values of some OpenNuXL parameters, the same on the page and in the
 // "All parameters" dialog.
 
-export const DECOY_LABELS: Readonly<Record<string, string>> = {
-  auto: 'Use the database’s, else generate',
-  generate: 'Generate',
-  ignore: 'None (no FDR)',
-}
-
-export const INSTRUMENT_LABELS: Readonly<Record<string, string>> = {
-  QE: 'Q Exactive / Orbitrap',
-  Lumos: 'Orbitrap Lumos / Fusion',
-  timsTOF: 'timsTOF',
-  SciexTOF: 'SCIEX TOF',
-  ThermoTOF: 'Thermo TOF (Astral)',
+export const SCORING_LABELS: Readonly<Record<string, string>> = {
+  slow: 'Slow: all losses',
+  fast: 'Fast: total loss only',
 }
 
 const LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  decoys: DECOY_LABELS,
-  'peptdeep:instrument': INSTRUMENT_LABELS,
+  'NuXL:presets': { none: 'none (custom adducts)' },
+  'NuXL:scoring': SCORING_LABELS,
+  'NuXL:rescoring': { none: 'none', features: 'features (for Percolator)', native: 'native (into the score)' },
+  'report:xl_fdr_groups': { auto: 'auto', on: 'on', off: 'off (one FDR over all cross-links)' },
 }
 
 /** The label of an allowed value of `parameter` (the value itself where there is none). */

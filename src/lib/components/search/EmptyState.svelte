@@ -27,8 +27,8 @@
       <div class="min-w-0 flex-1">
         <p class="font-medium">Drop mzML files here, or add them</p>
         <p class="text-xs text-muted-foreground">
-          One file, or a whole experiment with conditions, replicates and fractions. A FASTA file dropped here becomes the
-          database.
+          One file, or a whole experiment with conditions, replicates and fractions; OpenNuXL searches each file on its
+          own. Plain mzML only. A FASTA file dropped here becomes the database.
         </p>
       </div>
       <div class="flex items-center gap-2">
@@ -46,10 +46,9 @@
       </p>
     {/if}
     <p class="text-xs text-muted-foreground">
-      The example is a small E. coli run with 139 spectra. It is searched twice, as two replicates, against the E. coli
-      proteome. The run is too small for a PSM FDR of 1 % (its PSMs reach 1.2 % at best), so its PSM FDR is 2 %, and too
-      small for a protein FDR, so its proteins are listed without one. It also has too few PSMs for Percolator's full
-      model, which the results note.
+      The example is OpenMS' test run of OpenNuXL: 20 spectra of a UV cross-linked protein–RNA sample, searched against
+      its five proteins with a 10 ppm precursor tolerance. It has too few PSMs for Percolator, so OpenNuXL keeps its own
+      scores, which the results note.
     </p>
     <NoticeList items={form.notices.map((message, k) => ({ message, onDismiss: () => form.notices.splice(k, 1) }))} />
   </Card.Content>

@@ -1,6 +1,7 @@
 <script lang="ts">
   // A range of two whole numbers ("2 – 5") in one field, e.g. the precursor charges. A range whose lowest value
-  // is above its highest is marked (`invalid`, with `describedBy` saying why); the search does not start with it.
+  // is above its highest is marked (`invalid`, with `describedBy` saying why); the search does not start with it. A
+  // highest value without a limit (`toPlaceholder`, `onToClear`) shows as the placeholder, and emptying it sets it.
   import * as InputGroup from '$lib/components/ui/input-group'
   import { cn } from '$lib/utils'
   import NumberField from './NumberField.svelte'
@@ -17,6 +18,8 @@
     describedBy,
     onFrom,
     onTo,
+    toPlaceholder,
+    onToClear,
   }: {
     /** The id of the visible label of the field. */
     labelId: string
@@ -31,6 +34,10 @@
     describedBy?: string
     onFrom: (value: number) => void
     onTo: (value: number) => void
+    /** Shown while the highest value is empty (no limit). */
+    toPlaceholder?: string
+    /** The highest value was emptied (no limit); without it, an empty field is an invalid entry. */
+    onToClear?: () => void
   } = $props()
 </script>
 
@@ -41,5 +48,15 @@
   aria-describedby={invalid ? describedBy : undefined}>
   <NumberField value={from} kind="int" {min} {max} inGroup fit ariaLabel={fromLabel} onChange={onFrom} class="flex-none pr-0" />
   <span class="px-1.5" aria-hidden="true">–</span>
-  <NumberField value={to} kind="int" {min} {max} inGroup ariaLabel={toLabel} onChange={onTo} class="w-0 min-w-0 flex-1 pl-0" />
+  <NumberField
+    value={to}
+    kind="int"
+    {min}
+    {max}
+    inGroup
+    ariaLabel={toLabel}
+    placeholder={toPlaceholder}
+    onChange={onTo}
+    onClear={onToClear}
+    class="w-0 min-w-0 flex-1 pl-0" />
 </InputGroup.Root>
