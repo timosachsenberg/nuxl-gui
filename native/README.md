@@ -379,3 +379,8 @@ AppImage and the `.deb` of Linux x64 and of arm64, the `.dmg`, the Windows insta
 artifact; the release carries them under their versioned names only (`NuXL_0.1.0_x64-setup.exe`,
 `NuXL_0.1.0_aarch64.dmg`, ...). It fails with a message when there is no such run (tag a commit of `main` whose run
 passed), a package is missing or its artifact has expired (`gh run rerun <run>`, then re-run the release job).
+
+The tag can also be made from the web: Actions › "Tag release" (`.github/workflows/tag-release.yml`) › Run workflow,
+with the version (e.g. `0.1.0`). It checks that `main`'s head is that version and that its `main` run passed, tags
+it `desktop-native-v<version>` (never moving an existing tag), and starts `desktop.yml` on the tag, whose release
+job then makes the draft release. (A tag made with a workflow's own token starts no workflow by itself.)
