@@ -1,0 +1,18 @@
+[
+  {
+    "id": "f0",
+    "index": 0,
+    "link": "1__a.mzML",
+    "stem": "1__a",
+    "name": "a.mzML",
+    "path": "/data/a.mzML"
+  },
+  {
+    "id": "f1",
+    "index": 1,
+    "link": "2__b.mzML",
+    "stem": "2__b",
+    "name": "b.mzML",
+    "path": "/data/b.mzML"
+  }
+]

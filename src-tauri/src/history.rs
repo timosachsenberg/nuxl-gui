@@ -15,7 +15,7 @@
 //! when it can take that lock itself (an owner that died has released it), so no app instance sweeps a
 //! live folder of another.
 //!
-//! A project file (`.prose`) is a zip of the search folder's regular files. Zip is handled by the
+//! A project file (`.nuxl`, [`PROJECT_EXTENSION`]) is a zip of the search folder's regular files. Zip is handled by the
 //! front end; Rust reads the chosen file (`open_project_file`, with [`read_chosen_project`]) and writes the entries the front end
 //! sends ([`import`], in the framing of [`frame`]), after checking every path again.
 
@@ -28,6 +28,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// The extension of a project file.
+pub const PROJECT_EXTENSION: &str = "nuxl";
 /// The version of `search.json` this app reads and writes.
 pub const SCHEMA: u64 = 1;
 /// A partial folder without a lock file (one of an older version of the app) is removed by the sweep when
@@ -38,7 +40,7 @@ pub const NO_RECORD: &str = "This search was not saved. Its folder has no record
      ended or the record could not be written when the search finished. Delete it to free the space.";
 /// The `error` of a folder of the searches folder whose name is no id the app gives a search.
 pub const NOT_A_SEARCH: &str =
-    "This folder is not a search of ProSE: its name is not one ProSE gives a search \
+    "This folder is not a search of NuXL: its name is not one NuXL gives a search \
      (only letters, digits, - and _), so it cannot be opened. Delete it to free the space.";
 /// The largest `search.json` (it holds the design; a few kB to a few MB).
 const MAX_RECORD: u64 = 64 << 20;
@@ -77,7 +79,7 @@ pub struct HistoryEntry {
     /// The search's cutoffs (q-values).
     pub psm_fdr: Option<f64>,
     pub protein_fdr: Option<f64>,
-    /// The record's `settings` as they are (the parameters that differ from ProSE's defaults, the preset, the
+    /// The record's `settings` as they are (the parameters that differ from OpenNuXL's defaults, the preset, the
     /// rescoring switches): History tells searches of the same name apart by them.
     pub settings: Option<serde_json::Value>,
     /// What the folder takes on disk (its files, not the links to the inputs).
@@ -95,8 +97,8 @@ pub struct FolderFile {
 
 fn newer_message(schema: u64) -> String {
     format!(
-        "This search was saved by a newer version of ProSE (schema {schema}) and cannot be opened by this one \
-         (it reads schema {SCHEMA}). Open it with the latest version of ProSE."
+        "This search was saved by a newer version of NuXL (schema {schema}) and cannot be opened by this one \
+         (it reads schema {SCHEMA}). Open it with the latest version of NuXL."
     )
 }
 
@@ -112,7 +114,7 @@ fn parse_record(text: &str) -> Result<serde_json::Map<String, serde_json::Value>
         Some(newer) if newer > SCHEMA => Err(newer_message(newer)),
         Some(other) => Err(format!("{RECORD} has the unknown schema {other}.")),
         None => Err(format!(
-            "{RECORD} has no schema: it is not a ProSE search record."
+            "{RECORD} has no schema: it is not a NuXL search record."
         )),
     }
 }
@@ -333,7 +335,8 @@ pub fn save_record(dir: &Path, id: &str, record_json: &str) -> Result<(), String
 
 /// The proteins of a saved search, written once its results have been read: `proteins.fasta` (every
 /// protein of the result's protein table, from which the search opens without its database), and then the
-/// folder's `database.fasta` (the user's FASTA with the contaminants, which ProSE searched) is removed:
+/// folder's `database.fasta` (the user's FASTA as OpenNuXL searched it: with the contaminants, without its own
+/// decoys) is removed:
 /// `proteins.fasta` replaces it. The search has to have its record.
 pub fn save_proteins(dir: &Path, id: &str, proteins_fasta: &str) -> Result<(), String> {
     let folder = existing_folder(dir, id)?;
@@ -439,7 +442,7 @@ pub fn folder_files(dir: &Path, id: &str) -> Result<Vec<FolderFile>, String> {
 }
 
 /// The bytes of the project file that the user chose in the open dialog (`open_project_file`; the page
-/// never names a path). Any name will do (a project renamed, or sent without its `.prose`): the front end
+/// never names a path). Any name will do (a project renamed, or sent without its `.nuxl`): the front end
 /// checks the content. Refused unless it is an absolute path that is a regular file itself: a link is not
 /// followed.
 pub fn read_chosen_project(path: &Path) -> Result<Vec<u8>, String> {
@@ -640,7 +643,7 @@ pub fn import(dir: &Path, body: &[u8]) -> Result<String, String> {
     }
     let Some((_, record)) = entries.iter().find(|(name, _)| name == RECORD) else {
         return Err(format!(
-            "The project has no {RECORD}: it is not a ProSE project."
+            "The project has no {RECORD}: it is not a NuXL project."
         ));
     };
     let text = std::str::from_utf8(record).map_err(|_| format!("{RECORD} is not text."))?;
@@ -710,7 +713,7 @@ pub fn import(dir: &Path, body: &[u8]) -> Result<String, String> {
 /// last line).
 fn last_written(folder: &Path) -> Option<SystemTime> {
     let own = fs::metadata(folder).and_then(|m| m.modified()).ok();
-    let log = fs::metadata(folder.join("prose.log"))
+    let log = fs::metadata(folder.join(crate::args::LOG_FILE))
         .and_then(|m| m.modified())
         .ok();
     own.max(log)

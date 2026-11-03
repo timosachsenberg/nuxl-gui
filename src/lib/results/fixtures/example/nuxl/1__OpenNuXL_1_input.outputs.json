@@ -1,0 +1,17 @@
+{
+  "input": 0,
+  "all": "nuxl/1__OpenNuXL_1_input.idXML",
+  "xls": "nuxl/1__OpenNuXL_1_input_1.0000_XLs.idXML",
+  "peptides": "nuxl/1__OpenNuXL_1_input_0.0000_peptides.idXML",
+  "proteins": null,
+  "report": null,
+  "percolator": false,
+  "notes": [
+    "Too few PSMs for score recalibration. Skipped."
+  ],
+  "seconds": 1.5,
+  "fdr": {
+    "peptide": 0.01,
+    "xl": 0.01
+  }
+}

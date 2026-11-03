@@ -1883,6 +1883,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuxl-desktop"
+version = "0.1.4"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+]
+
+[[package]]
 name = "objc2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2345,19 +2358,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "prose-desktop"
-version = "0.1.4"
-dependencies = [
- "crc32fast",
- "flate2",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
 ]
 
 [[package]]

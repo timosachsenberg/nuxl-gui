@@ -1,0 +1,26 @@
+[
+  {
+    "id": "f0",
+    "index": 0,
+    "link": "1__OpenNuXL_1_input.mzML",
+    "stem": "1__OpenNuXL_1_input",
+    "name": "OpenNuXL_1_input.mzML",
+    "path": "/data/OpenNuXL_1_input.mzML"
+  },
+  {
+    "id": "f1",
+    "index": 1,
+    "link": "2__no_decoys.mzML",
+    "stem": "2__no_decoys",
+    "name": "no_decoys.mzML",
+    "path": "/data/no_decoys.mzML"
+  },
+  {
+    "id": "f2",
+    "index": 2,
+    "link": "3__unfinished.mzML",
+    "stem": "3__unfinished",
+    "name": "unfinished.mzML",
+    "path": "/data/unfinished.mzML"
+  }
+]

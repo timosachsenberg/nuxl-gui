@@ -4,5 +4,5 @@ src-tauri/target/
 src-tauri/gen/
 *.log
 .superpowers/
-src-tauri/resources/prose/
+src-tauri/resources/nuxl/
 src-tauri/resources/notices/

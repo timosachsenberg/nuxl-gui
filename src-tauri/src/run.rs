@@ -1,14 +1,21 @@
-//! Running a search: the search folder, the process, its progress, and cancel.
+//! Running a search: the search folder, the runs of OpenNuXL, their progress, and cancel.
 //!
-//! A search lives in `<searches>/<id>.partial/` while it runs. Beside the tool's outputs it holds
+//! A search lives in `<searches>/<id>.partial/` while it runs (design §2). Beside the tool's outputs (in
+//! `nuxl/`) it holds
 //!
 //! - the inputs as links `<n>__<name>` to the user's files (never copies) and `inputs.json`, the
 //!   mapping from link to the user's path (see [`crate::args::InputRecord`]). On Windows, where a
-//!   symbolic link needs a privilege, ProSE gets the user's paths themselves when the inputs' names
-//!   differ, and hard links only for inputs that share a name, removed again when the search ends
+//!   symbolic link needs a privilege, OpenNuXL gets the user's paths themselves when the inputs' names
+//!   do not clash, and hard links only for those that do, removed again when the search ends
 //!   ([`crate::args::InputLinks`]);
-//! - `database.fasta`, the user's FASTA with the contaminants, if they were asked for;
-//! - `prose.log`, the tool's output.
+//! - `database.fasta`, the user's FASTA with the contaminants and without its own decoys, when the shim writes
+//!   one, else `database.json`, the path of the user's FASTA ([`crate::args::plan_database`]);
+//! - `nuxl.log`, the tool's output of all runs, each after the line `$ <command line>`;
+//! - `nuxl/<stem>.outputs.json` of each input whose run ended successfully ([`InputOutputs`]).
+//!
+//! The inputs are searched one after the other, one run of OpenNuXL each, by one supervising thread: a run
+//! starts when the one before it has ended successfully. A run that fails fails the search (with OpenNuXL's
+//! message, the stage and the input); cancel ends the current run and starts no further one.
 //!
 //! The folder holds `.lock`, locked exclusively (`history::lock_partial`) for as long as the search
 //! lives, so that the startup sweep of any app instance can tell a live folder from a stale one.
@@ -18,29 +25,29 @@
 //! log of a failed search is kept, as `<app data>/logs/last-failure.log` ([`LAST_FAILURE_LOG`]; the
 //! searches folder's sibling), replacing the one before.
 //!
-//! The tool runs in a process group of its own, started from a thread of its own that waits for it.
-//! Cancel signals the group (SIGTERM, then SIGKILL after a grace period), and the group is swept with
-//! SIGKILL after the tool has ended, so nothing it started outlives it. If the app dies:
+//! Each run of the tool is a process group of its own, started from the supervising thread, which waits for
+//! it. Cancel signals the group (SIGTERM, then SIGKILL after a grace period), and the group is swept with
+//! SIGKILL after the tool has ended, so nothing it started (PercolatorAdapter) outlives it. If the app dies:
 //! - Linux: the tool gets SIGKILL (`PR_SET_PDEATHSIG`; the thread that starts it lives as long as it runs);
 //! - Windows: the group is a job object, closed with the app, which ends whatever is still in it (cancel
 //!   terminates the job: Windows has no SIGTERM for a console tool);
-//! - macOS has no death signal: a watchdog process per search (the app's own executable, started with
+//! - macOS has no death signal: a watchdog process per run (the app's own executable, started with
 //!   `--watch-search`: [`crate::watchdog`]) ends the tool's group within a second of the app's end. Without
 //!   it (it could not be started) the tool would end at its next write to stdout or stderr, whose reading
 //!   ends died with the app (SIGPIPE, at its default in the child: `Command` resets it, and OpenMS sets no
 //!   handler), at the end of its current step; a later start of the app sweeps the folder.
 
 use crate::args::{
-    build_args_with, humanize, input_placements, input_records_with, reserved_stem,
-    with_contaminants, InputLinks, InputRecord, Placement, SearchRequest, DATABASE_FILE,
-    DATABASE_RECORD,
+    build_runs_with, humanize, input_placements, input_records_with, outputs_record,
+    plan_database, write_database, DatabasePlan, InputLinks, InputRecord, Placement, SearchRequest,
+    DATABASE_FILE, DATABASE_RECORD, LOG_FILE, OUTPUT_DIR,
 };
-use crate::decoys::DecoyRules;
 use crate::history::{finish_partial, lock_partial, remove_partial, with_backoff};
-use crate::progress::{ProgressTracker, STARTING};
+use crate::progress::ProgressTracker;
 use crate::tool;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
+use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -48,7 +55,7 @@ use std::process::{Child, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// How long a tool gets to end after SIGTERM before it is killed.
 const GRACE: Duration = Duration::from_secs(3);
@@ -63,6 +70,8 @@ const ERROR_LINES: usize = 20;
 const MAX_LINE: usize = 64 * 1024;
 /// The longest line a failure shows (characters).
 const MAX_SHOWN: usize = 1000;
+/// The most notes of a run ([`note_of`]) kept in its `outputs.json`.
+const MAX_NOTES: usize = 20;
 /// The log of the last failed search, in the folder `logs` beside the searches folder.
 pub const LAST_FAILURE_LOG: &str = "last-failure.log";
 
@@ -93,14 +102,15 @@ pub struct FailedEvent {
     pub message: String,
     /// The last progress label.
     pub stage: String,
-    /// The input of the last progress report; absent outside the files.
+    /// The input whose run failed (0-based); absent outside the runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<i32>,
-    /// How the tool ended, when it ended badly: "ProSE crashed (signal 11, SIGSEGV)", "ProSE ended with
+    /// How the tool ended, when it ended badly: "OpenNuXL crashed (signal 11, SIGSEGV)", "OpenNuXL ended with
     /// exit code 3" ([`how_it_ended`]); the message leads with it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended: Option<String>,
-    /// The last lines the tool wrote to stderr (the user's names for the inputs), for the details.
+    /// The last lines the tool wrote to stderr in the failed run (the user's names for the inputs), for the
+    /// details.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     /// Where the search's whole log was kept ([`LAST_FAILURE_LOG`]).
@@ -118,10 +128,45 @@ pub enum SearchEvent {
 /// Where a search's events go (the app emits them as `search://…` events).
 pub type Sink = Arc<dyn Fn(SearchEvent) + Send + Sync>;
 
+/// The cutoffs of the search, as the request gave them (`outputs.json`'s `fdr`).
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+pub struct Cutoffs {
+    pub peptide: f64,
+    pub xl: f64,
+}
+
+/// `nuxl/<stem>.outputs.json`: OpenNuXL's outputs of one input, as the shim found them in `nuxl/` when the
+/// input's run had ended successfully (design §2), relative to the search folder. The reader's only way to
+/// the derived files: it never guesses their names.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InputOutputs {
+    /// The input (0-based).
+    pub input: usize,
+    /// `-out`: every PSM, targets and decoys, before any FDR filter.
+    pub all: Option<String>,
+    /// The cross-link PSMs of the highest threshold (`1.0000`: every target cross-link with its q-value).
+    pub xls: Option<String>,
+    /// The peptide PSMs (`<q>` 0: unfiltered).
+    pub peptides: Option<String>,
+    /// The protein report of the lowest threshold of at most 10 %.
+    pub proteins: Option<String>,
+    /// `-out_tsv` (OpenNuXL's report), or after Percolator its `_perc.tsv`.
+    pub report: Option<String>,
+    /// Whether Percolator ran and its results were written: then the four above are its `_perc_` files.
+    pub percolator: bool,
+    /// OpenNuXL's warnings of the run worth showing ([`note_of`]), and the shim's notes of the search.
+    pub notes: Vec<String>,
+    /// The run's wall time.
+    pub seconds: f64,
+    pub fdr: Cutoffs,
+}
+
 /// A running search, as `cancel` sees it.
 struct Handle {
-    /// The tool's process group (see `sys::Group`); set before `start` returns, taken when the search
-    /// is over.
+    /// The process group of the current run (see `sys::Group`); set for each run before it is waited
+    /// for, taken when the search is over. Its lock also orders a run's start against cancel: a run is
+    /// started only while it is held and the search is not cancelled.
     group: Mutex<Option<Arc<sys::Group>>>,
     cancelled: AtomicBool,
     /// Set when the search is over and its folder dealt with.
@@ -155,7 +200,7 @@ pub struct Searches {
     counter: AtomicU64,
     /// How the inputs reach the tool: this platform's way, unless a test chooses.
     links: InputLinks,
-    /// The executable that watches each search's tool ([`crate::watchdog`]; macOS: the app's own), or
+    /// The executable that watches each run's tool ([`crate::watchdog`]; macOS: the app's own), or
     /// none. (Unix only: Windows' job object ends the tool with the app.)
     #[cfg_attr(not(unix), allow(dead_code))]
     watchdog: Option<PathBuf>,
@@ -179,32 +224,32 @@ mod tests {
         assert_eq!(how_it_ended(&ExitStatus::from_raw(0)), None);
         assert_eq!(
             how_it_ended(&ExitStatus::from_raw(3 << 8)).as_deref(),
-            Some("ProSE ended with exit code 3")
+            Some("OpenNuXL ended with exit code 3")
         );
         assert_eq!(
             how_it_ended(&ExitStatus::from_raw(11)).as_deref(),
-            Some("ProSE crashed (signal 11, SIGSEGV)")
+            Some("OpenNuXL crashed (signal 11, SIGSEGV)")
         );
         assert_eq!(
             how_it_ended(&ExitStatus::from_raw(6)).as_deref(),
-            Some("ProSE crashed (signal 6, SIGABRT)")
+            Some("OpenNuXL crashed (signal 6, SIGABRT)")
         );
         assert_eq!(
             how_it_ended(&ExitStatus::from_raw(9)).as_deref(),
-            Some("ProSE crashed (signal 9, SIGKILL; the system may have ended it for lack of memory)")
+            Some("OpenNuXL crashed (signal 9, SIGKILL; the system may have ended it for lack of memory)")
         );
         assert_eq!(
             how_it_ended(&ExitStatus::from_raw(31)).as_deref(),
-            Some("ProSE crashed (signal 31)")
+            Some("OpenNuXL crashed (signal 31)")
         );
         // the system's limits (ulimit -f, -t): a run with ulimit -f 50 ended with "signal 25" alone
         assert_eq!(
             how_it_ended(&ExitStatus::from_raw(25)).as_deref(),
-            Some("ProSE crashed (signal 25, SIGXFSZ; a file grew larger than the system allows, or the disk is full)")
+            Some("OpenNuXL crashed (signal 25, SIGXFSZ; a file grew larger than the system allows, or the disk is full)")
         );
         assert_eq!(
             how_it_ended(&ExitStatus::from_raw(24)).as_deref(),
-            Some("ProSE crashed (signal 24, SIGXCPU; it used more CPU time than the system allows it)")
+            Some("OpenNuXL crashed (signal 24, SIGXCPU; it used more CPU time than the system allows it)")
         );
     }
 
@@ -212,13 +257,13 @@ mod tests {
     #[test]
     fn a_folder_that_cannot_be_removed_is_noted_in_the_failure_log() {
         use std::os::unix::fs::PermissionsExt;
-        let base = std::env::temp_dir().join(format!("prose-discard-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("nuxl-discard-{}", std::process::id()));
         let searches = base.join("searches");
         let partial = searches.join("1-0.partial");
-        std::fs::create_dir_all(partial.join("qpx")).unwrap();
-        std::fs::write(partial.join("qpx/a.parquet"), "x").unwrap();
+        std::fs::create_dir_all(partial.join("nuxl")).unwrap();
+        std::fs::write(partial.join("nuxl/a.idXML"), "x").unwrap();
         let kept = base.join("last-failure.log");
-        std::fs::write(&kept, "$ ProSE ...\n").unwrap();
+        std::fs::write(&kept, "$ OpenNuXL ...\n").unwrap();
         // a folder whose parent may not be written cannot be removed
         std::fs::set_permissions(&searches, std::fs::Permissions::from_mode(0o555)).unwrap();
         super::discard_partial(None, &partial, Some(&kept));
@@ -238,7 +283,7 @@ mod tests {
 
 #[cfg(test)]
 mod digest_tests {
-    use super::{clean_line, read_lines, StderrDigest, MAX_LINE, MAX_SHOWN};
+    use super::{clean_line, note_of, read_lines, StderrDigest, MAX_LINE, MAX_SHOWN};
 
     fn digest(lines: &[&str]) -> StderrDigest {
         let mut d = StderrDigest::default();
@@ -248,17 +293,17 @@ mod digest_tests {
         d
     }
 
-    const CI: &str = "/home/runner/work/prose-gui/prose-gui/openms/src/openms/source/FORMAT/HANDLERS/XMLHandler.cpp";
+    const CI: &str = "/home/runner/work/nuxl-gui/nuxl-gui/openms/src/openms/source/FORMAT/HANDLERS/XMLHandler.cpp";
 
-    /// A corrupt mzML (in_truncated_mzML, multi_one_corrupt): the place in the file comes before OpenMS'
-    /// error, and neither path of the machine that built ProSE is shown.
+    /// A corrupt mzML: the place in the file comes before OpenMS' error, and neither path of the machine that
+    /// built OpenNuXL is shown.
     #[test]
     fn a_file_that_cannot_be_read_says_where() {
         let location = format!("{CI}(67): While loading '/data/truncated.mzML': input ended before all started tags were ended; last tag started is 'spectrum'( in line 4303 column 2)");
         let error = format!("Error: Unable to read file (- due to that error of type Parse Error in: {CI}@68-void OpenMS::Internal::XMLHandler::fatalError(ActionMode, const std::string&, OpenMS::UInt, OpenMS::UInt) const)");
         let d = digest(&[
             &location,
-            "[ProSE] Ion priors: 0 and 0 confident training PSMs in the two halves of the spectra, fewer than 100; the ion_prior_* features are 0 for this file.",
+            "Too few PSMs for score recalibration. Skipped.",
             &error,
         ]);
         assert_eq!(
@@ -282,75 +327,44 @@ mod digest_tests {
         );
     }
 
-    /// A full disk (devfull): the first line that says so, not ProSE's closing summary.
+    /// An InvalidValue of OpenNuXL (a preset's configuration it refuses): its own words lead, not "Unexpected
+    /// internal error" and OpenMS' "the value ... was used but is not valid".
+    #[test]
+    fn a_refused_configuration_is_told_in_opennuxls_words() {
+        let d = digest(&["Error: Unexpected internal error (the value 's' was used but is not valid; Standalone nucleotides need a NuXL:target_nucleotides entry, NuXL:modifications and NuXL:fragment_adducts, and must be listed in NuXL:can_cross_link.)"]);
+        assert_eq!(
+            d.message(false),
+            "Error: Standalone nucleotides need a NuXL:target_nucleotides entry, NuXL:modifications and \
+             NuXL:fragment_adducts, and must be listed in NuXL:can_cross_link. (the value: s)"
+        );
+        assert_eq!(
+            clean_line("Invalid parameter values (InvalidValue): the value 'x' was used but is not valid; Unknown localization method (valid: 'fragments', 'NHS').. Aborting!"),
+            "Invalid parameter values (InvalidValue): Unknown localization method (valid: 'fragments', 'NHS').. Aborting! (the value: x)"
+        );
+    }
+
+    /// A full disk: the first line that says so.
     #[test]
     fn a_full_disk_is_named() {
         let d = digest(&[
-            "Progress of 'Predicting fragment intensities and retention times...':",
-            "-- done [took 0.02 s (CPU), 0.00 s (Wall)] -- ",
-            "Omitted writing of 4 peptide identifications due to empty hits.",
-            "ArrowIOHelpers: Failed to write /s/1-0.partial/qpx/runs/1__a.psm.parquet: IOError: Error writing bytes to file. Detail: [errno 28] No space left on device",
-            "Failed to write the QPX psm view -> /s/1-0.partial/qpx/runs/1__a.psm.parquet",
-            "ArrowIOHelpers: Failed to write /s/1-0.partial/qpx/quantms.psm.parquet: IOError: Error writing bytes to file. Detail: [errno 28] No space left on device",
-            "Failed to write the QPX psm view -> /s/1-0.partial/qpx/quantms.psm.parquet",
-            "ProSE finished with 1 file(s) failing out of 1.",
+            "Error: Unable to write file (the file '/s/1-0.partial/nuxl/1__a_perc_1.0000_XLs.idXML' could not be created. writing the file failed (e.g. disk full or I/O error))",
+            "Standard output: ",
         ]);
         assert_eq!(
             d.message(false),
-            "Failed to write /s/1-0.partial/qpx/runs/1__a.psm.parquet: IOError: Error writing bytes to file. Detail: [errno 28] No space left on device"
+            "Error: Unable to write file (the file '/s/1-0.partial/nuxl/1__a_perc_1.0000_XLs.idXML' could not be created. writing the file failed (e.g. disk full or I/O error))"
         );
-        let idxml = digest(&[
-            "Skipping Percolator rescoring for /data/a.mzML: Only 6 PSMs, Percolator rescoring needs at least 100. Keeping the search engine scores.",
-            "Percolator rescoring is on (Search:rescore) but no input file could be rescored; all outputs carry the search engine scores.",
-            "Failed to write idXML output for /data/a.mzML -> /s/search.idXML: the file '/s/search.idXML' could not be created. writing the file failed (e.g. disk full or I/O error) (writing '/s/search.idXML' did not complete: a partial file may remain)",
-            "ProSE finished with 1 file(s) failing out of 1.",
-        ]);
-        assert!(
-            idxml
-                .message(false)
-                .starts_with("Failed to write idXML output for /data/a.mzML"),
-            "{}",
-            idxml.message(false)
-        );
-        // without a line that says more, ProSE's summary
-        let summary = digest(&[
-            "Omitted writing of 31 peptide identifications due to empty hits.",
-            "ProSE finished with 1 file(s) failing out of 1.",
+        let space = digest(&[
+            "Progress of 'Post-processing PSMs... (annotation)':",
+            "Could not write /s/1-0.partial/nuxl/1__a.tsv: No space left on device",
         ]);
         assert_eq!(
-            summary.message(false),
-            "ProSE finished with 1 file(s) failing out of 1."
+            space.message(false),
+            "Could not write /s/1-0.partial/nuxl/1__a.tsv: No space left on device"
         );
     }
 
-    /// Percolator rescored one of two files: the merged idXML cannot be written. In the app's words.
-    #[test]
-    fn a_partial_rescoring_is_told_in_the_apps_words() {
-        let d = digest(&[
-            "-qpx_extended: no NCE selected for /s/1-4.partial/2__small.mzML; the predicted_* columns are null.",
-            "Cannot write the merged output -> /s/1-4.partial/merged.idXML: Percolator rescored only some of the input files (see the warnings above), and their PSMs cannot be pooled with the search engine scores of the others. Per-file outputs were written. Use '-Search:rescore false', or leave out the files that could not be rescored. (the value '1 of 2 files rescored' was used but is not valid; Percolator rescored only some of the input files, and their PSMs cannot be pooled with the search engine scores of the others.)",
-            "ProSE failed to write the merged idXML output -> /s/1-4.partial/merged.idXML.",
-        ]);
-        let message = d.message(false);
-        assert!(
-            message.starts_with("Percolator could rescore only some of the files"),
-            "{message}"
-        );
-        assert!(
-            message.contains("Turn off Percolator rescoring"),
-            "{message}"
-        );
-        assert!(
-            !message.contains("-Search:") && !message.contains("partial"),
-            "{message}"
-        );
-        assert_eq!(
-            clean_line("[ProSE] Not pooling the identifications of the input files: Percolator rescored only some of them, and runs of different search engines are not merged. Set 'rescore' to 'false' to pool them with ProSE's scores."),
-            "[ProSE] Not pooling the identifications of the input files: Percolator rescored only some of them, and runs of different search engines are not merged. Turn off Percolator rescoring to pool them with ProSE's scores."
-        );
-    }
-
-    /// A value ProSE refuses: its line, not the last line of the help it prints after it.
+    /// A value OpenNuXL refuses: its line, not the last line of the help it prints after it.
     #[test]
     fn a_refused_value_is_named_and_not_the_help() {
         let mut lines = vec![
@@ -358,9 +372,7 @@ mod digest_tests {
             "stty: 'standard input': Inappropriate ioctl for device".to_string(),
         ];
         for k in 0..200 {
-            lines.push(format!(
-                "  -Search:option{k} <number>   An option (default: '1')"
-            ));
+            lines.push(format!("  -NuXL:option{k} <number>   An option (default: '1')"));
         }
         lines.push("  --helphelp                                               Shows all options (including advanced)".to_string());
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
@@ -372,20 +384,29 @@ mod digest_tests {
         assert_eq!(d.tail.len(), super::STDERR_TAIL);
     }
 
-    /// Killed (signal 9) during Percolator: its last line ("Split 3:") would only mislead.
+    /// Killed (signal 9) during the scoring: its last line would only mislead.
     #[test]
     fn a_killed_tool_without_an_error_has_no_message() {
-        let d = digest(&[
-            "Selecting Cneg by cross-validation.",
-            "Split 1:\tSelected feature 15 as initial direction. Could separate 51 training set positives with q<0.01 in that direction.",
-            "Split 3:",
-        ]);
+        let d = digest(&["Too few PSMs for score recalibration. Skipped.", "Split 3:"]);
         assert_eq!(d.message(true), "");
         // ended with an exit code: its last line is all there is
         assert_eq!(d.message(false), "Split 3:");
-        // the Percolator note before a SIGXFSZ (fsize_50) is no error either
-        let note = digest(&["Percolator rescoring of /data/a.mzML: Percolator's sanity check rejected the learned model (on the held-out folds it found no target PSM at q < 0.01, or fewer than the best single feature; typical for blank runs and runs with few confident PSMs), so the PSMs are scored with that feature alone."]);
-        assert_eq!(note.message(true), "");
+    }
+
+    /// The warnings of a run that go into its outputs.json, and the rest that does not.
+    #[test]
+    fn the_notes_of_a_run_are_opennuxls_warnings_worth_showing() {
+        for line in [
+            "Too few PSMs for score recalibration. Skipped.",
+            "Score recalibration failed.",
+            "NuXL:rescoring: the delta score needs slow scoring (NuXL:scoring slow) and is not annotated.",
+            "autotune: too few non-cross-linked peptides found. Will keep parameters as-is.",
+        ] {
+            assert_eq!(note_of(&format!("  {line} ")).as_deref(), Some(line));
+        }
+        for line in ["Running percolator.", "Score recalibration", "", "done."] {
+            assert_eq!(note_of(line), None, "{line}");
+        }
     }
 
     /// A 300 MB line (fake_longline) is cut where it is read, and shown shorter still.
@@ -414,6 +435,44 @@ mod digest_tests {
         read_lines(&b"a\r\nb\xff\n"[..], |l| crlf.push(l.to_string()));
         assert_eq!(crlf, vec!["a".to_string(), "b\u{fffd}".to_string()]);
     }
+
+    /// OpenMS' progress updates end with `\r`, not a line end: each is a line of its own, the `\n\r` and `\r\n`
+    /// around them one break (also across the reader's buffers), a blank line stays.
+    #[test]
+    fn a_carriage_return_ends_a_line() {
+        let text = "Progress of 'Scoring peptide models against spectra...':\n\r0.00 %    \r12.34 %    \r-- done [took 1 s] -- \n\nnext";
+        let mut lines = Vec::new();
+        read_lines(text.as_bytes(), |l| lines.push(l.to_string()));
+        assert_eq!(
+            lines,
+            [
+                "Progress of 'Scoring peptide models against spectra...':",
+                "0.00 %    ",
+                "12.34 %    ",
+                "-- done [took 1 s] -- ",
+                "",
+                "next"
+            ]
+        );
+        // one byte at a time: a \r at the end of one read and the \n at the start of the next
+        struct Trickle<'a>(&'a [u8]);
+        impl std::io::Read for Trickle<'_> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.0.is_empty() || buf.is_empty() {
+                    return Ok(0);
+                }
+                buf[0] = self.0[0];
+                self.0 = &self.0[1..];
+                Ok(1)
+            }
+        }
+        let mut trickled = Vec::new();
+        read_lines(
+            std::io::BufReader::with_capacity(1, Trickle(text.as_bytes())),
+            |l| trickled.push(l.to_string()),
+        );
+        assert_eq!(trickled, lines);
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -427,11 +486,11 @@ mod tests_windows {
         assert_eq!(how_it_ended(&ExitStatus::from_raw(0)), None);
         assert_eq!(
             how_it_ended(&ExitStatus::from_raw(3)).as_deref(),
-            Some("ProSE ended with exit code 3")
+            Some("OpenNuXL ended with exit code 3")
         );
         assert_eq!(
             how_it_ended(&ExitStatus::from_raw(0xC000_0005)).as_deref(),
-            Some("ProSE crashed (exception 0xC0000005)")
+            Some("OpenNuXL crashed (exception 0xC0000005)")
         );
     }
 }
@@ -595,7 +654,8 @@ mod sys {
 
     impl Group {
         /// Puts the child into a job of its own. (The child runs from its start; a process it starts
-        /// before it is assigned, within microseconds, would not be in the job. ProSE starts none.)
+        /// before it is assigned, within microseconds, would not be in the job. OpenNuXL starts PercolatorAdapter
+        /// only at the end of its run, long after.)
         pub fn new(child: &std::process::Child) -> Group {
             let job = new_job().filter(|job| {
                 // SAFETY: the child's process handle is valid while `child` lives.
@@ -688,19 +748,24 @@ mod sys {
     }
 }
 
+
 /// Lines of a stream, lossily decoded, without the line end; a line longer than [`MAX_LINE`] bytes is cut
-/// there (and ends with "…"), the rest of it dropped unread into memory.
+/// there (and ends with "…"), the rest of it dropped unread into memory. A line ends at `\n` or at `\r`:
+/// OpenMS' progress updates end with `\r` alone (`ProgressLogger`), and each is a line of its own. A `\n`
+/// right after a `\r` (Windows' line end) ends nothing more, and nothing between a line end and a `\r` (the
+/// `\n\r` of a progress update after its label) is no line.
 fn read_lines(stream: impl Read, mut each: impl FnMut(&str)) {
     let mut reader = BufReader::new(stream);
     let mut line: Vec<u8> = Vec::new();
     let mut cut = false;
+    // the last byte read was a `\r` (also at the end of the reader's buffer)
+    let mut after_cr = false;
     let mut emit = |line: &mut Vec<u8>, cut: &mut bool| {
         let text = String::from_utf8_lossy(line);
-        let text = text.trim_end_matches(['\n', '\r']);
         if *cut {
             each(&format!("{text}…"));
         } else {
-            each(text);
+            each(&text);
         }
         line.clear();
         *cut = false;
@@ -712,16 +777,33 @@ fn read_lines(stream: impl Read, mut each: impl FnMut(&str)) {
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         };
-        let (taken, ends) = match buffer.iter().position(|&b| b == b'\n') {
-            Some(at) => (at + 1, true),
-            None => (buffer.len(), false),
+        let (taken, end) = match buffer.iter().position(|&b| b == b'\n' || b == b'\r') {
+            Some(at) => (at + 1, Some(buffer[at])),
+            None => (buffer.len(), None),
         };
+        let content = taken - usize::from(end.is_some());
         let room = MAX_LINE.saturating_sub(line.len());
-        line.extend_from_slice(&buffer[..taken.min(room)]);
-        cut |= taken > room;
+        line.extend_from_slice(&buffer[..content.min(room)]);
+        cut |= content > room;
         reader.consume(taken);
-        if ends {
-            emit(&mut line, &mut cut);
+        match end {
+            // the \n of a \r\n
+            Some(b'\n') if after_cr && line.is_empty() && !cut => after_cr = false,
+            Some(b'\n') => {
+                emit(&mut line, &mut cut);
+                after_cr = false;
+            }
+            Some(_) => {
+                if !line.is_empty() || cut {
+                    emit(&mut line, &mut cut);
+                }
+                after_cr = true;
+            }
+            None => {
+                if content > 0 {
+                    after_cr = false;
+                }
+            }
         }
     }
     if !line.is_empty() {
@@ -733,28 +815,26 @@ fn is_noise(line: &str) -> bool {
     line.trim().is_empty() || line.starts_with("Schema error") || line.starts_with("Warning:")
 }
 
-/// ProSE's own summary of failed files: the last resort of a message.
-fn is_summary(line: &str) -> bool {
-    line.starts_with("ProSE finished with") || line.starts_with("ProSE failed to write")
-}
-
 /// Where a file could not be parsed (OpenMS' XML handlers: "While loading '<file>': ... (in line 4303 column 2)").
 fn is_location(line: &str) -> bool {
     line.starts_with("While loading '")
 }
 
-/// A line that tells of an error: OpenMS' "Error: ..." of a tool that stops, and ProSE's and OpenMS' error
-/// lines of a step that failed (a file that cannot be written or read, a value that is not valid).
+/// A line that tells of an error: TOPPBase's "Error: ..." of a tool that stops and its refusals of the command
+/// line ("Invalid parameter values (...)", "Unknown option(s) ..."), and OpenMS' lines of a file that cannot be
+/// written or read.
 fn is_error(line: &str) -> bool {
     const STARTS: &[&str] = &[
         "Error",
         "Invalid parameter",
+        "Internal error",
+        "Unknown option",
+        "Trailing text argument",
         "Cannot ",
+        "Could not ",
         "Unable to ",
         "Failed to ",
-        "refusing ",
         "terminate called",
-        "Percolator could rescore only some",
     ];
     const HAS: &[&str] = &[
         "No space left on device",
@@ -766,28 +846,29 @@ fn is_error(line: &str) -> bool {
         "could not be created",
         "could not be written",
     ];
-    !is_summary(line)
-        && (STARTS.iter().any(|s| line.starts_with(s)) || HAS.iter().any(|s| line.contains(s)))
+    STARTS.iter().any(|s| line.starts_with(s)) || HAS.iter().any(|s| line.contains(s))
 }
 
-/// ProSE's hints in command-line words, in the app's (the app has no command line).
-const HINTS: &[(&str, &str)] = &[
-    (
-        "Use '-Search:rescore false', or",
-        "Turn off Percolator rescoring, or",
-    ),
-    ("Set 'rescore' to 'false'", "Turn off Percolator rescoring"),
-    (
-        "Set -Search:decoy_prefix to",
-        "Set the decoy prefix (decoy_prefix) to",
-    ),
-    ("Use '-Search:decoys ignore'", "Set decoys to ignore"),
-    ("Use '-Search:decoys generate'", "Set decoys to generate"),
-];
+/// OpenMS' InvalidValue ("the value 'X' was used but is not valid; M"), as OpenNuXL raises it for a configuration
+/// it refuses: "M (the value: X)"; inside TOPPBase's "Error: Unexpected internal error (...)", which is the
+/// user's configuration here, not an internal error: "Error: M (the value: X)".
+fn invalid_value(text: &str) -> Option<String> {
+    const START: &str = "the value '";
+    const MIDDLE: &str = "' was used but is not valid; ";
+    let at = text.find(START)?;
+    let value_end = at + START.len() + text[at + START.len()..].find(MIDDLE)?;
+    let value = &text[at + START.len()..value_end];
+    let message = &text[value_end + MIDDLE.len()..];
+    const INTERNAL: &str = "Error: Unexpected internal error (";
+    if text.starts_with(INTERNAL) && at == INTERNAL.len() {
+        let message = message.strip_suffix(')').unwrap_or(message).trim_end();
+        return Some(format!("Error: {message} (the value: {value})"));
+    }
+    Some(format!("{}{} (the value: {value})", &text[..at], message.trim_end()))
+}
 
 /// A line of the tool's stderr as a failure shows it: without OpenMS' source locations (paths of the
-/// machine that built ProSE) and exception boilerplate, ProSE's command-line hints in the app's words, and
-/// at most [`MAX_SHOWN`] characters.
+/// machine that built OpenNuXL) and exception boilerplate, and at most [`MAX_SHOWN`] characters.
 fn clean_line(line: &str) -> String {
     let mut text = line.trim().to_string();
     // "/home/runner/.../XMLHandler.cpp(67): While loading ...": the source location of a message
@@ -832,31 +913,32 @@ fn clean_line(line: &str) -> String {
         }
     }
     text = text.replace("( in line ", " (in line ");
-    if let Some(rest) = text.strip_prefix("ArrowIOHelpers: ") {
-        text = rest.to_string();
-    }
-    // the merged idXML of a search that Percolator could rescore only in part (ProSE.cpp): in plain words
-    if text.contains("Percolator rescored only some of the input files")
-        && text.starts_with("Cannot write the merged output")
-    {
-        text = "Percolator could rescore only some of the files, and their PSMs cannot be pooled with the search \
-                engine scores of the others. Turn off Percolator rescoring, or leave out the files that could not \
-                be rescored."
-            .to_string();
-    }
-    // an InvalidValue's repetition of the message: "(the value '1 of 2 files rescored' was used but is not valid; ...)"
-    if let Some(at) = text.find(" (the value '") {
-        if text[at..].contains("' was used but is not valid") {
-            text.truncate(at);
-        }
-    }
-    for (from, to) in HINTS {
-        text = text.replace(from, to);
+    if let Some(rewritten) = invalid_value(&text) {
+        text = rewritten;
     }
     if text.chars().count() > MAX_SHOWN {
         text = format!("{}…", text.chars().take(MAX_SHOWN).collect::<String>());
     }
     text
+}
+
+/// The warnings of OpenNuXL worth showing with a run's results (its `outputs.json`'s `notes`): that Percolator
+/// was skipped or failed (the results then carry NuXL's own scores), that a rescoring option could not work with
+/// the other settings, that the autotune kept the tolerances. As OpenNuXL writes them (stdout or stderr).
+const NOTES: &[&str] = &[
+    "Too few PSMs for score recalibration.",
+    "Score recalibration failed.",
+    "NuXL:rescoring:",
+    "autotune: too few non-cross-linked peptides found.",
+];
+
+/// The note of a line of a run, if it is one ([`NOTES`]).
+fn note_of(line: &str) -> Option<String> {
+    let line = line.trim();
+    NOTES
+        .iter()
+        .any(|n| line.starts_with(n))
+        .then(|| line.to_string())
 }
 
 /// What a failure is told with, gathered from the tool's stderr as it comes: its last lines (the details)
@@ -870,8 +952,6 @@ struct StderrDigest {
     /// The last "Error..." line, with the parse location ([`is_location`]) that came last before it.
     fatal: Option<(String, Option<String>)>,
     location: Option<String>,
-    /// ProSE's last summary of failed files.
-    summary: Option<String>,
 }
 
 impl StderrDigest {
@@ -893,8 +973,6 @@ impl StderrDigest {
             self.fatal = Some((clean.clone(), self.location.clone()));
         } else if is_location(&clean) {
             self.location = Some(clean.clone());
-        } else if is_summary(&clean) {
-            self.summary = Some(clean.clone());
         }
         if is_error(&clean) && self.errors.len() < ERROR_LINES {
             self.errors.push(clean);
@@ -902,10 +980,9 @@ impl StderrDigest {
     }
 
     /// The message of a failure: OpenMS' last "Error..." line (one of reading a file with the place in the
-    /// file before it), else the first error line ProSE wrote (the cause; the next ones are its consequences),
-    /// else ProSE's summary ("ProSE finished with 1 file(s) failing out of 1."), else, for a tool that ended
-    /// with an exit code, its last line. Empty for a tool killed by a signal without an error: its last line
-    /// (Percolator's "Split 3:") would only mislead.
+    /// file before it), else the first error line the tool wrote (the cause; the next ones are its
+    /// consequences), else, for a tool that ended with an exit code, its last line. Empty for a tool killed by a
+    /// signal without an error: its last line would only mislead.
     fn message(&self, signalled: bool) -> String {
         if let Some((error, location)) = &self.fatal {
             return match location {
@@ -915,7 +992,7 @@ impl StderrDigest {
                 _ => error.clone(),
             };
         }
-        if let Some(error) = self.errors.first().or(self.summary.as_ref()) {
+        if let Some(error) = self.errors.first() {
             return error.clone();
         }
         if signalled {
@@ -944,9 +1021,9 @@ fn signal_name(signal: i32) -> Option<&'static str> {
     })
 }
 
-/// How a tool that did not succeed ended, the lead of its failure: "ProSE crashed (signal 11, SIGSEGV)"
-/// (SIGKILL: the system may have ended it for lack of memory), on Windows "ProSE crashed (exception
-/// 0xC0000005)" for an exception's status, else "ProSE ended with exit code 3"; None for success.
+/// How a tool that did not succeed ended, the lead of its failure: "OpenNuXL crashed (signal 11, SIGSEGV)"
+/// (SIGKILL: the system may have ended it for lack of memory), on Windows "OpenNuXL crashed (exception
+/// 0xC0000005)" for an exception's status, else "OpenNuXL ended with exit code 3"; None for success.
 pub fn how_it_ended(status: &ExitStatus) -> Option<String> {
     if status.success() {
         return None;
@@ -961,25 +1038,25 @@ pub fn how_it_ended(status: &ExitStatus) -> Option<String> {
             25 => "; a file grew larger than the system allows, or the disk is full",
             _ => "",
         };
-        return Some(format!("ProSE crashed (signal {signal}{name}{oom})"));
+        return Some(format!("OpenNuXL crashed (signal {signal}{name}{oom})"));
     }
     Some(match status.code() {
         // an NTSTATUS error (0xC…): an access violation, a stack overflow, ...
         Some(code) if cfg!(windows) && (code as u32) >= 0xC000_0000 => {
-            format!("ProSE crashed (exception 0x{:08X})", code as u32)
+            format!("OpenNuXL crashed (exception 0x{:08X})", code as u32)
         }
-        Some(code) => format!("ProSE ended with exit code {code}"),
-        None => "ProSE ended unexpectedly".to_string(),
+        Some(code) => format!("OpenNuXL ended with exit code {code}"),
+        None => "OpenNuXL ended unexpectedly".to_string(),
     })
 }
 
-/// Keeps the log of a failed search (`prose.log` of its partial folder) as `<app data>/logs/`
+/// Keeps the log of a failed search ([`LOG_FILE`] of its partial folder) as `<app data>/logs/`
 /// [`LAST_FAILURE_LOG`], replacing the one before; the path, or None if there is none.
 fn keep_failure_log(partial: &Path) -> Option<PathBuf> {
     let logs = partial.parent()?.parent()?.join("logs");
     fs::create_dir_all(&logs).ok()?;
     let kept = logs.join(LAST_FAILURE_LOG);
-    fs::copy(partial.join("prose.log"), &kept).ok()?;
+    fs::copy(partial.join(LOG_FILE), &kept).ok()?;
     Some(kept)
 }
 
@@ -1006,11 +1083,15 @@ fn discard_partial(lock: Option<fs::File>, partial: &Path, kept: Option<&Path>) 
 struct Job {
     id: String,
     tool: PathBuf,
-    args: Vec<std::ffi::OsString>,
+    /// The command line of each input's run, in order.
+    runs: Vec<Vec<OsString>>,
     partial: PathBuf,
     done_dir: PathBuf,
     records: Vec<InputRecord>,
     placements: Vec<Placement>,
+    cutoffs: Cutoffs,
+    /// The shim's notes of the search, for every input's `outputs.json` (the database's decoys left out).
+    notes: Vec<String>,
     sink: Sink,
     handle: Arc<Handle>,
     /// The lock of the partial folder (see `history::lock_partial`), held until the folder is renamed
@@ -1029,7 +1110,7 @@ impl Searches {
         }
     }
 
-    /// The same, each search's tool watched by `exe --watch-search` ([`crate::watchdog`]; Unix): the app's
+    /// The same, each run's tool watched by `exe --watch-search` ([`crate::watchdog`]; Unix): the app's
     /// own executable on macOS, where nothing else ends the tool with the app.
     pub fn with_watchdog(mut self, exe: PathBuf) -> Searches {
         self.watchdog = Some(exe);
@@ -1050,8 +1131,8 @@ impl Searches {
         }
     }
 
-    /// Checks the request, makes the search folder and starts the tool; returns the search id. The
-    /// events go to `sink`. `crap` is the contaminant FASTA, needed if the request asks for them.
+    /// Checks the request, makes the search folder and starts the first run of the tool; returns the search
+    /// id. The events go to `sink`. `crap` is the contaminant FASTA, needed if the request asks for them.
     pub fn start(
         self: &Arc<Self>,
         tool_path: &Path,
@@ -1076,7 +1157,8 @@ impl Searches {
         let partial = searches_dir.join(format!("{id}.partial"));
         let done_dir = searches_dir.join(&id);
         // everything that can be wrong with the request is found before a folder exists
-        let args = build_args_with(&request, &partial, self.links)?;
+        let plan = plan_database(&request)?;
+        let runs = build_runs_with(&request, &partial, self.links, &plan)?;
 
         fs::create_dir(&partial).map_err(|e| {
             format!(
@@ -1093,10 +1175,13 @@ impl Searches {
         };
         let records = input_records_with(&request, self.links, &partial);
         let placements = input_placements(&request, self.links, &partial);
-        if let Err(e) = prepare_folder(&partial, &request, &records, &placements, crap) {
-            discard_partial(Some(lock), &partial, None);
-            return Err(e);
-        }
+        let notes = match prepare_folder(&partial, &request, &records, &placements, &plan, crap) {
+            Ok(notes) => notes,
+            Err(e) => {
+                discard_partial(Some(lock), &partial, None);
+                return Err(e);
+            }
+        };
 
         let handle = Arc::new(Handle {
             group: Mutex::new(None),
@@ -1111,11 +1196,16 @@ impl Searches {
         let job = Job {
             id: id.clone(),
             tool: tool_path.to_path_buf(),
-            args,
+            runs,
             partial: partial.clone(),
             done_dir,
             records,
             placements,
+            cutoffs: Cutoffs {
+                peptide: request.settings.peptide_fdr,
+                xl: request.settings.xl_fdr,
+            },
+            notes,
             sink,
             handle,
             lock: Some(lock),
@@ -1123,7 +1213,7 @@ impl Searches {
         let (started_tx, started_rx) = mpsc::channel();
         let searches = self.clone();
         let spawned = thread::Builder::new()
-            .name(format!("prose-{id}"))
+            .name(format!("nuxl-{id}"))
             .spawn(move || supervise(searches, job, started_tx));
         let result = match spawned {
             Ok(_) => started_rx.recv().unwrap_or_else(|_| {
@@ -1140,14 +1230,15 @@ impl Searches {
         Ok(id)
     }
 
-    /// Stops a search: its process group gets SIGTERM, and SIGKILL if it is still there after a few
-    /// seconds (Windows: its job is terminated at once). Returns when the process is gone and the
-    /// partial folder is removed. A search that is not running (finished, or never existed) is not an
-    /// error.
+    /// Stops a search: its current run's process group gets SIGTERM, and SIGKILL if it is still there after a
+    /// few seconds (Windows: its job is terminated at once); no further run starts. Returns when the process is
+    /// gone and the partial folder is removed. A search that is not running (finished, or never existed) is not
+    /// an error.
     pub fn cancel(&self, id: &str) -> Result<(), String> {
         let Some(handle) = self.running.lock().unwrap().get(id).cloned() else {
             return Ok(());
         };
+        // (before the group is read: a run that starts after this sees it and does not start; see `start_run`)
         handle.cancelled.store(true, Ordering::SeqCst);
         let group = handle.group();
         if let Some(group) = &group {
@@ -1156,6 +1247,8 @@ impl Searches {
         if handle.wait_finished(GRACE) {
             return Ok(());
         }
+        // (the run of then, or one that was starting as cancel came)
+        let group = handle.group().or(group);
         if let Some(group) = &group {
             group.kill();
         }
@@ -1163,7 +1256,7 @@ impl Searches {
             Ok(())
         } else {
             let pid = group.map(|g| g.pid()).unwrap_or(0);
-            Err(format!("ProSE (process {pid}) did not stop."))
+            Err(format!("OpenNuXL (process {pid}) did not stop."))
         }
     }
 
@@ -1188,7 +1281,7 @@ impl Searches {
             .collect();
         for (handle, group) in running {
             if !handle.wait_finished(GRACE) {
-                if let Some(group) = &group {
+                if let Some(group) = handle.group().or(group) {
                     group.kill();
                 }
                 handle.wait_finished(KILL_WAIT);
@@ -1197,14 +1290,16 @@ impl Searches {
     }
 }
 
-/// The links, `inputs.json` and, with contaminants, `database.fasta`.
+/// The links, `inputs.json`, the database (`database.fasta`, or `database.json` with the user's path) and the
+/// outputs' folder `nuxl/`. Returns the shim's notes of the search.
 fn prepare_folder(
     dir: &Path,
     request: &SearchRequest,
     records: &[InputRecord],
     placements: &[Placement],
+    plan: &DatabasePlan,
     crap: Option<&Path>,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     for ((file, record), placement) in request.files.iter().zip(records).zip(placements) {
         let original = fs::canonicalize(&file.path).unwrap_or_else(|_| PathBuf::from(&file.path));
         let link = dir.join(&record.link);
@@ -1217,127 +1312,291 @@ fn prepare_folder(
                 )
             })?,
             // (Windows) a hard link works on the folder's own volume only; nothing is ever copied
-            Placement::HardLink => fs::hard_link(&original, &link).map_err(|e| {
-                // (a name too long for ProSE's outputs in the search folder: its link's name is shortened)
-                if !record.link.ends_with(&record.name) && !reserved_stem(&record.name) {
-                    return format!(
-                        "The name of {} is too long for ProSE's result files in the app's data folder ({}), whose \
-                         names and paths it makes from the file's name. The app links such a file into the search \
-                         folder under a shorter name, but Windows can make that link only on the drive of the app's \
-                         data and on NTFS. {} cannot be linked there ({e}). Rename the file to a shorter name and \
-                         start the search again.",
-                        record.name,
-                        dir.parent().unwrap_or(dir).display(),
-                        file.path
-                    );
-                }
-                if reserved_stem(&record.name) {
-                    return format!(
-                        "ProSE cannot search a file named {} under that name, because its own result files are \
-                         called quantms. The app links such a file into the search folder under another name, but \
-                         Windows can make that link only on the drive of the app's data ({}) and on NTFS. {} cannot \
-                         be linked there ({e}). Rename the file and start the search again.",
-                        record.name,
-                        dir.parent().unwrap_or(dir).display(),
-                        file.path
-                    );
-                }
-                format!(
-                    "Two inputs are named {}. ProSE names its results after the files, so files of one \
-                     name are searched together only through links in the search folder, which Windows \
-                     can make only on the drive of the app's data ({}) and on NTFS; {} cannot be linked \
-                     there ({e}). Rename one of the files and start the search again.",
-                    record.name,
-                    dir.parent().unwrap_or(dir).display(),
-                    file.path
-                )
-            })?,
+            Placement::HardLink => fs::hard_link(&original, &link)
+                .map_err(|e| hard_link_refused(dir, records, record, &file.path, &e))?,
         }
     }
     let json = serde_json::to_string_pretty(records).map_err(|e| e.to_string())?;
     fs::write(dir.join("inputs.json"), json)
         .map_err(|e| format!("inputs.json cannot be written ({e})."))?;
-    if request.contaminants {
-        let crap =
-            crap.ok_or("The contaminant database (cRAP) is not available in this installation.")?;
-        let rules = DecoyRules::of(&request.settings.parameters);
-        with_contaminants(
+    let mut notes = Vec::new();
+    if plan.copy {
+        let crap = if request.contaminants {
+            Some(crap.ok_or(
+                "The contaminant database (cRAP) is not available in this installation.",
+            )?)
+        } else {
+            None
+        };
+        let copy = write_database(
             Path::new(&request.database),
             crap,
+            plan.decoys.as_ref(),
             &dir.join(DATABASE_FILE),
-            &rules,
         )
         .map_err(|e| match e.kind() {
             // (the user's database: the message says what is wrong with it)
             std::io::ErrorKind::InvalidData => e.to_string(),
-            _ => format!("The database with contaminants cannot be written ({e})."),
+            _ => format!("The database for OpenNuXL cannot be written ({e})."),
         })?;
+        if let (Some(marker), true) = (&plan.decoys, copy.decoys_left_out > 0) {
+            notes.push(format!(
+                "The database's own {} decoys ({}) were left out: OpenNuXL generates its decoys itself.",
+                copy.decoys_left_out,
+                marker.describe()
+            ));
+        }
     } else {
         // the one file outside the folder that the results reader may read (files::resolve_search_file)
         let record = serde_json::json!({ "path": request.database }).to_string();
         fs::write(dir.join(DATABASE_RECORD), record)
             .map_err(|e| format!("{DATABASE_RECORD} cannot be written ({e})."))?;
     }
-    Ok(())
+    fs::create_dir(dir.join(OUTPUT_DIR))
+        .map_err(|e| format!("The folder of OpenNuXL's results cannot be made ({e})."))?;
+    Ok(notes)
 }
 
-/// Runs the tool, passes on its progress, and settles the folder. Runs on the thread that started the
-/// tool, which is what ties the tool to the app on Linux (`PR_SET_PDEATHSIG`).
-fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(), String>>) {
-    let Job {
-        id,
-        tool: tool_path,
-        args,
-        partial,
-        done_dir,
-        records,
-        placements,
-        sink,
-        handle,
-        mut lock,
-    } = job;
-    let mut command = tool::command(&tool_path);
+/// Why an input that needs a hard link (Windows) could not have one, in words that say what to do.
+fn hard_link_refused(
+    dir: &Path,
+    records: &[InputRecord],
+    record: &InputRecord,
+    path: &str,
+    e: &std::io::Error,
+) -> String {
+    let data = dir.parent().unwrap_or(dir).display();
+    // (a name too long for OpenNuXL's outputs in the search folder: its link's name is shortened)
+    if !record.link.ends_with(&record.name) {
+        return format!(
+            "The name of {} is too long for OpenNuXL's result files in the app's data folder ({data}), which are \
+             named after the file. The app links such a file into the search folder under a shorter name, but \
+             Windows can make that link only on the drive of the app's data and on NTFS. {path} cannot be linked \
+             there ({e}). Rename the file to a shorter name and start the search again.",
+            record.name
+        );
+    }
+    let same = records
+        .iter()
+        .filter(|r| r.name.to_lowercase() == record.name.to_lowercase())
+        .count();
+    if same > 1 {
+        return format!(
+            "Two inputs are named {}. OpenNuXL's result files are named after the files, so files of one name \
+             are searched together only through links in the search folder, which Windows can make only on the \
+             drive of the app's data ({data}) and on NTFS; {path} cannot be linked there ({e}). Rename one of the \
+             files and start the search again.",
+            record.name
+        );
+    }
+    format!(
+        "The result files of {} would be confused with those of another input whose name starts the same way \
+         (e.g. a.mzML and a_perc.mzML: OpenNuXL names its files after the input and adds endings such as _perc). \
+         The app links such files into the search folder under other names, but Windows can make that link only \
+         on the drive of the app's data ({data}) and on NTFS; {path} cannot be linked there ({e}). Rename one of \
+         the files and start the search again.",
+        record.name
+    )
+}
+
+/// A threshold of OpenNuXL's derived file names, `StringUtils::number(q, 4)`: digits, a point and four
+/// decimals (`1.0000`, `0.0100`).
+fn threshold(text: &str) -> Option<f64> {
+    let (whole, decimals) = text.split_once('.')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    (digits(whole) && decimals.len() == 4 && digits(decimals))
+        .then(|| text.parse().ok())
+        .flatten()
+}
+
+/// The files of one kind among `names` (the names in `nuxl/`): those that are `<head><q><tail>`, with their
+/// threshold `q`.
+fn with_threshold<'a>(names: &'a [String], head: &str, tail: &str) -> Vec<(f64, &'a str)> {
+    names
+        .iter()
+        .filter_map(|n| {
+            let middle = n.strip_prefix(head)?.strip_suffix(tail)?;
+            Some((threshold(middle)?, n.as_str()))
+        })
+        .collect()
+}
+
+/// The outputs of the input of stem `stem` among the files `names` of `nuxl/` (design §2): the derived files are
+/// OpenNuXL's names after `-out` without `.idXML` and `_` (NuXLFDR.cpp: `<out>_<q>_peptides.idXML`,
+/// `<out>_<q>_XLs.idXML`, `<out>_proteins<q>_XLs.tsv`), after Percolator with `_perc_` (and the report
+/// `<out_tsv>_perc.tsv`). Percolator's are taken when there are any of its cross-link files.
+fn find_outputs(names: &[String], stem: &str) -> (bool, [Option<String>; 5]) {
+    let path = |name: &str| format!("{OUTPUT_DIR}/{name}");
+    let has = |name: String| names.contains(&name).then(|| path(&name));
+    let plain = format!("{stem}_");
+    let perc = format!("{stem}_perc_");
+    let percolator = !with_threshold(names, &perc, "_XLs.idXML").is_empty();
+    let base = if percolator { &perc } else { &plain };
+    let highest = |files: Vec<(f64, &str)>| {
+        files
+            .into_iter()
+            // (0 is no filter, as 1: the most of all)
+            .max_by(|a, b| {
+                let rank = |q: f64| if q == 0.0 { 1.0 } else { q };
+                rank(a.0).total_cmp(&rank(b.0))
+            })
+            .map(|(_, n)| path(n))
+    };
+    let xls = highest(with_threshold(names, base, "_XLs.idXML"));
+    let peptides = highest(with_threshold(names, base, "_peptides.idXML"));
+    let proteins = with_threshold(names, &format!("{base}proteins"), "_XLs.tsv")
+        .into_iter()
+        .filter(|(q, _)| *q <= crate::args::MAX_PROTEIN_REPORT_FDR)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, n)| path(n));
+    let report = if percolator {
+        has(format!("{stem}_perc.tsv"))
+    } else {
+        has(format!("{stem}.tsv"))
+    };
+    let all = has(format!("{stem}.idXML"));
+    (percolator, [all, xls, peptides, proteins, report])
+}
+
+/// Writes `nuxl/<stem>.outputs.json` of input `index` in the search folder `dir`, from what its run left in
+/// `nuxl/`.
+fn record_outputs(
+    dir: &Path,
+    record: &InputRecord,
+    cutoffs: Cutoffs,
+    notes: Vec<String>,
+    seconds: f64,
+) -> Result<InputOutputs, String> {
+    let folder = dir.join(OUTPUT_DIR);
+    let names: Vec<String> = fs::read_dir(&folder)
+        .map_err(|e| format!("The folder of OpenNuXL's results cannot be read ({e})."))?
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    let (percolator, [all, xls, peptides, proteins, report]) = find_outputs(&names, &record.stem);
+    let outputs = InputOutputs {
+        input: record.index,
+        all,
+        xls,
+        peptides,
+        proteins,
+        report,
+        percolator,
+        notes,
+        seconds: (seconds * 10.0).round() / 10.0,
+        fdr: cutoffs,
+    };
+    let json = serde_json::to_string_pretty(&outputs).map_err(|e| e.to_string())?;
+    let target = dir.join(outputs_record(&record.stem));
+    fs::write(&target, json).map_err(|e| {
+        format!(
+            "The record of the results of {} ({}) cannot be written ({e}).",
+            record.name,
+            outputs_record(&record.stem)
+        )
+    })?;
+    Ok(outputs)
+}
+
+/// How one run ended.
+enum RunEnd {
+    /// It succeeded; its notes.
+    Done(Vec<String>),
+    Cancelled,
+    /// The search's first run could not start: `start` returns why.
+    NotStarted,
+    /// It failed (or a later run could not start): the event to send.
+    Failed(SearchEvent),
+}
+
+/// What a run needs of its search.
+struct RunContext<'a> {
+    id: &'a str,
+    tool: &'a Path,
+    partial: &'a Path,
+    records: &'a [InputRecord],
+    sink: &'a Sink,
+    handle: &'a Handle,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    watchdog: Option<&'a Path>,
+    log: Option<&'a Arc<Mutex<fs::File>>>,
+}
+
+/// Starts run `k` (with `args`) unless the search is cancelled: the process is spawned, and its group set,
+/// while the handle's group lock is held, so that a cancel either comes first (the run does not start) or
+/// finds the group to end. `None`: cancelled.
+fn start_run(
+    context: &RunContext,
+    args: &[OsString],
+) -> Option<Result<(Child, Arc<sys::Group>), String>> {
+    let mut slot = context.handle.group.lock().unwrap();
+    if context.handle.cancelled.load(Ordering::SeqCst) {
+        return None;
+    }
+    let mut command = tool::command(context.tool);
     command
-        .args(&args)
+        .args(args)
+        .current_dir(context.partial)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     sys::prepare(&mut command);
-    let mut child: Child = match command.spawn() {
-        Ok(child) => child,
-        Err(e) => {
-            let _ = started.send(Err(format!(
-                "The ProSE tool {} cannot be started ({e}).",
-                tool_path.display()
-            )));
-            return;
+    Some(match command.spawn() {
+        Ok(child) => {
+            let group = Arc::new(sys::Group::new(&child));
+            *slot = Some(group.clone());
+            Ok((child, group))
+        }
+        Err(e) => Err(format!(
+            "OpenNuXL ({}) cannot be started ({e}).",
+            context.tool.display()
+        )),
+    })
+}
+
+/// Runs input `k`'s command line `args` to its end, passing on its progress: the log, the readers of its
+/// output, the watchdog. `started` hears of the first run's start (or why it could not).
+fn run_one(
+    context: &RunContext,
+    k: usize,
+    args: &[OsString],
+    tracker: &mut ProgressTracker,
+    started: Option<&mpsc::Sender<Result<(), String>>>,
+) -> RunEnd {
+    let (mut child, group) = match start_run(context, args) {
+        None => return RunEnd::Cancelled,
+        Some(Ok(started_run)) => started_run,
+        Some(Err(message)) => {
+            if let Some(started) = started {
+                let _ = started.send(Err(message));
+                return RunEnd::NotStarted;
+            }
+            return RunEnd::Failed(failed(context.id, message, tracker, Failure::default()));
         }
     };
-    let group = Arc::new(sys::Group::new(&child));
-    *handle.group.lock().unwrap() = Some(group.clone());
     // (macOS) the tool ends with the app, through a watchdog of its own
     #[cfg(unix)]
-    let mut watchdog = searches
+    let mut watchdog = context
         .watchdog
-        .as_deref()
         .and_then(|exe| crate::watchdog::start(exe, group.pid()));
-    let _ = started.send(Ok(()));
-    let emit = |event: SearchEvent| (sink)(event);
-    emit(SearchEvent::Progress(ProgressEvent {
-        search_id: id.clone(),
-        label: STARTING.to_string(),
-        file: -1,
-        fraction: 0.0,
-    }));
-
-    let log = fs::File::create(partial.join("prose.log"))
-        .ok()
-        .map(|f| Arc::new(Mutex::new(f)));
-    if let Some(log) = &log {
+    if let Some(started) = started {
+        let _ = started.send(Ok(()));
+    }
+    let emit = |p: crate::progress::ProgressUpdate| {
+        (context.sink)(SearchEvent::Progress(ProgressEvent {
+            search_id: context.id.to_string(),
+            label: p.label,
+            file: p.file,
+            fraction: p.fraction,
+        }))
+    };
+    emit(tracker.start_run(k));
+    if let Some(log) = context.log {
         let _ = writeln!(
             log.lock().unwrap(),
             "$ {} {}",
-            tool_path.display(),
+            context.tool.display(),
             args.iter()
                 .map(|a| a.to_string_lossy())
                 .collect::<Vec<_>>()
@@ -1345,50 +1604,54 @@ fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(),
         );
     }
 
-    let names: Vec<String> = records.iter().map(|r| r.name.clone()).collect();
+    let notes: Arc<Mutex<Vec<String>>> = Arc::default();
+    let note = {
+        let notes = notes.clone();
+        move |line: &str| {
+            if let Some(n) = note_of(line) {
+                let mut notes = notes.lock().unwrap();
+                if !notes.contains(&n) && notes.len() < MAX_NOTES {
+                    notes.push(n);
+                }
+            }
+        }
+    };
     let stdout = child.stdout.take();
-    let out_reader = {
-        let (sink, id, log) = (sink.clone(), id.clone(), log.clone());
-        thread::spawn(move || {
-            let mut tracker = ProgressTracker::new(names);
-            if let Some(stdout) = stdout {
-                read_lines(stdout, |line| {
-                    if let Some(log) = &log {
-                        let _ = writeln!(log.lock().unwrap(), "{line}");
-                    }
-                    if let Some(p) = tracker.feed(line) {
-                        sink(SearchEvent::Progress(ProgressEvent {
-                            search_id: id.clone(),
-                            label: p.label,
-                            file: p.file,
-                            fraction: p.fraction,
-                        }));
-                    }
-                });
-            }
-            tracker
-        })
-    };
     let stderr = child.stderr.take();
-    let err_reader = {
-        let log = log.clone();
-        thread::spawn(move || {
-            let mut digest = StderrDigest::default();
-            if let Some(stderr) = stderr {
-                read_lines(stderr, |line| {
-                    if line.starts_with("Schema error") {
-                        return;
-                    }
-                    if let Some(log) = &log {
-                        let _ = writeln!(log.lock().unwrap(), "{line}");
-                    }
-                    digest.feed(line);
-                });
-            }
-            digest
-        })
-    };
-
+    let digest = thread::scope(|scope| {
+        let err_reader = {
+            let (log, note) = (context.log, note.clone());
+            scope.spawn(move || {
+                let mut digest = StderrDigest::default();
+                if let Some(stderr) = stderr {
+                    read_lines(stderr, |line| {
+                        if line.starts_with("Schema error") {
+                            return;
+                        }
+                        if let Some(log) = log {
+                            let _ = writeln!(log.lock().unwrap(), "{line}");
+                        }
+                        note(line);
+                        digest.feed(line);
+                    });
+                }
+                digest
+            })
+        };
+        if let Some(stdout) = stdout {
+            read_lines(stdout, |line| {
+                if let Some(log) = context.log {
+                    let _ = writeln!(log.lock().unwrap(), "{line}");
+                }
+                note(line);
+                if let Some(p) = tracker.feed(line) {
+                    emit(p);
+                }
+            });
+        }
+        // (stdout is at its end: the tool has ended or closed it; its stderr goes on to its end)
+        err_reader.join().unwrap_or_default()
+    });
     let status = child.wait();
     // whatever the tool left running goes with it (and holds no pipe open for the readers)
     group.kill();
@@ -1397,10 +1660,105 @@ fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(),
         let _ = watchdog.kill();
         let _ = watchdog.wait();
     }
-    let tracker = out_reader
-        .join()
-        .unwrap_or_else(|_| ProgressTracker::new(Vec::new()));
-    let digest = err_reader.join().unwrap_or_default();
+    // the run is over: cancel signals no group any more until the next run's (Windows: closing the job ends
+    // anything still in it; the process's own handle goes too, so that it is gone from the process list when
+    // cancel returns)
+    context.handle.group.lock().unwrap().take();
+    drop(group);
+    drop(child);
+    let notes = std::mem::take(&mut *notes.lock().unwrap());
+    if context.handle.cancelled.load(Ordering::SeqCst) {
+        return RunEnd::Cancelled;
+    }
+    match status {
+        Ok(status) if status.success() => RunEnd::Done(notes),
+        Ok(status) => {
+            // a crash: a signal, or on Windows an exception's status (how_it_ended)
+            let signalled = sys::exit_signal(&status).is_some()
+                || (cfg!(windows) && status.code().is_some_and(|c| (c as u32) >= 0xC000_0000));
+            let message = humanize(&digest.message(signalled), context.partial, context.records);
+            let detail = (!digest.tail.is_empty()).then(|| {
+                let lines: Vec<&str> = digest.tail.iter().map(String::as_str).collect();
+                humanize(&lines.join("\n"), context.partial, context.records)
+            });
+            RunEnd::Failed(failed(
+                context.id,
+                message,
+                tracker,
+                Failure {
+                    ended: how_it_ended(&status),
+                    detail,
+                    log: None,
+                },
+            ))
+        }
+        Err(e) => RunEnd::Failed(failed(
+            context.id,
+            format!("Waiting for OpenNuXL failed ({e})."),
+            tracker,
+            Failure::default(),
+        )),
+    }
+}
+
+/// Runs the inputs one after the other, passes on their progress, records each one's outputs, and settles the
+/// folder. Runs on the thread that starts the tool, which is what ties the tool to the app on Linux
+/// (`PR_SET_PDEATHSIG`).
+fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(), String>>) {
+    let Job {
+        id,
+        tool: tool_path,
+        runs,
+        partial,
+        done_dir,
+        records,
+        placements,
+        cutoffs,
+        notes: search_notes,
+        sink,
+        handle,
+        mut lock,
+    } = job;
+    let log = fs::File::create(partial.join(LOG_FILE))
+        .ok()
+        .map(|f| Arc::new(Mutex::new(f)));
+    let context = RunContext {
+        id: &id,
+        tool: &tool_path,
+        partial: &partial,
+        records: &records,
+        sink: &sink,
+        handle: &handle,
+        watchdog: searches.watchdog.as_deref(),
+        log: log.as_ref(),
+    };
+    let mut tracker = ProgressTracker::new(records.iter().map(|r| r.name.clone()).collect());
+    let mut end = None;
+    for (k, (args, record)) in runs.iter().zip(&records).enumerate() {
+        let started_run = Instant::now();
+        let first = (k == 0).then_some(&started);
+        match run_one(&context, k, args, &mut tracker, first) {
+            // `start` heard why, and removes the folder
+            RunEnd::NotStarted => return,
+            RunEnd::Done(mut notes) => {
+                notes.extend(search_notes.iter().cloned());
+                let seconds = started_run.elapsed().as_secs_f64();
+                if let Err(message) = record_outputs(&partial, record, cutoffs, notes, seconds) {
+                    end = Some(RunEnd::Failed(failed(
+                        &id,
+                        message,
+                        &tracker,
+                        Failure::default(),
+                    )));
+                    break;
+                }
+            }
+            other => {
+                end = Some(other);
+                break;
+            }
+        }
+    }
     drop(log);
 
     // the hard links to the inputs (Windows) have served: they do not belong to the search, and would
@@ -1410,60 +1768,29 @@ fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(),
             let _ = with_backoff(|| fs::remove_file(partial.join(&record.link)));
         }
     }
-    let outcome = if handle.cancelled.load(Ordering::SeqCst) {
-        discard_partial(lock.take(), &partial, None);
-        None
-    } else {
-        match status {
-            Ok(status) if status.success() => {
-                match finish_partial(lock.take(), &partial, &done_dir) {
-                    Ok(()) => Some(SearchEvent::Done(DoneEvent {
-                        search_id: id.clone(),
-                        folder: done_dir.to_string_lossy().into_owned(),
-                    })),
-                    Err(e) => {
-                        let log = keep_failure_log(&partial);
-                        discard_partial(None, &partial, log.as_deref());
-                        Some(failed(
-                            &id,
-                            format!("The search folder cannot be finished ({e})."),
-                            &tracker,
-                            Failure {
-                                log,
-                                ..Failure::default()
-                            },
-                        ))
-                    }
-                }
-            }
-            Ok(status) => {
-                // a crash: a signal, or on Windows an exception's status (how_it_ended)
-                let signalled = sys::exit_signal(&status).is_some()
-                    || (cfg!(windows) && status.code().is_some_and(|c| (c as u32) >= 0xC000_0000));
-                let message = humanize(&digest.message(signalled), &partial, &records);
-                let detail = (!digest.tail.is_empty()).then(|| {
-                    let lines: Vec<&str> = digest.tail.iter().map(String::as_str).collect();
-                    humanize(&lines.join("\n"), &partial, &records)
-                });
-                let log = keep_failure_log(&partial);
-                discard_partial(lock.take(), &partial, log.as_deref());
-                Some(failed(
-                    &id,
-                    message,
-                    &tracker,
-                    Failure {
-                        ended: how_it_ended(&status),
-                        detail,
-                        log,
-                    },
-                ))
-            }
+    let outcome = match end {
+        Some(RunEnd::Cancelled) | Some(RunEnd::NotStarted) => {
+            discard_partial(lock.take(), &partial, None);
+            None
+        }
+        Some(RunEnd::Failed(SearchEvent::Failed(mut f))) => {
+            let log = keep_failure_log(&partial);
+            discard_partial(lock.take(), &partial, log.as_deref());
+            f.log = log.map(|p| p.to_string_lossy().into_owned());
+            Some(SearchEvent::Failed(f))
+        }
+        Some(RunEnd::Failed(other)) => Some(other),
+        Some(RunEnd::Done(_)) | None => match finish_partial(lock.take(), &partial, &done_dir) {
+            Ok(()) => Some(SearchEvent::Done(DoneEvent {
+                search_id: id.clone(),
+                folder: done_dir.to_string_lossy().into_owned(),
+            })),
             Err(e) => {
                 let log = keep_failure_log(&partial);
-                discard_partial(lock.take(), &partial, log.as_deref());
+                discard_partial(None, &partial, log.as_deref());
                 Some(failed(
                     &id,
-                    format!("Waiting for ProSE failed ({e})."),
+                    format!("The search folder cannot be finished ({e})."),
                     &tracker,
                     Failure {
                         log,
@@ -1471,16 +1798,11 @@ fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(),
                     },
                 ))
             }
-        }
+        },
     };
     searches.running.lock().unwrap().remove(&id);
-    // (Windows: closing the job ends anything still in it; the process's own handle goes too, so that
-    // it is gone from the process list when cancel returns)
-    handle.group.lock().unwrap().take();
-    drop(group);
-    drop(child);
     if let Some(event) = outcome {
-        emit(event);
+        (sink)(event);
     }
     handle.finish();
 }
@@ -1503,4 +1825,75 @@ fn failed(id: &str, message: String, tracker: &ProgressTracker, more: Failure) -
         detail: more.detail,
         log: more.log.map(|p| p.to_string_lossy().into_owned()),
     })
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::{find_outputs, threshold};
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn the_thresholds_of_the_derived_names_have_four_decimals() {
+        assert_eq!(threshold("1.0000"), Some(1.0));
+        assert_eq!(threshold("0.0100"), Some(0.01));
+        for text in ["1.0", "1", "perc_1.0000", "0.01000", "-0.0100", ".0100", "1.00a0"] {
+            assert_eq!(threshold(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn the_outputs_of_a_run_are_found_by_their_names() {
+        // a run without Percolator (too few PSMs), beside another input's files whose stem begins the same
+        let plain = names(&[
+            "1__a.idXML",
+            "1__a.tsv",
+            "1__a_0.0000_peptides.idXML",
+            "1__a_1.0000_XLs.idXML",
+            "1__a_0.0100_XLs.idXML",
+            "1__a_proteins0.0100_XLs.tsv",
+            "1__a_sse_perc_in.idXML",
+            "11__a_1.0000_XLs.idXML",
+            "1__a.outputs.json",
+        ]);
+        let (percolator, [all, xls, peptides, proteins, report]) = find_outputs(&plain, "1__a");
+        assert!(!percolator);
+        assert_eq!(all.as_deref(), Some("nuxl/1__a.idXML"));
+        assert_eq!(xls.as_deref(), Some("nuxl/1__a_1.0000_XLs.idXML"), "the highest threshold");
+        assert_eq!(peptides.as_deref(), Some("nuxl/1__a_0.0000_peptides.idXML"));
+        assert_eq!(proteins.as_deref(), Some("nuxl/1__a_proteins0.0100_XLs.tsv"));
+        assert_eq!(report.as_deref(), Some("nuxl/1__a.tsv"));
+
+        // after Percolator: its files, though the plain ones are there too
+        let mut rescored = plain.clone();
+        rescored.extend(names(&[
+            "1__a_perc.idXML",
+            "1__a_perc.tsv",
+            "1__a_perc_0.0000_peptides.idXML",
+            "1__a_perc_1.0000_XLs.idXML",
+            "1__a_perc_0.0100_XLs.idXML",
+            "1__a_perc_proteins0.0100_XLs.tsv",
+            "1__a_perc_proteins0.0500_XLs.tsv",
+            "1__a.weights",
+        ]));
+        let (percolator, [all, xls, peptides, proteins, report]) = find_outputs(&rescored, "1__a");
+        assert!(percolator);
+        assert_eq!(all.as_deref(), Some("nuxl/1__a.idXML"));
+        assert_eq!(xls.as_deref(), Some("nuxl/1__a_perc_1.0000_XLs.idXML"));
+        assert_eq!(peptides.as_deref(), Some("nuxl/1__a_perc_0.0000_peptides.idXML"));
+        assert_eq!(
+            proteins.as_deref(),
+            Some("nuxl/1__a_perc_proteins0.0100_XLs.tsv"),
+            "the lowest threshold"
+        );
+        assert_eq!(report.as_deref(), Some("nuxl/1__a_perc.tsv"));
+
+        // a cross-link FDR above 10 %: no protein report; nothing at all: all null
+        let (_, found) = find_outputs(&names(&["b.idXML", "b_1.0000_XLs.idXML"]), "b");
+        assert_eq!(found[3], None);
+        let (percolator, found) = find_outputs(&[], "c");
+        assert!(!percolator && found.iter().all(Option::is_none));
+    }
 }

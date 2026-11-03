@@ -1,4 +1,4 @@
-//! Project files (`.prose`): a search folder as one zip, written entry by entry from the folder's files
+//! Project files (`.nuxl`): a search folder as one zip, written entry by entry from the folder's files
 //! straight to the file the user chose (`save_project_file`), so that nothing of it is held in memory and
 //! the save dialog comes first. What a project holds is what `src/lib/history/history.ts` describes: the
 //! folder's regular files ([`history::folder_files`]) but [`LEFT_OUT`], `search.json` first, and
@@ -26,7 +26,7 @@ pub const INPUTS: &str = "inputs.json";
 /// Files of the folder that a project leaves out: the database copy (`proteins.fasta` has the sequences),
 /// the path of a database searched without contaminants, and the tool's log (its first line is the full
 /// command line, with paths of this computer).
-pub const LEFT_OUT: [&str; 3] = ["database.fasta", "database.json", "prose.log"];
+pub const LEFT_OUT: [&str; 3] = ["database.fasta", "database.json", crate::args::LOG_FILE];
 /// The most a project may unpack to (the front end reads it into memory).
 pub const MAX_UNPACKED: u64 = 3 * 1024 * 1024 * 1024;
 /// The most entries of a zip without zip64.
