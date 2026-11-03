@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ProSE",
-  "version": "0.1.4",
-  "identifier": "org.openms.prose.desktop",
+  "productName": "NuXL",
+  "version": "0.1.0",
+  "identifier": "org.openms.nuxl.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "ProSE",
+        "title": "NuXL",
         "width": 1440,
         "height": 900,
         "minWidth": 720,
@@ -31,10 +31,10 @@
     ],
     "resources": [
       "resources/fasta/crap.fasta",
-      "resources/example/Ecoli_MS2_small.mzML",
-      "resources/example/Ecoli_K12_proteome.fasta",
+      "resources/example/OpenNuXL_1_input.mzML",
+      "resources/example/OpenNuXL_1_input.fasta",
       "resources/notices/",
-      "resources/prose/"
+      "resources/nuxl/"
     ],
     "license": "BSD-3-Clause",
     "licenseFile": "../LICENSE",
@@ -48,8 +48,8 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
-    "shortDescription": "ProSE: the OpenMS search engine for bottom-up proteomics",
-    "longDescription": "ProSE searches MS/MS spectra (mzML) against a protein database (FASTA) with the ProSE engine of OpenMS, rescores with Percolator and PeptDeep, and shows the PSMs, peptides and proteins with annotated spectra. Everything runs on this computer.",
+    "shortDescription": "NuXL: protein-nucleic acid cross-links identified with OpenNuXL of OpenMS",
+    "longDescription": "NuXL identifies protein-RNA and protein-DNA cross-links in MS/MS spectra (mzML) against a protein database (FASTA) with OpenNuXL of OpenMS, rescores with Percolator, and shows the cross-links, peptides and proteins with their adducts, cross-linked residues and annotated spectra. Everything runs on this computer.",
     "publisher": "OpenMS",
     "homepage": "https://openms.de",
     "linux": {
@@ -60,7 +60,7 @@
       "deb": {
         "section": "science",
         "files": {
-          "/usr/share/doc/prose/copyright": "resources/notices/copyright"
+          "/usr/share/doc/nuxl/copyright": "resources/notices/copyright"
         }
       }
     }

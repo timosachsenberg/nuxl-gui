@@ -1,13 +1,16 @@
 <script lang="ts">
-  // The one filter row of a level: text, the q-value cutoff (tightening the search's only), and on
-  // proteins the minimum peptides and "found in"; contaminants and decoys as chips; "n of total".
+  // The one filter row of a level: text; the kind (all, cross-links, peptides; on proteins: cross-linked ones);
+  // on peptides and PSMs the q-value cutoffs of the peptide PSMs and of the cross-links (tightening the search's
+  // only), the adduct and the nucleotide; on proteins the minimum peptides and "found in" (OpenNuXL has no protein
+  // FDR: the proteins count the PSMs at the search's cutoffs); contaminants as a chip; "n of total".
   import FdrInput from '$lib/components/FdrInput.svelte'
   import ChoiceSelect from '$lib/components/search/ChoiceSelect.svelte'
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import * as Popover from '$lib/components/ui/popover'
-  import * as Tooltip from '$lib/components/ui/tooltip'
   import { formatPercent, formatQ } from '$lib/format/fdr'
+  import { adductLabel } from '$lib/format/peptide'
   import { formatCount, parseAccession } from '$lib/results/display'
+  import { crossLinkChoices, type Kind } from '$lib/results/filters'
   import type { LevelState, ResultsView } from '$lib/results/view.svelte'
   import { cn } from '$lib/utils'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
@@ -15,22 +18,50 @@
   import SearchIcon from '@lucide/svelte/icons/search'
   import XIcon from '@lucide/svelte/icons/x'
 
-  // psmFdrApplied: false when the search applied the PSM FDR to none of its PSMs (no decoy PSM): no q-values to filter by
-  let {
-    view,
-    level,
-    proteinFdrApplied,
-    psmFdrApplied = true,
-  }: { view: ResultsView; level: LevelState; proteinFdrApplied: boolean; psmFdrApplied?: boolean } = $props()
+  let { view, level }: { view: ResultsView; level: LevelState } = $props()
 
   const names = {
-    proteins: { filter: 'Filter proteins', placeholder: 'Accession, gene, name, peptide…', q: 'Protein FDR' },
+    proteins: { filter: 'Filter proteins', placeholder: 'Accession, gene, name, peptide…', q: '' },
     peptides: { filter: 'Filter peptides', placeholder: 'Sequence, modification, accession…', q: 'Best PSM q-value' },
     psms: { filter: 'Filter PSMs', placeholder: 'Sequence, modification, accession…', q: 'PSM FDR' },
   } as const
   const name = $derived(names[level.level])
-  const cutoff = $derived(level.level === 'proteins' ? view.result.proteinFdr : view.result.psmFdr)
+  const m = $derived(view.model)
   const qId = $derived(`q-filter-${level.level}`)
+  const xlId = $derived(`xl-filter-${level.level}`)
+
+  /** The search has cross-links (any PSM row is one): the kind filter and the cross-link cutoff show. */
+  const hasXl = $derived(m.tables.psms.xl.isXL.includes(1))
+  const kinds = $derived<{ value: Kind; label: string; title: string }[]>(
+    level.level === 'proteins'
+      ? [
+          { value: 'all', label: 'All', title: 'All proteins' },
+          { value: 'xl', label: 'Cross-linked', title: 'Proteins with a cross-link PSM within the cross-link FDR' },
+        ]
+      : [
+          { value: 'all', label: 'All', title: `All ${level.level === 'psms' ? 'PSMs' : 'peptides'}` },
+          { value: 'xl', label: 'Cross-links', title: `Cross-linked ${level.level === 'psms' ? 'PSMs' : 'peptides'} only` },
+          { value: 'peptide', label: 'Peptides', title: `${level.level === 'psms' ? 'PSMs of peptides' : 'Peptides'} without a cross-link only` },
+        ],
+  )
+
+  // the adducts and nucleotides of the search's PSMs; '*' is any (a select's value cannot be empty)
+  const ANY = '*'
+  const choices = $derived(crossLinkChoices(m))
+  const adductOptions = $derived([
+    { value: ANY, label: 'Any adduct' },
+    ...choices.adducts.map((c) => ({ value: c.value, label: `${adductLabel(c.value)} (${formatCount(c.psms)})` })),
+  ])
+  const nucleotideOptions = $derived([
+    { value: ANY, label: 'Any nucleotide' },
+    ...choices.nucleotides.map((c) => ({ value: c.value, label: `${adductLabel(c.value)} (${formatCount(c.psms)})` })),
+  ])
+  /** The cutoff popover's trigger: the peptide PSMs' and, with cross-links, theirs. */
+  const qSummary = $derived(
+    hasXl
+      ? `${name.q} ≤ ${formatPercent(level.filters.maxQ)} · XL ≤ ${formatPercent(level.filters.maxXlQ)}`
+      : `${name.q} ≤ ${formatPercent(level.filters.maxQ)}`,
+  )
 
   /** The peptide (ProForma) that the PSM table is restricted to ("All n in the PSM table"). */
   const peptide = $derived.by(() => {
@@ -111,38 +142,70 @@
       onkeydown={(e) => e.key === 'Escape' && draft && (e.preventDefault(), clearText())} />
   </label>
 
-  {#if (level.level === 'proteins' && !proteinFdrApplied) || (level.level !== 'proteins' && !psmFdrApplied)}
-    <!-- aria-disabled, not disabled: it stays focusable, so that the tooltip says why -->
-    <Tooltip.Root>
-      <Tooltip.Trigger>
-        {#snippet child({ props })}
-          <button {...props} type="button" class={cn(selectLike, 'cursor-not-allowed text-muted-foreground opacity-60')} aria-disabled="true"
-            >{level.level === 'proteins' ? 'Protein FDR' : 'PSM FDR'}: not available</button>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Tooltip.Content class="max-w-xs" role="tooltip"
-        >{level.level === 'proteins'
-          ? 'This search did not apply a protein FDR, so the proteins have no q-values to filter by.'
-          : 'This search did not apply the PSM FDR (no PSM matched a decoy), so the PSMs have no q-values to filter by.'}</Tooltip.Content>
-    </Tooltip.Root>
-  {:else}
+  {#if hasXl}
+    <div class="inline-flex h-8 items-center rounded-md border bg-background p-0.5" role="group" aria-label="Show" data-testid="kind-filter">
+      {#each kinds as k (k.value)}
+        <button
+          type="button"
+          aria-pressed={level.filters.kind === k.value}
+          title={k.title}
+          class={cn(
+            'h-full rounded-[5px] px-2.5 text-[13px] whitespace-nowrap focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
+            level.filters.kind === k.value ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground',
+          )}
+          onclick={() => (level.filters.kind = k.value)}>{k.label}</button>
+      {/each}
+    </div>
+  {/if}
+
+  {#if level.level !== 'proteins'}
+    <!-- (proteins: no protein FDR, nothing to tighten; they count the PSMs at the search's cutoffs) -->
     <Popover.Root>
-      <Popover.Trigger class={selectLike}>
-        {name.q} ≤ {formatPercent(level.filters.maxQ)}
-        <span class="text-muted-foreground">({formatQ(level.filters.maxQ)})</span>
+      <Popover.Trigger class={selectLike} data-testid="q-filter">
+        {qSummary}
         <ChevronDown class="size-3.5 text-muted-foreground" aria-hidden="true" />
       </Popover.Trigger>
-      <Popover.Content class="w-72" align="start">
-        <div class="grid gap-2">
-          <label for={qId} class="text-xs font-medium">{name.q}</label>
-          <FdrInput id={qId} bind:value={level.filters.maxQ} max={cutoff} />
+      <Popover.Content class="w-80" align="start">
+        <div class="grid gap-3">
+          <div class="grid gap-2">
+            <label for={qId} class="text-xs font-medium">{name.q}{hasXl ? ', peptides' : ''}</label>
+            <FdrInput id={qId} bind:value={level.filters.maxQ} max={m.psmFdr} />
+          </div>
+          {#if hasXl}
+            <div class="grid gap-2">
+              <label for={xlId} class="text-xs font-medium">{name.q}, cross-links</label>
+              <FdrInput id={xlId} bind:value={level.filters.maxXlQ} max={m.xlFdr} />
+            </div>
+          {/if}
           <p class="text-xs text-muted-foreground">
-            The search's cutoff is {formatPercent(cutoff)} ({formatQ(cutoff)}). You can tighten it here. A looser cutoff
-            needs a new search.
+            {#if hasXl}
+              The search's cutoffs are {formatPercent(m.psmFdr)} ({formatQ(m.psmFdr)}) for peptides and
+              {formatPercent(m.xlFdr)} ({formatQ(m.xlFdr)}) for cross-links: OpenNuXL estimates their FDRs apart.
+            {:else}
+              The search's cutoff is {formatPercent(m.psmFdr)} ({formatQ(m.psmFdr)}).
+            {/if}
+            You can tighten {hasXl ? 'them' : 'it'} here. A looser cutoff needs a new search.
           </p>
         </div>
       </Popover.Content>
     </Popover.Root>
+  {/if}
+
+  {#if level.level !== 'proteins' && level.filters.kind !== 'peptide' && choices.adducts.length > 1}
+    <ChoiceSelect
+      class="w-auto max-w-56"
+      ariaLabel="Adduct"
+      value={level.filters.adduct || ANY}
+      options={adductOptions}
+      onChange={(v) => (level.filters.adduct = v === ANY ? '' : v)} />
+  {/if}
+  {#if level.level !== 'proteins' && level.filters.kind !== 'peptide' && choices.nucleotides.length > 1}
+    <ChoiceSelect
+      class="w-auto"
+      ariaLabel="Nucleotide"
+      value={level.filters.nucleotide || ANY}
+      options={nucleotideOptions}
+      onChange={(v) => (level.filters.nucleotide = v === ANY ? '' : v)} />
   {/if}
 
   {#if level.level === 'proteins'}
@@ -189,7 +252,6 @@
     </DropdownMenu.Trigger>
     <DropdownMenu.Content class="w-auto min-w-48">
       <DropdownMenu.CheckboxItem bind:checked={level.filters.hideContaminants}>Hide contaminants</DropdownMenu.CheckboxItem>
-      <DropdownMenu.CheckboxItem bind:checked={level.filters.showDecoys}>Show decoys</DropdownMenu.CheckboxItem>
     </DropdownMenu.Content>
   </DropdownMenu.Root>
 

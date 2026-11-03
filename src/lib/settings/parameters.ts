@@ -1,8 +1,8 @@
-// ProSE's parameters as the New search page handles them: ProSE's defaults (`PROSE_PARAMETERS`,
-// generated from the pinned tool at build time), the values the page sends, and the sections of the
-// parameters.
+// OpenNuXL's parameters as the New search page handles them: OpenNuXL's defaults (`NUXL_PARAMETERS`, generated
+// from the OpenMS pin at build time), the search's own settings kept beside them (the FDRs), the values the page
+// sends, and the sections of the parameters.
 
-/** One of ProSE's parameters, as the web app's module described them (`ParamEntry`). */
+/** One of OpenNuXL's parameters (scripts/nuxl-parameters.mjs). */
 export type ParamEntry = {
   name: string
   value: number | string | boolean | number[] | string[] | null
@@ -15,17 +15,24 @@ export type ParamEntry = {
 }
 
 /**
- * Parameters the switches of the Rescoring card set through the search request (`rescore`,
- * `peptdeep`): never part of a preset or of `SearchRequest.parameters`, and not in the dialog.
+ * The search's own settings that the form keeps with OpenNuXL's parameters (presets save them, the example sets
+ * them) but that the request sends apart (`settings.peptideFdr`, `settings.xlFdr`: fractions), never as parameters:
+ * the shim gives OpenNuXL its FDR options itself (docs/design.md §3).
  */
-export const SWITCH_PARAMETERS: readonly string[] = ['rescore', 'peptdeep:enable', 'peptdeep:ms2_model', 'peptdeep:rt_model']
+export const SEARCH_SETTINGS = {
+  /** The peptide PSMs' FDR (q-value cutoff). */
+  peptideFdr: 0.01,
+  /** The cross-link PSMs' FDR (q-value cutoff). */
+  xlFdr: 0.01,
+} as const
 
-/** Parameters with their own control on the page outside the dialog (the PeptDeep instrument). */
-export const CARD_PARAMETERS: readonly string[] = ['peptdeep:instrument']
+export type SearchSettingName = keyof typeof SEARCH_SETTINGS
 
-/** The parameters the dialog lists: all but those of the Rescoring card. */
+export const SEARCH_SETTING_NAMES = Object.keys(SEARCH_SETTINGS) as SearchSettingName[]
+
+/** The parameters the dialog lists: all of OpenNuXL's that the app may set. */
 export function dialogEntries(entries: ParamEntry[]): ParamEntry[] {
-  return entries.filter((e) => !SWITCH_PARAMETERS.includes(e.name) && !CARD_PARAMETERS.includes(e.name))
+  return entries
 }
 
 /** The section of a parameter: the part of its name before the last ":" ("general" without one). */
@@ -34,7 +41,7 @@ export function sectionOf(name: string): string {
   return colon < 0 ? 'general' : name.slice(0, colon)
 }
 
-/** The entries by section, in the order of their first parameter (ProSE's order). */
+/** The entries by section, in the order of their first parameter (OpenNuXL's order). */
 export function parameterSections(entries: ParamEntry[]): { name: string; entries: ParamEntry[] }[] {
   const sections = new Map<string, ParamEntry[]>()
   for (const e of entries) {
@@ -46,7 +53,7 @@ export function parameterSections(entries: ParamEntry[]): { name: string; entrie
   return [...sections].map(([name, list]) => ({ name, entries: list }))
 }
 
-/** ProSE's defaults by name. */
+/** OpenNuXL's defaults by name. */
 export function defaultsOf(entries: ParamEntry[]): Record<string, unknown> {
   return Object.fromEntries(entries.map((e) => [e.name, e.value]))
 }
@@ -69,14 +76,30 @@ export function changedParameters(
   return changed
 }
 
-/** The parameters of a search request: the changed values, without those the switches set. */
-export function requestParameters(
-  values: Record<string, unknown>,
-  defaults: Record<string, unknown>,
-): Record<string, unknown> {
-  const changed = changedParameters(values, defaults)
-  for (const name of SWITCH_PARAMETERS) delete changed[name]
-  return changed
+/**
+ * The parameters of a search request: the values of OpenNuXL's parameters (`entries`: the shim's allowlist) that
+ * differ from OpenNuXL's defaults. Nothing else goes: not the search's own settings (`SEARCH_SETTINGS`), not a name
+ * OpenNuXL's list does not have (a preset of another version), not an empty text (the shim passes no argument for
+ * one, so OpenNuXL's default applies: the field says so, `emptyTextDefault`).
+ */
+export function requestParameters(values: Record<string, unknown>, entries: ParamEntry[]): Record<string, unknown> {
+  const parameters: Record<string, unknown> = {}
+  for (const e of entries) {
+    if (!(e.name in values)) continue
+    const value = values[e.name]
+    if (value === undefined || sameValue(value, e.value)) continue
+    if (e.type === 'string' && value === '') continue
+    parameters[e.name] = copyValue(value)
+  }
+  return parameters
+}
+
+/**
+ * OpenNuXL's default that runs when a text parameter is left empty (the shim passes no argument for an empty text):
+ * its default when that is not empty, else null (empty and the default are the same).
+ */
+export function emptyTextDefault(entry: ParamEntry): string | null {
+  return entry.type === 'string' && typeof entry.value === 'string' && entry.value !== '' ? entry.value : null
 }
 
 /** A value that can be edited without changing the original (lists are copied). */

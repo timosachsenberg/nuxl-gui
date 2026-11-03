@@ -1,9 +1,9 @@
 // The AppImage smoke test (native/scripts/smoke-appimage.sh runs it; not one of the *.spec.ts of e2e/run.sh).
-// The AppImage runs from an empty environment (e2e/appimage-app.sh) and searches the example with PeptDeep
-// with the ProSE it bundles. Besides the result, the test reads which files the processes have mapped
-// (/proc/<pid>/maps): the app and WebKit's processes, and ProSE while it searches, load their libraries from
+// The AppImage runs from an empty environment (e2e/appimage-app.sh) and searches the example with the OpenNuXL
+// it bundles. Besides the result, the test reads which files the processes have mapped
+// (/proc/<pid>/maps): the app and WebKit's processes, and OpenNuXL while it searches, load their libraries from
 // the AppImage or from the system, never from SMOKE_FORBIDDEN (the build machine's sysroot and OpenMS build,
-// colon-separated), and ProSE loads its own closure with one OpenMP runtime.
+// colon-separated), and OpenNuXL loads its own closure with one OpenMP runtime.
 import { existsSync, readdirSync, readFileSync, readlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { appReady, clearSearches, dataHome, invoke, openFirstPsm, runExample } from './lib.ts'
@@ -75,7 +75,7 @@ describe('the AppImage', () => {
   let appRoot = ''
 
   let toolInfo: { result?: any; failure?: string } = {}
-  const marker = '/usr/lib/ProSE/resources/prose/bin/ProSE'
+  const marker = '/usr/lib/NuXL/resources/nuxl/bin/OpenNuXL'
 
   before(async () => {
     await appReady()
@@ -91,59 +91,57 @@ describe('the AppImage', () => {
     console.log(env.trim())
     // (LD_LIBRARY_PATH is never kept from the driver's environment; appimage-app.sh sets it only to the
     // folder of the host's missing libGLESv2.so.2, see smoke-appimage.sh)
-    expect(env).not.toMatch(/^kept: .*\b(LD_LIBRARY_PATH|PROSE_BIN|PKG_CONFIG_PATH|XDG_DATA_DIRS|GIO_EXTRA_MODULES)\b/m)
+    expect(env).not.toMatch(/^kept: .*\b(LD_LIBRARY_PATH|NUXL_TOOL|PKG_CONFIG_PATH|XDG_DATA_DIRS|GIO_EXTRA_MODULES)\b/m)
   })
 
-  it('finds its bundled ProSE, with ONNX (the build manifest and the PeptDeep models)', async () => {
+  it('finds its bundled OpenNuXL', async () => {
     const { result, failure } = toolInfo
     expect(failure).toBeUndefined()
     console.log('tool_info', JSON.stringify(result))
     expect(result.path.endsWith(marker)).toBe(true)
     expect(appRoot).toMatch(/appimage_extracted_[0-9a-f]+$/)
-    expect(result.onnx).toBe(true)
     expect(result.version).not.toBe('')
   })
 
-  it('searches the example with PeptDeep: 154 PSMs, the PeptDeep mirror, ProSE with its own libraries', async () => {
+  it('searches the example: its PSMs and their spectrum, OpenNuXL with its own libraries', async () => {
     expect(appRoot).toMatch(/appimage_extracted_/)
-    // ProSE's mapped files, read while it runs
-    const proseMaps = new Set<string>()
-    const proseExes = new Set<string>()
+    // OpenNuXL's mapped files, read while it runs
+    const toolMaps = new Set<string>()
+    const toolExes = new Set<string>()
     const poll = setInterval(() => {
       for (const p of processesBelow(appRoot)) {
-        if (!p.exe.endsWith('/bin/ProSE')) continue
-        proseExes.add(p.exe)
-        for (const f of mappedFiles(p.pid)) proseMaps.add(f)
+        if (!p.exe.endsWith('/bin/OpenNuXL')) continue
+        toolExes.add(p.exe)
+        for (const f of mappedFiles(p.pid)) toolMaps.add(f)
       }
     }, 100)
     try {
-      await runExample({ peptdeep: true })
+      await runExample()
     } finally {
       clearInterval(poll)
     }
-    await expect($('[data-testid="psm-count"]')).toHaveText(expect.stringContaining('154'))
+    await expect($('[data-testid="psm-count"]')).toBeDisplayed()
     await openFirstPsm()
-    await expect($('[data-testid="bottom-label"]')).toHaveText(expect.stringContaining('PeptDeep'))
     expect((await $$('[data-testid="bottom-peaks"]')).length).toBeGreaterThan(0)
     expect(await $$('[data-testid="bottom-status"]')).toHaveLength(0)
 
-    const bundleLib = `${appRoot}/usr/lib/ProSE/resources/prose/lib/`
-    const libs = sharedLibraries([...proseMaps])
-    console.log(`ProSE ${[...proseExes].join(', ')} mapped ${libs.length} libraries:`)
+    const bundleLib = `${appRoot}/usr/lib/NuXL/resources/nuxl/lib/`
+    const libs = sharedLibraries([...toolMaps])
+    console.log(`OpenNuXL ${[...toolExes].join(', ')} mapped ${libs.length} libraries:`)
     console.log('  from the bundle: ' + libs.filter((f) => f.startsWith(bundleLib)).map((f) => f.slice(bundleLib.length)).join(' '))
     console.log('  from elsewhere: ' + libs.filter((f) => !f.startsWith(bundleLib)).join(' '))
-    expect(proseExes.size).toBeGreaterThan(0)
-    for (const lib of ['libOpenMS.so', 'libonnxruntime.so.1', 'libarrow.so.2400', 'libgomp.so.1', 'libstdc++.so.6', 'libgcc_s.so.1']) {
+    expect(toolExes.size).toBeGreaterThan(0)
+    for (const lib of ['libOpenMS.so', 'libgomp.so.1', 'libstdc++.so.6', 'libgcc_s.so.1']) {
       expect(libs).toContain(bundleLib + lib)
     }
     // one OpenMP runtime, the bundle's
     expect(libs.filter((f) => /\/lib(gomp|omp|iomp5)\.so/.test(f))).toEqual([bundleLib + 'libgomp.so.1'])
-    // every library outside the bundle is glibc's (bundle-prose.sh's exclude list), or one of its gconv
+    // every library outside the bundle is glibc's (bundle-nuxl.sh's exclude list), or one of its gconv
     // charset modules
     for (const f of libs.filter((f) => !f.startsWith(bundleLib) && !/\/gconv\/[^/]+\.so$/.test(f))) {
       expect(f.split('/').pop()).toMatch(new RegExp(`^(${escape(loader)}|lib(c|m|mvec|dl|pthread|rt|resolv)\\.so\\.\\d+)$`))
     }
-    expect(offending([...proseMaps])).toEqual([])
+    expect(offending([...toolMaps])).toEqual([])
   })
 
   it('the app and WebKit run on the AppImage’s libraries: its own GUI stack, from the host only what an AppImage leaves to it, nothing of the build machine', () => {
@@ -151,13 +149,13 @@ describe('the AppImage', () => {
     const processes = processesBelow(appRoot)
     const names = processes.map((p) => p.exe.slice(appRoot.length))
     console.log('processes of the AppImage: ' + names.join(', '))
-    expect(names).toContain('/usr/bin/prose-desktop')
+    expect(names).toContain('/usr/bin/nuxl-desktop')
     expect(names.some((n) => n.endsWith('/WebKitWebProcess'))).toBe(true)
     expect(names.some((n) => n.endsWith('/WebKitNetworkProcess'))).toBe(true)
     for (const p of processes) {
       const files = mappedFiles(p.pid)
       expect(offending(files)).toEqual([])
-      if (p.exe.endsWith('/usr/bin/prose-desktop') || p.exe.endsWith('/WebKitWebProcess')) {
+      if (p.exe.endsWith('/usr/bin/nuxl-desktop') || p.exe.endsWith('/WebKitWebProcess')) {
         expect(files).toContain(`${appRoot}/usr/lib/libwebkit2gtk-4.1.so.0`)
       }
     }

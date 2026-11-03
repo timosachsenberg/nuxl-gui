@@ -1,21 +1,21 @@
 #!/bin/bash
 # Builds the app's Windows package, the NSIS installer (x64, per user: no administrator rights), with the
-# bundled ProSE in it. Git Bash.
+# bundled OpenNuXL in it. Git Bash.
 #
-#   package-windows.sh        (src-tauri/resources/prose has to be filled first: bundle-prose.sh)
+#   package-windows.sh        (src-tauri/resources/nuxl has to be filled first: bundle-nuxl.sh)
 #
-# The installer puts ProSE.exe and its DLLs into <install folder>/resources/prose/bin, as bundle-prose.sh
-# laid them out (Windows has no RPATH: the folder of the exe is where its DLLs are looked for first). The
+# The installer puts OpenNuXL.exe, PercolatorAdapter.exe and their DLLs into <install folder>/resources/nuxl/bin,
+# as bundle-nuxl.sh laid them out (Windows has no RPATH: the folder of the exe is where its DLLs are looked for first). The
 # installer is unsigned (SmartScreen asks the user once), shows the app's licence (LICENSE) and installs the
 # third-party notices (resources/notices). start-test.sh installs it and runs it.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-PROSE=$ROOT/src-tauri/resources/prose
+NUXL=$ROOT/src-tauri/resources/nuxl
 BUNDLE_DIR=$ROOT/src-tauri/target/release/bundle
 die() { echo "error: $*" >&2; exit 1; }
-[ -f "$PROSE/bin/ProSE.exe" ] && [ -f "$PROSE/build.json" ] \
-  || die "src-tauri/resources/prose holds no bundled ProSE: run native/scripts/bundle-prose.sh <openms-build> src-tauri/resources/prose"
+[ -f "$NUXL/bin/OpenNuXL.exe" ] && [ -f "$NUXL/bin/PercolatorAdapter.exe" ] && [ -f "$NUXL/build.json" ] \
+  || die "src-tauri/resources/nuxl holds no bundled OpenNuXL: run native/scripts/bundle-nuxl.sh <openms-build> src-tauri/resources/nuxl"
 
 cd "$ROOT"
 node scripts/third-party-notices.mjs

@@ -1,14 +1,15 @@
 <script lang="ts">
-  // The QC tab: three charts of the search's quality, each for the PSMs the search kept (its PSM FDR):
-  // how well targets and decoys score, how far the precursor masses are off, and how many PSMs each
-  // file gave. Targets are blue and decoys orange (a validated pair); every chart says in its subtitle
-  // which PSMs it shows and has a table of its numbers.
+  // The QC tab: three charts of the search's quality, each for the target PSMs the search kept (peptide
+  // PSMs at the peptide FDR, cross-link PSMs at the cross-link FDR): how the peptide PSMs and the cross-link
+  // PSMs score, how far the precursor masses are off, and how many PSMs each file gave. Peptide PSMs are
+  // blue and cross-links orange (a validated pair) wherever they are told apart (the PSMs per file stacked); the
+  // precursor errors of all of them are neutral grey; every chart says in its subtitle which PSMs it shows
+  // and has a table of its numbers. (OpenNuXL's filtered files hold no decoys, so none is plotted.)
   import ChartCard from '$lib/components/charts/ChartCard.svelte'
   import FileBars from '$lib/components/charts/FileBars.svelte'
   import HistogramChart from '$lib/components/charts/HistogramChart.svelte'
   import { tickLabel } from '$lib/format/chart'
-  import { formatPercent, formatQ } from '$lib/format/fdr'
-  import { psmFdrOff } from '$lib/results/overview'
+  import { cutoffText } from '$lib/results/overview'
   import { signedNumber } from '$lib/format/number'
   import { COLORS } from '$lib/psm/psm'
   import { formatCount } from '$lib/results/display'
@@ -18,15 +19,15 @@
   let { view }: { view: ResultsView } = $props()
 
   const m = $derived(view.model)
-  const openSearch = $derived(view.result.outcome.summary.openSearch)
-  // (a search without decoys has no FDR)
-  const fdr = $derived(psmFdrOff(view.result.outcome.summary) ? 'no FDR' : `${formatPercent(m.psmFdr)}, ${formatQ(m.psmFdr)}`)
+  const fdr = $derived(`peptides ${cutoffText(m.psmFdr)}, cross-links ${cutoffText(m.xlFdr)}`)
 
   const targetColor = COLORS.b
-  const decoyColor = COLORS.y
+  const xlColor = COLORS.y
+  /** all PSMs, peptides and cross-links together */
+  const allColor = 'var(--plot-neutral)'
 
   const score = $derived(scoreDistribution(m))
-  const errors = $derived(precursorErrors(m, openSearch))
+  const errors = $derived(precursorErrors(m))
   const files = $derived(psmsPerFile(m))
 
   const range = (edges: number[], b: number) => `${tickLabel(edges[b])} to ${tickLabel(edges[b + 1])}`
@@ -34,7 +35,9 @@
 
   const scoreDescription = $derived(
     score
-      ? `Histogram of the ${score.scoreName} of the PSMs at the search FDR: ${formatCount(score.nTargets)} target PSMs (blue bars) and ${formatCount(score.nDecoys)} decoy PSMs (orange bars) in ${score.edges.length - 1} bins from ${tickLabel(score.edges[0])} to ${tickLabel(score.edges.at(-1)!)}. Most targets score between ${range(score.edges, peak(score.targets)).replace(' to ', ' and ')}.`
+      ? `Histogram of the ${score.scoreName} of the target PSMs at the search's cutoffs: ${formatCount(score.nPeptides)} peptide PSMs (blue bars) and ${formatCount(score.nCrossLinks)} cross-link PSMs (orange bars) in ${score.edges.length - 1} bins from ${tickLabel(score.edges[0])} to ${tickLabel(score.edges.at(-1)!)}.` +
+        (score.nPeptides > 0 ? ` Most peptide PSMs score between ${range(score.edges, peak(score.peptides)).replace(' to ', ' and ')}.` : '') +
+        (score.nCrossLinks > 0 ? ` Most cross-link PSMs score between ${range(score.edges, peak(score.crossLinks)).replace(' to ', ' and ')}.` : '')
       : '',
   )
   const errorDescription = $derived(
@@ -50,39 +53,39 @@
 <div class="grid grid-cols-1 items-start gap-4 pb-6 xl:grid-cols-2" data-testid="qc-content">
   <!-- the cards are h3: the tab's own heading comes first, for the outline of the page -->
   <h2 class="sr-only">Quality control</h2>
-  <!-- targets against decoys -->
+  <!-- peptide PSMs against cross-link PSMs -->
   {#if score}
     <ChartCard
       testid="qc-score"
       title="Score distribution"
-      subtitle="PSMs at the search FDR ({fdr}) · decoys included"
+      subtitle="Target PSMs at the search's cutoffs ({fdr})"
       notes={score.unscored > 0 ? [`${formatCount(score.unscored)} PSMs have no score because Percolator could not rescore them. They are left out.`] : []}
       legend={[
-        { label: 'Targets', color: targetColor, value: formatCount(score.nTargets) },
-        { label: 'Decoys', color: decoyColor, value: formatCount(score.nDecoys) },
+        { label: 'Peptide PSMs', color: targetColor, value: formatCount(score.nPeptides) },
+        { label: 'Cross-link PSMs', color: xlColor, value: formatCount(score.nCrossLinks) },
       ]}
       table={{
         name: 'Score distribution: PSMs per score range',
         columns: [
           { id: 'range', header: score.scoreName, align: 'left' },
-          { id: 'targets', header: 'Targets' },
-          { id: 'decoys', header: 'Decoys' },
+          { id: 'peptides', header: 'Peptide PSMs' },
+          { id: 'crosslinks', header: 'Cross-link PSMs' },
         ],
-        rows: score.targets.map((t, b) => [range(score.edges, b), formatCount(t), formatCount(score.decoys[b])]),
+        rows: score.peptides.map((t, b) => [range(score.edges, b), formatCount(t), formatCount(score.crossLinks[b])]),
       }}>
       <HistogramChart
-        title="Score distribution of target and decoy PSMs"
+        title="Score distribution of peptide and cross-link PSMs"
         description={scoreDescription}
         edges={score.edges}
         xLabel={score.scoreName}
         series={[
-          { name: 'Targets', color: targetColor, counts: score.targets, testid: 'target-bar' },
-          { name: 'Decoys', color: decoyColor, counts: score.decoys, testid: 'decoy-bar' },
+          { name: 'Peptide PSMs', color: targetColor, counts: score.peptides, testid: 'peptide-bar' },
+          { name: 'Cross-link PSMs', color: xlColor, counts: score.crossLinks, testid: 'xl-bar' },
         ]} />
     </ChartCard>
   {:else}
-    <ChartCard testid="qc-score" title="Score distribution" subtitle="PSMs at the search FDR ({fdr}) · decoys included">
-      <p class="py-8 text-center text-xs text-muted-foreground">No PSM passes the search's PSM FDR, so there is nothing to plot.</p>
+    <ChartCard testid="qc-score" title="Score distribution" subtitle="Target PSMs at the search's cutoffs ({fdr})">
+      <p class="py-8 text-center text-xs text-muted-foreground">No PSM passes the search's FDRs, so there is nothing to plot.</p>
     </ChartCard>
   {/if}
 
@@ -91,10 +94,7 @@
     <ChartCard
       testid="qc-precursor"
       title="Precursor mass error"
-      subtitle={openSearch
-        ? `Unmodified PSMs only (|Δ| ≤ 0.05 Da) · ${formatCount(errors.n)} of ${formatCount(errors.considered)} target PSMs at the search FDR (${fdr})`
-        : `Target PSMs at the search FDR (${fdr}) · ${formatCount(errors.n)} PSMs`}
-      notes={openSearch ? ["PSMs with a mass shift are left out, because the shift would count as precursor error."] : []}
+      subtitle={`Target PSMs at the search's cutoffs (${fdr}) · ${formatCount(errors.n)} PSMs`}
       table={{
         name: 'Precursor mass error: PSMs per range',
         columns: [
@@ -110,14 +110,12 @@
         xLabel="Precursor error (ppm)"
         unit="ppm"
         zeroLine
-        marker={{ x: errors.median, label: `median precursor error (unmodified) ${signedNumber(errors.median, 1)} ppm` }}
-        series={[{ name: 'Target PSMs', color: targetColor, counts: errors.counts, testid: 'error-bar' }]} />
+        marker={{ x: errors.median, label: `signed median ${signedNumber(errors.median, 1)} ppm` }}
+        series={[{ name: 'Target PSMs', color: allColor, counts: errors.counts, testid: 'error-bar' }]} />
     </ChartCard>
   {:else}
-    <ChartCard testid="qc-precursor" title="Precursor mass error" subtitle={openSearch ? 'Unmodified PSMs only (|Δ| ≤ 0.05 Da)' : `Target PSMs at the search FDR (${fdr})`}>
-      <p class="py-8 text-center text-xs text-muted-foreground">
-        {openSearch ? 'No unmodified PSM with a precursor error passes the search FDR.' : 'No PSM with a precursor error passes the search FDR.'}
-      </p>
+    <ChartCard testid="qc-precursor" title="Precursor mass error" subtitle="Target PSMs at the search's cutoffs ({fdr})">
+      <p class="py-8 text-center text-xs text-muted-foreground">No PSM with a precursor error passes the search's FDRs.</p>
     </ChartCard>
   {/if}
 
@@ -125,16 +123,30 @@
   <ChartCard
     testid="qc-files"
     title="PSMs per file"
-    subtitle="Target PSMs at the search FDR ({fdr})"
+    subtitle="Target PSMs at the search's cutoffs ({fdr})"
     class="xl:col-span-2"
+    legend={[
+      { label: 'Peptide PSMs', color: targetColor, value: formatCount(files.reduce((n, f) => n + f.parts[0], 0)) },
+      { label: 'Cross-link PSMs', color: xlColor, value: formatCount(files.reduce((n, f) => n + f.parts[1], 0)) },
+    ]}
     table={{
       name: 'PSMs per file',
       columns: [
         { id: 'file', header: 'File', align: 'left' },
+        { id: 'peptides', header: 'Peptide PSMs' },
+        { id: 'crosslinks', header: 'Cross-link PSMs' },
         { id: 'psms', header: 'PSMs' },
       ],
-      rows: files.map((f) => [f.file, formatCount(f.count)]),
+      rows: files.map((f) => [f.file, formatCount(f.parts[0]), formatCount(f.parts[1]), formatCount(f.count)]),
     }}>
-    <FileBars title="Target PSMs per file" description={filesDescription} items={files} color={targetColor} />
+    <FileBars
+      title="Target PSMs per file"
+      description={filesDescription}
+      items={files}
+      color={targetColor}
+      segments={[
+        { name: 'Peptide PSMs', color: targetColor },
+        { name: 'Cross-link PSMs', color: xlColor },
+      ]} />
   </ChartCard>
 </div>

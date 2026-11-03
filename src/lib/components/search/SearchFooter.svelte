@@ -1,6 +1,6 @@
 <script lang="ts">
   // The sticky footer of New search: the plan (PlanLine), "Save as preset" and "Start search"
-  // (Ctrl+Enter); during the search its progress (SearchProgress) and Cancel, until ProSE has ended (the
+  // (Ctrl+Enter); during the search its progress (SearchProgress) and Cancel, until OpenNuXL has ended (the
   // results are then being read: the search is complete and kept). The error of a failed search is shown
   // above it (SearchError).
   import { Button } from '$lib/components/ui/button'
@@ -33,7 +33,7 @@
 
 <SearchError />
 
-<div class="fixed inset-x-0 bottom-0 z-40 h-[60px] border-t bg-background/95 backdrop-blur-sm">
+<div class="fixed inset-x-0 bottom-0 z-40 h-[60px] border-t bg-background/95 backdrop-blur-sm" data-testid="search-footer">
   <div class="mx-auto flex h-full max-w-[1120px] items-center gap-3 px-5">
     {#if searchRun.status === 'running'}
       <SearchProgress class="flex-1" />

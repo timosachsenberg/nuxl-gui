@@ -4,7 +4,7 @@
 ;(function () {
   var preference = null
   try {
-    preference = localStorage.getItem('prose.theme')
+    preference = localStorage.getItem('nuxl.theme')
   } catch (e) {
     // blocked storage: System
   }

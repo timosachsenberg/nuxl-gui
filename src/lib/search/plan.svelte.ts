@@ -1,47 +1,42 @@
 // What the New search form amounts to: the one-line plan, why the search cannot start yet, and starting
-// it: the form's values become the shim's search request (paths, ProSE's parameters by the names the
-// shim lets through, the rescoring switches, the threads).
+// it: the form's values become the shim's search request (paths, OpenNuXL's parameters by the names the
+// shim lets through, Percolator, the threads and the search's FDRs).
 
 import type { SearchRequest } from '../desktop'
 import { navigate } from '../route.svelte'
 import { unknownModifications } from '../settings/modifications'
+import { NUXL_PARAMETERS } from '../settings/nuxl'
 import { copyValues, requestParameters } from '../settings/parameters'
-import { DECOY_LABELS } from '../settings/labels'
-import { PROSE_PARAMETERS } from '../settings/prose'
+import { CUSTOM_PROTOCOL, PROTOCOL_PARAMETERS } from '../settings/protocols'
 import { boundsMessage, invertedRanges, outOfBounds, rangeMessage } from '../settings/ranges'
 import { keepsOpenResult, showFinished } from './finished'
 import { CRAP_PROTEINS, searchForm as form } from './form.svelte'
 import { runSearch, searchRun } from './session.svelte'
 import { toolState } from './tool.svelte'
 
-/** The FDR parameters, which a search without decoys does not send (src-tauri/src/args.rs `FDR_PARAMETERS`). */
-export const FDR_PARAMETERS = ['FDR:PSM', 'FDR:protein', 'FDR:protein_inference_PSM'] as const
+/** Why the NuXL fields of the adducts do nothing with a protocol: OpenNuXL takes them from the protocol then. */
+export const PROTOCOL_HINT = 'The protocol sets this. Choose the protocol “none (custom adducts)” to set it yourself.'
 
-/** Why the FDR fields are off and disabled without decoys. */
-export const NO_FDR_HINT = `No FDR without decoys: choose “${DECOY_LABELS.auto}” or “${DECOY_LABELS.generate}” to control the FDR.`
+/** OpenNuXL skips Percolator for a run with fewer PSMs than this (it says so in its log). */
+export const PERCOLATOR_MIN_PSMS = 1000
 
 function unknownMessage(names: string[]): string {
   return (
     `${names.length === 1 ? 'Unknown modification' : 'Unknown modifications'}: ${names.join(', ')}. ` +
-    `ProSE does not know ${names.length === 1 ? 'this name' : 'these names'}. Choose from the list instead.`
+    `OpenMS does not know ${names.length === 1 ? 'this name' : 'these names'}. Choose from the list instead.`
   )
 }
 
 class SearchPlan {
-  /** PeptDeep features need Percolator and a ProSE with ONNX Runtime (unknown while the tool is asked). */
-  peptdeep = $derived(form.rescore && form.peptdeep && (toolState.info?.onnx ?? true))
+  /** The custom protocol ("none"): OpenNuXL takes the nucleotides and adducts from the NuXL fields. */
+  customProtocol = $derived(form.value('NuXL:presets') === CUSTOM_PROTOCOL)
 
-  /**
-   * Without decoys (decoys 'ignore', the database card's "None") ProSE cannot estimate an FDR and would skip a PSM or
-   * protein FDR with only a warning in its log: the FDR fields are off and disabled then, and the request sends none
-   * (`FDR_PARAMETERS`; the shim leaves them out too). The values stay for when the decoys come back.
-   */
-  fdrBlocked = $derived(form.value('decoys') === 'ignore')
+  /** Why a parameter does nothing with the other settings (the request leaves it out then); null: it counts. */
+  blockedReason(name: string): string | null {
+    return !this.customProtocol && (PROTOCOL_PARAMETERS as readonly string[]).includes(name) ? PROTOCOL_HINT : null
+  }
 
-  /** ProSE looks for co-isolated precursors (chimeric:enabled) only without database chunks; it ignores the switch then. */
-  chimericBlocked = $derived(Number(form.value('database:chunk_size')) > 0)
-
-  /** "6 files in 3 samples · 20,652 proteins + 116 cRAP + decoys" */
+  /** "3 files in 2 samples · 20,652 proteins + 116 cRAP + decoys" */
   line = $derived.by(() => {
     const n = form.files.length
     if (n === 0) return form.adding > 0 ? 'Adding files…' : 'No spectra yet'
@@ -49,40 +44,33 @@ class SearchPlan {
     const parts = [`${n} ${n === 1 ? 'file' : 'files'}${n > 1 ? ` in ${samples} ${samples === 1 ? 'sample' : 'samples'}` : ''}`]
     if (form.database) {
       const proteins = form.database.proteins
-      const decoys = form.value('decoys') === 'ignore' ? '' : ' + decoys'
       const crap = form.contaminants ? ` + ${CRAP_PROTEINS} cRAP` : ''
       if (form.database.error) parts.push('the database cannot be read')
-      else parts.push(proteins === null ? 'counting proteins…' : `${proteins.toLocaleString('en-US')} proteins${crap}${decoys}`)
+      else parts.push(proteins === null ? 'counting proteins…' : `${proteins.toLocaleString('en-US')} proteins${crap} + decoys`)
     } else {
       parts.push('no database yet')
     }
     return parts.join(' · ')
   })
 
-  /**
-   * The example's note, a line of its own under the plan (it wraps): its tolerance, its PSM FDR (2 %: Percolator's
-   * (decoys + 1) / targets keeps a run this small above 1 %) and its protein FDR (off unless the user set one), and why
-   * its results list the proteins without a protein FDR and say that Percolator fell back.
-   */
+  /** The example's note, a line of its own under the plan: what it is, its precursor tolerance, and that Percolator will skip it. */
   note = $derived.by(() => {
     if (!form.isExample) return null
-    const tolerance = `${form.value('fragment:mass_tolerance')} ${form.value('fragment:mass_tolerance_unit')}`
-    const psmFdr = `${Number((Number(form.value('FDR:PSM')) * 100).toPrecision(6))} %`
-    return Number(form.value('FDR:protein')) > 0
-      ? `Ion-trap example with a ${tolerance} fragment tolerance and a ${psmFdr} PSM FDR. ` +
-          "The run is too small for 1 %, for a protein FDR and for Percolator's full model."
-      : `Ion-trap example with a ${tolerance} fragment tolerance, a ${psmFdr} PSM FDR and no protein FDR: ` +
-          "the run is too small for 1 % and for a protein FDR. It has too few PSMs for Percolator's full model."
+    const tolerance = `${form.value('precursor:mass_tolerance')} ${form.value('precursor:mass_tolerance_unit')}`
+    return (
+      `OpenMS' test run of OpenNuXL (20 spectra, 5 proteins) with its ${tolerance} precursor tolerance. ` +
+      `It has too few PSMs for Percolator, which OpenNuXL skips below ${PERCOLATOR_MIN_PSMS.toLocaleString('en-US')} PSMs.`
+    )
   })
 
-  /** Modification names ProSE does not know. */
-  unknownMods = $derived(unknownModifications(form.values, PROSE_PARAMETERS))
+  /** Modification names OpenMS does not know. */
+  unknownMods = $derived(unknownModifications(form.values, NUXL_PARAMETERS))
 
   /** Ranges of the settings whose lowest value is above the highest (charges 5–2): marked, and the search waits. */
   inverted = $derived(invertedRanges(form.values))
 
-  /** Settings outside the bounds ProSE gives them (charges 1–20, ...): ProSE would refuse them, so the search waits. */
-  outside = $derived(outOfBounds(form.values, PROSE_PARAMETERS))
+  /** Settings outside the bounds the form gives them (charges from 1, the longest adduct 0–4, ...): the search waits. */
+  outside = $derived(outOfBounds(form.values, NUXL_PARAMETERS))
 
   /** Why the search cannot start yet. */
   problem = $derived.by(() => {
@@ -102,9 +90,10 @@ class SearchPlan {
     if (form.database.problem) return `${form.database.problem} Choose another FASTA file.`
     if (this.inverted.length > 0) return rangeMessage(this.inverted[0], form.values)
     if (this.outside.length > 0) return boundsMessage(this.outside[0], form.values)
-    if (!this.fdrBlocked && !(Number(form.value('FDR:PSM')) > 0)) return 'Set a PSM FDR above 0 %.'
+    if (!(Number(form.value('peptideFdr')) > 0)) return 'Set a peptide FDR above 0 %.'
+    if (!(Number(form.value('xlFdr')) > 0)) return 'Set a cross-link FDR above 0 %.'
     if (this.unknownMods.length > 0) return unknownMessage(this.unknownMods)
-    if (toolState.status === 'failed') return `ProSE cannot be run: ${toolState.error}`
+    if (toolState.status === 'failed') return `OpenNuXL cannot be run: ${toolState.error}`
     return null
   })
 
@@ -116,26 +105,33 @@ class SearchPlan {
 
 export const searchPlan = new SearchPlan()
 
+/** A fraction in (0, 1] (an FDR of the form; anything else is 1 %, which the problem line does not let through). */
+function fraction(value: unknown): number {
+  const n = Number(value)
+  return n > 0 && n <= 1 ? n : 0.01
+}
+
 /**
- * The shim's request for the form: the files and the database by path, the parameters that differ
- * from ProSE's defaults (by the names of the shim's allowlist), the rescoring switches and the threads
- * (0: all cores). Null without files or database.
+ * The shim's request for the form: the files and the database by path, OpenNuXL's parameters that differ from its
+ * defaults (by the names of the shim's allowlist; those of the adducts only with the custom protocol), Percolator,
+ * the threads (0: all cores) and the FDRs of the peptide and the cross-link PSMs (fractions, never parameters).
+ * Null without files or database.
  */
 export function searchRequest(): SearchRequest | null {
   if (!form.database || form.files.length === 0) return null
   const values = $state.snapshot(form.values) as Record<string, unknown>
-  const parameters = requestParameters(values, form.defaults)
-  if (searchPlan.chimericBlocked) delete parameters['chimeric:enabled']
-  if (searchPlan.fdrBlocked) for (const name of FDR_PARAMETERS) delete parameters[name]
+  const parameters = requestParameters(values, NUXL_PARAMETERS)
+  if (!searchPlan.customProtocol) for (const name of PROTOCOL_PARAMETERS) delete parameters[name]
   return {
     files: form.files.map((r) => ({ id: r.id, path: r.file.path })),
     database: form.database.file.path,
     contaminants: form.contaminants,
     settings: {
-      parameters,
+      parameters: parameters as SearchRequest['settings']['parameters'],
       rescore: form.rescore,
-      peptdeep: searchPlan.peptdeep,
       threads: form.threads ?? 0,
+      peptideFdr: fraction(values.peptideFdr),
+      xlFdr: fraction(values.xlFdr),
     },
   }
 }
@@ -145,20 +141,21 @@ export async function startSearch(): Promise<void> {
   const request = searchRequest()
   if (!searchPlan.canStart || !request || !form.database) return
   const values = $state.snapshot(form.values) as Record<string, unknown>
+  const { peptideFdr, xlFdr } = request.settings
   const id = await runSearch(request, {
     design: $state.snapshot(form.design),
-    // no FDR (a search without decoys; the protein FDR off, 0): no cutoff, every PSM or protein counts (the results'
-    // cutoffs are q-values above 0)
-    psmFdr: searchPlan.fdrBlocked ? 1 : Number(values['FDR:PSM']),
-    proteinFdr: searchPlan.fdrBlocked ? 1 : Number(values['FDR:protein']) || 1,
+    // (OpenNuXL has no protein FDR: every protein of the PSMs within their FDRs counts)
+    psmFdr: peptideFdr,
+    proteinFdr: 1,
     settings: {
       parameters: request.settings.parameters,
       fixedMods: (values['modifications:fixed'] as string[] | undefined) ?? [],
       database: form.database.file.name,
       rescore: request.settings.rescore,
-      peptdeep: request.settings.peptdeep,
       contaminants: form.contaminants,
       presetId: form.presetId,
+      peptideFdr,
+      xlFdr,
     },
   }, keepsOpenResult)
   if (id !== null) showFinished(id)
@@ -179,18 +176,20 @@ export function canSearchAgain(result: { design: { rows: { fileName: string }[] 
 }
 
 /**
- * Back to New search with the inputs and settings of `result`, changed by `changes` (parameters,
- * e.g. { 'FDR:protein': 0.05 }). The user starts the search there.
+ * Back to New search with the inputs and settings of `result`, changed by `changes` (parameters by name, or the
+ * FDRs: e.g. { xlFdr: 0.05 }). The user starts the search there.
  */
 export function searchAgain(
-  result: { settings: { presetId?: string; parameters: Record<string, unknown>; rescore: boolean; peptdeep: boolean; contaminants: boolean } },
-  changes: Record<string, unknown>,
+  result: {
+    settings: { presetId?: string; parameters: Record<string, unknown>; rescore: boolean; contaminants: boolean; peptideFdr?: number; xlFdr?: number }
+  },
+  changes: Record<string, unknown> = {},
 ): void {
   const s = result.settings
   if (s.presetId !== undefined && form.presets.some((p) => p.id === s.presetId)) form.presetId = s.presetId
-  form.overrides = copyValues({ ...s.parameters, ...changes })
+  const fdrs = Object.fromEntries((['peptideFdr', 'xlFdr'] as const).filter((k) => typeof s[k] === 'number').map((k) => [k, s[k]]))
+  form.overrides = copyValues({ ...s.parameters, ...fdrs, ...changes })
   form.rescore = s.rescore
-  form.peptdeep = s.peptdeep
   form.contaminants = s.contaminants
   navigate({ view: 'search' })
 }

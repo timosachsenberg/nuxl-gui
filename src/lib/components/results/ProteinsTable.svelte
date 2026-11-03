@@ -1,8 +1,11 @@
 <script lang="ts">
-  // The proteins of the open result: accession, gene, description, coverage, counts (at the search
-  // PSM FDR), counts per sample grouped by condition, "found in". A row opens the protein panel at the
-  // right of the table (`onOpen`), which takes room: the Description is hidden while it is open.
-  import { formatCount, formatQValue, formatScore, parseAccession, parseDescription } from '$lib/results/display'
+  // The proteins of the open result: accession, gene, description, coverage, counts (at the search's
+  // cutoffs: peptide PSMs at the peptide FDR, cross-link PSMs at the cross-link FDR), the cross-linked residues
+  // and the cross-link PSMs, counts per sample grouped by condition, "found in". OpenNuXL has no protein FDR
+  // and no protein groups. A row opens the protein panel at the right of the table (`onOpen`), which takes
+  // room: the Description is hidden while it is open.
+  import { formatCount, formatScore, parseAccession, parseDescription } from '$lib/results/display'
+  import { proteinXlSites } from '$lib/results/protein'
   import type { LevelState, ResultsView } from '$lib/results/view.svelte'
   import { tableColumns, sampleIndex, type CellDef } from './cells'
   import DataTable from './DataTable.svelte'
@@ -14,6 +17,7 @@
   const pr = $derived(m.tables.proteins)
   const nS = $derived(m.samples.length)
   const nBio = $derived(new Set(m.columnSample).size)
+  const xlSites = $derived(proteinXlSites(m))
 
   function cells(id: string): CellDef {
     const s = sampleIndex(id)
@@ -34,23 +38,23 @@
         return { cell: (p) => formatCount(m.protein.peptides[p]) }
       case 'psms':
         return { cell: (p) => formatCount(m.protein.psms[p]) }
+      case 'xlSites':
+        return { cell: (p) => (xlSites[p] === 0 ? '–' : formatCount(xlSites[p])), placeholder: (p) => xlSites[p] === 0 }
+      case 'xlPsms':
+        return { cell: (p) => (m.protein.xlPsms[p] === 0 ? '–' : formatCount(m.protein.xlPsms[p])), placeholder: (p) => m.protein.xlPsms[p] === 0 }
       case 'foundIn':
         return { cell: (p) => `${m.protein.foundIn[p]} / ${nBio}`, class: 'text-muted-foreground' }
-      case 'qValue':
-        return { cell: (p) => formatQValue(pr.qValue[p]) }
       case 'score':
         return { cell: (p) => formatScore(pr.score[p], 0) }
       case 'length':
         return { cell: (p) => formatCount(pr.sequence[p].length) }
-      case 'group':
-        return { cell: (p) => String(pr.group[p]) }
       default:
         return { cell: () => '' }
     }
   }
 
   // with the panel open the table gives up its Description and narrows its count columns
-  const narrow: Record<string, number> = { coverage: 112, peptides: 84, psms: 72, foundIn: 78 }
+  const narrow: Record<string, number> = { coverage: 112, peptides: 84, psms: 72, xlSites: 72, xlPsms: 72, foundIn: 78 }
   const columns = $derived.by(() => {
     const all = tableColumns(level.visible, cells)
     if (view.panel === null) return all

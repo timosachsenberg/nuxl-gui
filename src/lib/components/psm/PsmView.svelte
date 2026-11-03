@@ -1,57 +1,28 @@
 <script lang="ts">
-  // The PSM view (mockup 3), beside the PSM table: breadcrumb, Prev/Next and "Export spectrum (SVG)";
-  // the peptide with its fragment ladder; the spectrum annotated (psm/annotate.ts, the web module's
-  // annotatePeaks in TypeScript), mirrored against PeptDeep's prediction, which ProSE wrote for every
-  // PSM (its input's QPX psm file, read when the PSM is opened), or the theoretical spectrum, with ion,
-  // charge and loss toggles; the
-  // ion table, the fragment mass errors and the PSM's features. A PSM whose peaks the search did not
-  // keep shows its ladder, theoretical ions and features. An open search's unlocalized mass shift is
-  // shown, and the annotation is of the peptide without it. A PSM of a co-isolated precursor is marked, and the
-  // other PSMs of the same spectrum are linked (results/coisolated.ts).
+  // The PSM view (mockup 3), beside the PSM table: breadcrumb, Prev/Next and "Export spectrum (SVG)"; the peptide with
+  // its fragment ladder; whether the PSM is a cross-link, its adduct and cross-linked residue, its FDR group and q-value
+  // at that group's FDR; the spectrum with NuXL's own annotation (the hit's fragment_annotation: shifted ions, marker
+  // ions, precursor, immonium and internal ions) on the observed peaks read from the input mzML, or, when they cannot be
+  // read, on the peaks NuXL annotated; mirrored against the theoretical b/y spectrum of the linear peptide
+  // (psm/annotate.ts), with ion, charge, shift and loss toggles; the ion table, the fragment mass errors of the
+  // unshifted ions and the PSM's features (NuXL's scores). The logic is in nuxl-psm.ts.
   import { signedNumber } from '$lib/format/number'
   import { errorText } from '$lib/format/error'
   import { Button, buttonVariants } from '$lib/components/ui/button'
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import Marker from '$lib/components/results/Marker.svelte'
   import { download } from '$lib/download'
-  import { massShift, peptideView, psmProforma, type PeptideView } from '$lib/format/peptide'
+  import { adductLabel, peptideView, type PeptideView } from '$lib/format/peptide'
   import { annotatePeaks, type ModificationMass } from '$lib/psm/annotate'
-  import {
-    annotationOptions,
-    fragmentCharges,
-    fragmentTolerance,
-    groupByPeak,
-    instrumentOf,
-    ionTable,
-    ladderCuts,
-    lossOptions,
-    matchedByReference,
-    matchSummary,
-    modificationList,
-    nceFor,
-    onePlusHidden,
-    precursorOptions,
-    predictedIons,
-    resolveOptions,
-    similarityText,
-    spectrumPeaks,
-    svgFileName,
-    visibleMatches,
-    visibleTheoretical,
-    withPrecursor,
-    ION_TYPES,
-    type IonType,
-    type PsmOptions,
-  } from '$lib/psm/psm'
+  import { fragmentTolerance, modificationList, spectrumPeaks, svgFileName, ION_TYPES, type IonType } from '$lib/psm/psm'
   import { exportSpectrumSvg } from '$lib/psm/svg-export'
-  import { COISOLATED_TITLE, chimericRank, isCoisolated, sameSpectrum } from '$lib/results/coisolated'
-  import { baseName } from '$lib/results/model'
-  import { formatQValue, parseAccession, parseDescription, scanNumber } from '$lib/results/display'
+  import { baseName, passesPeptideQ } from '$lib/results/model'
+  import { formatQValue, parseAccession, parseDescription, spectrumName as nameOfSpectrum } from '$lib/results/display'
   import type { LoadedSpectra, PsmSpectra } from '$lib/results/read'
   import type { PeakAnnotationResult } from '$lib/results/types'
   import type { ResultsView } from '$lib/results/view.svelte'
   import { defaultsOf } from '$lib/settings/parameters'
-  import { PROSE_PARAMETERS } from '$lib/settings/prose'
+  import { NUXL_PARAMETERS } from '$lib/settings/nuxl'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import XIcon from '@lucide/svelte/icons/x'
   import { cn } from '$lib/utils'
@@ -59,7 +30,27 @@
   import FragmentLadder from './FragmentLadder.svelte'
   import IonTable from './IonTable.svelte'
   import PsmFeatures from './PsmFeatures.svelte'
-  import SpectrumMirror, { type Bottom } from './SpectrumMirror.svelte'
+  import SpectrumMirror, { type Bottom, type PlotGroup } from './SpectrumMirror.svelte'
+  import {
+    annotatedShare,
+    fdrOf,
+    groupNuxl,
+    legendOf,
+    linearPeptide,
+    massErrors,
+    nuxlCharges,
+    nuxlIonTable,
+    nuxlLadder,
+    percent,
+    placeAnnotation,
+    resolveNuxlOptions,
+    siteResidues,
+    visibleNuxl,
+    LOSS_TOGGLES,
+    type LocalToggles,
+    type LossToggle,
+    type NuxlOptions,
+  } from './nuxl-psm'
 
   let {
     view,
@@ -77,28 +68,40 @@
   const m = $derived(view.model)
   const ps = $derived(m.tables.psms)
   const pt = $derived(m.tables.peptides)
+  const xl = $derived(ps.xl)
   const row = $derived(view.psm?.row ?? 0)
   const k = $derived(ps.peptide[row])
   const charge = $derived(ps.charge[row])
   const sequence = $derived(pt.sequence[k])
   const fixedMods = $derived(view.result.settings.fixedMods)
   const peptide: PeptideView = $derived(peptideView(pt, k, fixedMods))
-  const shift = $derived(massShift(ps.deltaMass[row]))
-  /** The shift as a number on the page (a real minus); `shift` is the ProForma text. */
-  const shiftText = $derived(shift === null ? null : signedNumber(ps.deltaMass[row], 4))
-  const scan = $derived(scanNumber(ps.nativeId[row]))
-  // (no spectrum reference: ProSE stored no spectrum for the PSM, the reader gives none)
-  const spectrumName = $derived(scan !== null ? `scan ${scan}` : ps.nativeId[row] ? `spectrum ${ps.nativeId[row]}` : 'spectrum not referenced')
+  const spectrumName = $derived(nameOfSpectrum(ps.nativeId[row]))
 
-  // the search's settings: the parameters it changed, else ProSE's defaults
+  // the cross-link
+  const isXL = $derived(xl.isXL[row] === 1)
+  const adduct = $derived(adductLabel(xl.adduct[row] ?? ''))
+  const adductMass = $derived(xl.adductMass[row])
+  const site = $derived(xl.site[row])
+  const localized = $derived(isXL && site >= 0 && site < sequence.length)
+  const siteScore = $derived(xl.siteScore[row])
+  const siteSequence = $derived(xl.siteSequence[row] ?? '')
+  const fdrGroup = $derived(xl.fdrGroup[row] ?? '')
+  /** The search's two FDRs: a cross-link counts at the cross-link FDR, a peptide at the peptide FDR. */
+  const fdrs = $derived(
+    view.result.outcome.nuxl ?? { xlFdr: view.result.settings.xlFdr ?? view.result.psmFdr, peptideFdr: view.result.settings.peptideFdr ?? view.result.psmFdr },
+  )
+  const fdr = $derived(fdrOf(isXL, fdrs))
+  const qValue = $derived(ps.qValue[row])
+  // (a peptide PSM also by its peptide-level q-value, as OpenNuXL filters it)
+  const peptideQ = $derived(xl.peptideQValue[row])
+  const passes = $derived(!(qValue > fdr.cutoff) && (isXL || passesPeptideQ(peptideQ, fdr.cutoff)))
+
+  // the search's settings: the parameters it changed, else OpenNuXL's defaults
   const parameters = $derived(view.result.settings.parameters)
-  const defaults = defaultsOf(PROSE_PARAMETERS)
+  const defaults = defaultsOf(NUXL_PARAMETERS)
   const tolerance = $derived(fragmentTolerance(parameters, defaults))
-  const instrument = $derived(instrumentOf(parameters, defaults))
-  // The peaks and PeptDeep's prediction of the PSM: read from its input's psm file when it is opened
+  // the peaks of the PSM: read from its input mzML when it is opened
   const source = $derived(view.result.outcome.spectra)
-  // ProSE wrote PeptDeep's predictions (none at all: a tool without ONNX Runtime)
-  const onnx = $derived(source.predictions)
   // (raw: the spectra are large typed arrays, and `source` is compared by identity)
   let loaded = $state.raw<{ row: number; source: PsmSpectra; data: LoadedSpectra | null; error: string | null } | null>(null)
   $effect(() => {
@@ -118,101 +121,85 @@
   })
   /** The spectra of this PSM; null while they are read. */
   const spectra = $derived(loaded && loaded.row === row && loaded.source === source ? loaded : null)
-  const peaks = $derived(spectra?.data ? spectrumPeaks(spectra.data.spectra, spectra.data.spectrumRow) : null)
-  // ProSE stored the spectra filtered (its -qpx_peak_top and -qpx_peak_window, in the footer of the input's mz view)
-  const peakFilter = $derived(spectra?.data?.peakFilter ?? null)
-  const mods = $derived.by(() => {
-    const out: { name: string; residue: string }[] = []
-    for (let i = pt.modOffsets[k]; i < pt.modOffsets[k + 1]; i++) out.push({ name: pt.modName[i], residue: sequence[pt.modPosition[i]] ?? '' })
-    return out
+  const observed = $derived(spectra?.data && spectra.data.missing === null ? spectrumPeaks(spectra.data.spectra, spectra.data.spectrumRow) : null)
+  const nuxlPeaks = $derived(spectra?.data?.annotation ?? [])
+  /** Why the observed peaks are not shown (the reader's words), when they are not. */
+  const missing = $derived(spectra?.data && !observed ? (spectra.data.missing ?? 'The spectrum has no peaks.') : null)
+  /**
+   * The peaks shown: the observed ones, else those NuXL annotated (their intensities relative, as NuXL scored the
+   * spectrum); null without either.
+   */
+  const peaks = $derived.by(() => {
+    if (observed) return { mz: observed.mz, intensity: observed.intensity, observed: true }
+    if (nuxlPeaks.length === 0) return null
+    return { mz: Float32Array.from(nuxlPeaks, (p) => p.mz), intensity: Float32Array.from(nuxlPeaks, (p) => p.intensity), observed: false }
   })
+
+  // NuXL's annotation on the peaks shown
+  const placed = $derived(placeAnnotation(nuxlPeaks, observed ? observed.mz : null, tolerance))
+  const charges = $derived(nuxlCharges(charge, placed.matches))
+  /** Shifted, marker, immonium and internal ions: chosen here, for the PSMs of this view. */
+  let local = $state<LocalToggles>({ shifted: true, marker: true, immonium: true, internal: false })
+  const options: NuxlOptions = $derived(resolveNuxlOptions(view.psmOptions, local, charges))
+  const shown = $derived(visibleNuxl(placed.matches, options))
+  const nuxlGroups = $derived(peaks ? groupNuxl(shown, peaks.mz, peaks.intensity) : [])
+  const groups: PlotGroup[] = $derived(
+    nuxlGroups.map((g) => ({
+      peak: g.peak,
+      mz: g.mz,
+      intensity: g.intensity,
+      label: g.label,
+      color: g.color,
+      ions: g.matches.map((x) => x.text),
+      kinds: [...new Set(g.matches.map((x) => x.category))].join(' '),
+    })),
+  )
+  const legend = $derived(legendOf(nuxlGroups.flatMap((g) => g.matches.map((x) => x.category)).concat(options.ions.length > 0 ? ['prefix', 'suffix'] : [])))
+  const share = $derived(peaks ? annotatedShare(nuxlGroups, peaks.intensity) : null)
+
+  // the linear peptide's theoretical spectrum (the lower half, the ion table, the mass errors)
+  const linear = $derived(linearPeptide(pt.openms[k]))
   /** The masses of the peptide's modifications by name, for a name the Unimod table does not have. */
   const modificationMass: ModificationMass = $derived.by(() => {
     const masses = new Map<string, number>()
     for (let i = pt.modOffsets[k]; i < pt.modOffsets[k + 1]; i++) masses.set(pt.modName[i], pt.modMass[i])
     return (name: string) => masses.get(name)
   })
-  const losses = $derived(lossOptions(mods))
-  const options: PsmOptions = $derived(resolveOptions(view.psmOptions, { charge, losses, onnx }))
-  const engineOptions = $derived(annotationOptions(options, tolerance))
-  const nce = $derived(nceFor(view.result.outcome.summary.files[ps.file[row]], peaks?.collisionEnergy ?? NaN, parameters))
-
-  /** Annotates the PSM's peaks (none: the theoretical ions alone); an error as text. */
-  function annotate(o: Parameters<typeof annotatePeaks>[4]): { result: PeakAnnotationResult | null; error: string | null } {
+  /** The theoretical ions of the types shown, up to the highest charge shown, with or without their losses; an error as text. */
+  function theoreticalOf(losses: boolean): { result: PeakAnnotationResult | null; error: string | null } {
     try {
       const mz = peaks?.mz ?? new Float32Array(0)
       const intensity = peaks?.intensity ?? new Float32Array(0)
-      return { result: annotatePeaks(mz, intensity, pt.openms[k], charge, o, modificationMass), error: null }
+      const o = { tolerance: tolerance.value, unit: tolerance.unit, maxCharge: Math.max(1, ...options.charges), ions: ION_TYPES.filter((t) => options.ions.includes(t)), losses, precursor: false }
+      return { result: annotatePeaks(mz, intensity, linear, charge, o, modificationMass), error: null }
     } catch (e) {
       return { result: null, error: String((e as Error)?.message ?? e) }
     }
   }
+  const plain = $derived(theoreticalOf(false))
+  const withLosses = $derived(options.losses.length > 0 ? theoreticalOf(true) : plain)
+  const annotationError = $derived(plain.error)
+  const theoretical = $derived((plain.result?.theoretical ?? []).filter((t) => options.charges.includes(t.charge)))
+  const errors = $derived(peaks ? massErrors(shown, withLosses.result?.theoretical ?? [], peaks.mz) : [])
+  const table = $derived(plain.result ? nuxlIonTable(theoretical, shown, sequence.length, options) : null)
+  const cuts = $derived(nuxlLadder(shown, sequence.length))
 
-  // the annotation (also without peaks: its theoretical ions make the ion table)
-  const annotation = $derived(annotate(engineOptions))
-
-  // the precursor peaks, asked for apart: the annotation makes them at `maxCharge` only, which is the
-  // precursor's charge here (and not the fragments' 1 or 2)
-  const precursorAnnotation = $derived(options.precursor ? annotate(precursorOptions(tolerance, charge)) : null)
-  const precursorResult = $derived(precursorAnnotation?.result ?? null)
-  /** Why the precursor peaks are missing although they were asked for. */
-  const precursorError = $derived(precursorAnnotation?.error ?? null)
-
-  const fragments = $derived(annotation.result)
-  const result = $derived(fragments ? withPrecursor(fragments, precursorResult) : null)
-  const annotationError = $derived(annotation.error)
-
-  const shown = $derived(result ? visibleMatches(result.matches, options) : [])
-  const groups = $derived(result && peaks ? groupByPeak(shown, peaks.mz, peaks.intensity) : [])
-  const theoretical = $derived(result ? visibleTheoretical(result.theoretical, options) : [])
-  const table = $derived(result ? ionTable(result.theoretical, shown, sequence.length, options) : null)
-  const cuts = $derived(ladderCuts(shown, sequence.length))
-  const summary = $derived(result && peaks ? matchSummary(shown, theoretical, peaks.intensity) : null)
-  /** Nothing matches with 1+ fragments hidden, and 1+ would: a hint with a button that shows them. */
-  const hiddenOnePlus = $derived(result !== null && peaks !== null && onePlusHidden(result.matches, options))
-
-  // PeptDeep's prediction for the lower half, as ProSE wrote it for this PSM (at the NCE of its file)
-  const prediction = $derived(spectra?.data ? predictedIons(spectra.data.predicted, spectra.data.row) : [])
-
+  const bottomLabel = $derived(isXL ? 'Theoretical b/y of the linear peptide · without the adduct-shifted ions' : 'Theoretical ions of the peptide')
   const bottom: Bottom = $derived.by(() => {
-    if (options.bottom === 'theoretical') {
-      if (!result) return { kind: 'status', label: 'Theoretical', message: 'Computing the theoretical spectrum…', failed: false }
-      const matched = new Set(shown.map((s) => s.ion))
-      return {
-        kind: 'ions',
-        label: 'Theoretical',
-        relative: false,
-        ions: theoretical.map((t) => ({ mz: t.mz, height: 0.55, type: t.type, ion: t.ion, faint: !matched.has(t.ion) })),
-      }
+    if (annotationError) return { kind: 'status', label: bottomLabel, message: 'The theoretical spectrum could not be computed' }
+    const matched = new Set((plain.result?.matches ?? []).map((x) => x.ion))
+    return {
+      kind: 'ions',
+      label: bottomLabel,
+      ions: theoretical.map((t) => ({ mz: t.mz, height: 0.55, type: t.type, ion: t.ion, faint: !matched.has(t.ion) })),
     }
-    const label = `PeptDeep · ${nce.label} · ${instrument} · 100 % = strongest predicted b/y`
-    if (spectra === null) return { kind: 'status', label: 'PeptDeep', message: 'Reading the prediction…', failed: false }
-    if (prediction.length === 0) {
-      return { kind: 'status', label: 'PeptDeep', message: 'ProSE wrote no prediction for this PSM', failed: true }
-    }
-    const ions = prediction
-      .filter((p) => (options.ions as string[]).includes(p.type) && options.charges.includes(p.charge))
-      .map((p) => ({ mz: p.mz, height: p.intensity, type: p.type, ion: p.ion, faint: false }))
-    return { kind: 'ions', label, relative: true, ions }
   })
 
-  /** PeptDeep's similarity that the search computed (over all ions), whenever the search has it. */
-  const similarity = $derived(similarityText(ps.featureNames, ps.features, row))
-
-  /**
-   * The observed half's 100 %: against PeptDeep, the strongest matched b or y peak (as PeptDeep scales
-   * its prediction); against the theoretical spectrum, or without a matched b or y, the base peak.
-   */
   const reference = $derived.by(() => {
     let base = 0
     for (let i = 0; i < (peaks?.intensity.length ?? 0); i++) base = Math.max(base, peaks!.intensity[i])
-    const matched = options.bottom === 'peptdeep' ? matchedByReference(groups, options) : null
-    return matched !== null ? { intensity: matched, text: 'strongest matched b/y' } : { intensity: base, text: 'base peak' }
+    return { intensity: base, text: peaks?.observed ? 'base peak' : 'strongest annotated peak' }
   })
-
-  /** The prediction is on its way: the spectrum is not exported meanwhile. */
-  const pending = $derived(bottom.kind === 'status' && !bottom.failed)
-
 
   // breadcrumb and header
   const proteinRow = $derived.by(() => {
@@ -230,13 +217,13 @@
     const more = m.peptide.proteins[k].length - 1
     return { text: `${gene ?? parseAccession(accession).id}${more > 0 ? ` +${more}` : ''}`, title: accession }
   })
-  /** The peptide as the breadcrumb writes it: "AVM(ox)DDFAAFVEK", after its shift. */
+  /** The peptide as the breadcrumb writes it: "DY(U)HTVLGAR". */
   const peptideCrumb = $derived.by(() => {
     const label = (mod: { label: string } | undefined) => (mod ? `(${mod.label})` : '')
     const core = peptide.residues.map((r) => `${r.residue}${label(r.mod)}`).join('')
-    return `${shift ? `[${shift}]?` : ''}${peptide.nTerm ? `(${peptide.nTerm.label})` : ''}${core}${peptide.cTerm ? `(${peptide.cTerm.label})` : ''}`
+    return `${peptide.nTerm ? `(${peptide.nTerm.label})` : ''}${core}${peptide.cTerm ? `(${peptide.cTerm.label})` : ''}`
   })
-  const proforma = $derived(psmProforma(pt.proforma[k], ps.deltaMass[row]))
+  const proforma = $derived(pt.proforma[k])
   const fileName = $derived(baseName(m.tables.files[ps.file[row]] ?? ''))
 
   const headerLine = $derived.by(() => {
@@ -247,49 +234,50 @@
       `${charge}+`,
       Number.isFinite(ps.mz[row]) ? `m/z ${ps.mz[row].toFixed(4)}` : null,
       rt >= 0 ? `RT ${(rt / 60).toFixed(1)} min` : null,
-      `q ${formatQValue(ps.qValue[row])}`,
-      // an open search's shift is the whole mass difference: no error is left to show
-      Number.isFinite(err) && shift === null ? `${signedNumber(err, 1)} ppm` : null,
+      Number.isFinite(err) ? `${signedNumber(err, 1)} ppm` : null,
     ]
       .filter((p) => p)
       .join(' · ')
   })
+  const adductText = $derived(adduct === '' ? '' : Number.isFinite(adductMass) && adductMass !== 0 ? `${adduct} (${signedNumber(adductMass, 4)} Da)` : adduct)
+  const siteText = $derived(localized ? `${sequence[site]}${site + 1}` : 'not localized')
+  /** What the header says of the cross-link, for screen readers and the tooltip. */
+  const crossLinkText = $derived(
+    isXL
+      ? `Cross-link with ${adductText || 'an adduct'}, ${localized ? `on ${siteText}${Number.isFinite(siteScore) ? ` (localization score ${siteScore.toFixed(2)})` : ''}` : 'not localized'}`
+      : adduct !== ''
+        ? `Peptide with the adduct ${adductText}, not cross-linked`
+        : 'Peptide, no cross-link',
+  )
 
   const neighbours = $derived(view.psmNeighbours)
 
-  /** The other PSMs of this spectrum (co-isolated precursors), as links: "VHGEEDPTKK 3+". */
-  const mates = $derived(
-    sameSpectrum(ps, row).map((j) => {
-      const [sequence, rank] = [pt.sequence[ps.peptide[j]], chimericRank(ps, j)]
-      const which = rank >= 2 ? ', a co-isolated precursor' : rank === 1 ? ', the precursor the spectrum was taken of' : ''
-      return { row: j, sequence, charge: ps.charge[j], coisolated: rank >= 2, decoy: ps.decoy[j] === 1, title: `Open the PSM of ${sequence}, ${ps.charge[j]}+${which}` }
-    }),
-  )
-
   const spectrumTitle = $derived.by(() => {
     const listed = modificationList(pt, k, fixedMods)
-    const below = options.bottom === 'peptdeep' ? `PeptDeep's prediction at ${nce.label}` : 'the theoretical spectrum'
-    return `Annotated spectrum of ${sequence}${listed.length > 0 ? ` (${listed.join(', ')})` : ''}, ${charge}+, ${spectrumName}. Below it is ${below}.`
+    const what = peaks?.observed === false ? "NuXL's annotated peaks" : 'Annotated spectrum'
+    return `${what} of ${sequence}${listed.length > 0 ? ` (${listed.join(', ')})` : ''}, ${charge}+, ${spectrumName}${isXL ? `, a cross-link with ${adductText}` : ''}. Below it is the theoretical spectrum of the linear peptide.`
   })
   const spectrumDescription = $derived(
     peaks
-      ? `${groups.length} of ${peaks.mz.length} peaks are matched. b ions are blue, y ions orange, other ions dark grey and unmatched peaks light grey.` +
-          (summary ? ` ${summary.matched} of the ${summary.total} ions shown are matched, and their peaks carry ${Math.round(summary.intensityFraction * 100)} % of the intensity.` : '') +
-          ` In the upper half, 100 % is the ${reference.text}.` +
-          (options.bottom === 'peptdeep' ? ' In the lower half, 100 % is the strongest predicted b or y ion.' : ' In the lower half, every ion has the same height.') +
-          (similarity ? ` ${similarity.replace(' (search)', '')}, as the search computed it over all ions.` : '')
+      ? `${groups.length} of ${peaks.mz.length} peaks carry NuXL's annotation as shown.` +
+          ' a, b and c ions are blue, x, y and z ions orange, ions shifted by the nucleotide green, marker ions violet, other ions dark grey and peaks without annotation light grey.' +
+          (share && Number.isFinite(share.intensityFraction) ? ` The annotated peaks carry ${Math.round(share.intensityFraction * 100)} % of the intensity.` : '') +
+          ` In the upper half, 100 % is the ${reference.text}. In the lower half, every ion has the same height${isXL ? '; the adduct-shifted ions are not among them' : ''}.`
       : '',
   )
 
-  /** What the losses menu's button says: the losses on, and the precursor ("CH₄SO · precursor", "none"). */
+  /** What the menu's button says: the losses and further ions on ("H₂O, NH₃, marker, precursor", "none"). */
   const moreSummary = $derived.by(() => {
-    const on = losses.filter((l) => options.losses.includes(l.formula)).map((l) => (l.formula === 'other' ? 'other' : l.label))
+    const on: string[] = LOSS_TOGGLES.filter((l) => options.losses.includes(l.id)).map((l) => (l.id === 'other' ? 'other' : l.label.replace(' loss', '')))
+    if (options.marker) on.push('marker')
+    if (options.immonium) on.push('immonium')
+    if (options.internal) on.push('internal')
     if (options.precursor) on.push('precursor')
     return on.length > 0 ? on.join(', ') : 'none'
   })
-  const moreOn = $derived(options.losses.length > 0 || options.precursor)
+  const moreOn = $derived(options.losses.length > 0 || options.marker || options.immonium || options.internal || options.precursor)
 
-  // the toggles: a choice made here becomes the user's (no longer automatic) for all PSMs
+  // the toggles: a choice of ions, charges, losses and precursor becomes the user's (no longer automatic) for all PSMs
   function setIon(type: IonType, on: boolean) {
     const ions = new Set(options.ions)
     if (on) ions.add(type)
@@ -297,15 +285,15 @@
     view.psmOptions.ions = ION_TYPES.filter((t) => ions.has(t))
   }
   function setCharge(c: number, on: boolean) {
-    const charges = new Set(options.charges)
-    if (on) charges.add(c)
-    else charges.delete(c)
-    view.psmOptions.charges = [...charges].sort()
+    const chosen = new Set(options.charges)
+    if (on) chosen.add(c)
+    else chosen.delete(c)
+    view.psmOptions.charges = [...chosen].sort()
   }
-  function setLoss(formula: string, on: boolean) {
-    const chosen = new Set(options.losses)
-    if (on) chosen.add(formula)
-    else chosen.delete(formula)
+  function setLoss(id: LossToggle, on: boolean) {
+    const chosen = new Set<string>(options.losses)
+    if (on) chosen.add(id)
+    else chosen.delete(id)
     view.psmOptions.losses = [...chosen]
   }
 
@@ -318,7 +306,7 @@
 
   // the Export menu's "Spectrum (SVG)" does what the button does
   $effect(() => {
-    view.spectrumExporter = peaks && !pending ? exportSvg : null
+    view.spectrumExporter = peaks ? exportSvg : null
     return () => (view.spectrumExporter = null)
   })
 
@@ -391,7 +379,7 @@
                 >{proteinCrumb.text}</button>
               <span class="sr-only">({proteinCrumb.title})</span>
             {:else}
-              <span class="min-w-0 truncate">below protein FDR</span>
+              <span class="min-w-0 truncate">no protein</span>
             {/if}
             <span>›</span>
           </li>
@@ -439,8 +427,8 @@
         variant="outline"
         size="sm"
         class="h-7 px-2.5 text-xs"
-        disabled={!peaks || pending}
-        title={spectra === null ? 'Reading the spectrum' : !peaks ? 'The spectrum was not stored' : pending ? 'Wait for the annotation and the prediction' : undefined}
+        disabled={!peaks}
+        title={spectra === null ? 'Reading the spectrum' : !peaks ? 'The spectrum has no peaks to export' : undefined}
         onclick={exportSvg}>Export spectrum (SVG)</Button>
       <Button variant="ghost" size="icon-sm" aria-label="Close the PSM view" title="Back (Esc)" onclick={onClose}>
         <XIcon aria-hidden="true" />
@@ -449,32 +437,41 @@
   </header>
 
   <div class="mt-1 flex flex-wrap items-end gap-x-5" bind:clientWidth={ladderRow}>
-    <FragmentLadder {peptide} {cuts} {shift} available={ladderRow} />
+    <FragmentLadder {peptide} {cuts} available={ladderRow} />
     <p class="pb-3 text-xs text-muted-foreground tabular-nums" data-testid="psm-header">
-      {#if shift}<span class="font-mono">[{shift}]?</span>{' · '}{/if}{headerLine}{#if ps.decoy[row]}<Marker text="decoy" />{/if}{#if isCoisolated(ps, row)}<Marker
-          text="co-isolated"
-          title={COISOLATED_TITLE} />{/if}
+      {headerLine}{#if ps.decoy[row]}<Marker text="decoy" />{/if}
     </p>
   </div>
-  {#if mates.length > 0}
-    <!-- the PSMs of the other precursors of this spectrum: each opens here (the list beside keeps its place) -->
-    <p class="-mt-1 mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs text-muted-foreground" data-testid="same-spectrum">
-      <span>Same spectrum:</span>
-      {#each mates as mate (mate.row)}
-        <span class="whitespace-nowrap">
-          <button type="button" class="{crumb} font-mono text-foreground" title={mate.title} onclick={() => view.openPsm(mate.row)}
-            >{mate.sequence}</button>
-          {mate.charge}+{#if mate.decoy}{' '}decoy{/if}{#if mate.coisolated}{' '}co-isolated{/if}
+  <!-- the cross-link: adduct, residue (the candidates of the localization marked), FDR group and q-value at its FDR -->
+  <p class="mt-1 mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-muted-foreground tabular-nums" data-testid="psm-crosslink" title={crossLinkText}>
+    <span class="sr-only">{crossLinkText}.</span>
+    <span aria-hidden="true" class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+      {#if isXL}
+        <span class="xl-badge" data-testid="xl-badge">cross-link</span>
+      {:else}
+        <span class="rounded-[4px] border px-1 py-px text-[10.5px] leading-none">peptide</span>
+      {/if}
+      {#if adduct !== ''}
+        <span data-testid="psm-adduct">adduct <span class="font-mono text-foreground">{adduct}</span>{#if Number.isFinite(adductMass) && adductMass !== 0}{' '}({signedNumber(adductMass, 4)} Da){/if}</span>
+      {/if}
+      {#if isXL}
+        <span data-testid="psm-site">
+          {#if localized}
+            on <span class="font-medium text-foreground">{siteText}</span>{#if Number.isFinite(siteScore)}{' '}(score {siteScore.toFixed(2)}){/if}
+          {:else}
+            not localized
+          {/if}
         </span>
-      {/each}
-    </p>
-  {/if}
-  {#if shift}
-    <p class="-mt-1 mb-2 text-xs text-muted-foreground" data-testid="open-search-note">
-      This PSM from the open search has a mass shift of {shiftText} Da at an unknown position. The annotation shows the peptide
-      without the shift, so fragments that carry it are not annotated.
-    </p>
-  {/if}
+        {#if siteSequence !== ''}
+          <span class="site-sequence font-mono" data-testid="site-sequence" title="The residues the cross-link may be on (NuXL's localization), the best one underlined"
+            >{#each siteResidues(siteSequence, localized ? site : -1) as r, i (i)}<span class:candidate={r.candidate} class:site={r.site}>{r.residue}</span>{/each}</span>
+        {/if}
+      {/if}
+    </span>
+    {#if fdrGroup !== ''}<span aria-hidden="true">· FDR group {fdrGroup}</span>{/if}
+    <span data-testid="psm-q">· q {formatQValue(qValue)} at the {fdr.name} of {percent(fdr.cutoff)}{#if !passes}<Marker
+          text={qValue > fdr.cutoff ? `above the ${fdr.name}` : `peptide q-value ${formatQValue(peptideQ)}, not below the ${fdr.name}`} />{/if}</span>
+  </p>
 
   <div class="rounded-lg border bg-background px-3.5 pt-3 pb-2">
     <div class="mb-1 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
@@ -494,8 +491,8 @@
       </div>
       <div class="flex items-center gap-1" role="group" aria-labelledby="{uid}-charge">
         <span id="{uid}-charge" class="mr-1 text-muted-foreground">Charge</span>
-        <!-- a 1+ precursor has 1+ fragments only -->
-        {#each fragmentCharges(charge) as c (c)}
+        <!-- 1+ to the highest charge NuXL annotated (2+ at least, for a precursor of 2+ or more) -->
+        {#each charges as c (c)}
           <label class="relative">
             <input
               type="checkbox"
@@ -507,89 +504,73 @@
           </label>
         {/each}
       </div>
-      <!-- the neutral losses and the precursor peaks: one menu, its button says what is on -->
+      <label class="relative" title="Ions shifted by a fragment of the cross-linked nucleotide">
+        <input
+          type="checkbox"
+          class="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+          aria-label="Shifted ions"
+          checked={options.shifted}
+          onchange={(e) => (local.shifted = e.currentTarget.checked)} />
+        <span class={toggle}>shifted</span>
+      </label>
+      <!-- the neutral losses and the other ions: one menu, its button says what is on -->
       <div class="flex items-center gap-1">
-        <span id="{uid}-more" class="mr-1 text-muted-foreground">Losses</span>
+        <span id="{uid}-more" class="mr-1 text-muted-foreground">Also</span>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger
             class={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-[26px] gap-1 px-2 text-xs font-normal', moreOn && 'border-primary')}
-            aria-label="Losses and precursor peaks: {moreSummary}">
+            aria-label="Neutral losses and other ions: {moreSummary}">
             {moreSummary}<ChevronDown class="size-3.5 text-muted-foreground" aria-hidden="true" />
           </DropdownMenu.Trigger>
           <DropdownMenu.Content class="w-auto min-w-56" align="start">
             <DropdownMenu.Group>
               <DropdownMenu.GroupHeading class="text-xs font-medium text-muted-foreground">Neutral losses</DropdownMenu.GroupHeading>
-              {#each losses as l (l.formula)}
+              {#each LOSS_TOGGLES as l (l.id)}
                 <DropdownMenu.CheckboxItem
-                  checked={options.losses.includes(l.formula)}
-                  onCheckedChange={(on) => setLoss(l.formula, on)}
-                  title={l.formula === 'other' ? 'Other neutral losses the engine finds, such as losses from side chains' : undefined}
-                  >{l.formula === 'other' ? 'other losses' : `${l.label} loss${l.note ? ` (${l.note})` : ''}`}</DropdownMenu.CheckboxItem>
+                  checked={options.losses.includes(l.id)}
+                  onCheckedChange={(on) => setLoss(l.id, on)}
+                  title={l.id === 'other' ? 'The other losses NuXL annotates, such as of side chains' : undefined}>{l.label}</DropdownMenu.CheckboxItem>
               {/each}
             </DropdownMenu.Group>
             <DropdownMenu.Separator />
-            <DropdownMenu.CheckboxItem checked={options.precursor} onCheckedChange={(on) => (view.psmOptions.precursor = on)}
-              >Precursor peaks</DropdownMenu.CheckboxItem>
+            <DropdownMenu.Group>
+              <DropdownMenu.GroupHeading class="text-xs font-medium text-muted-foreground">Other ions</DropdownMenu.GroupHeading>
+              <DropdownMenu.CheckboxItem checked={options.marker} onCheckedChange={(on) => (local.marker = on)} title="Marker ions of the nucleotides (MI:)"
+                >Marker ions</DropdownMenu.CheckboxItem>
+              <DropdownMenu.CheckboxItem checked={options.immonium} onCheckedChange={(on) => (local.immonium = on)}>Immonium ions</DropdownMenu.CheckboxItem>
+              <DropdownMenu.CheckboxItem checked={options.internal} onCheckedChange={(on) => (local.internal = on)}>Internal fragments</DropdownMenu.CheckboxItem>
+              <DropdownMenu.CheckboxItem checked={options.precursor} onCheckedChange={(on) => (view.psmOptions.precursor = on)}>Precursor peaks</DropdownMenu.CheckboxItem>
+            </DropdownMenu.Group>
           </DropdownMenu.Content>
         </DropdownMenu.Root>
-      </div>
-      <div class="ml-auto flex items-center gap-1" role="radiogroup" aria-labelledby="{uid}-bottom">
-        <span id="{uid}-bottom" class="mr-1 text-muted-foreground">Bottom</span>
-        <label class="relative" title={onnx ? undefined : 'This search has no PeptDeep predictions, because ProSE ran without ONNX Runtime'}>
-          <input
-            type="radio"
-            name="{uid}-bottom"
-            class="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-            value="peptdeep"
-            disabled={!onnx}
-            checked={options.bottom === 'peptdeep'}
-            onchange={() => (view.psmOptions.bottom = 'peptdeep')} />
-          <span class={toggle}>PeptDeep prediction</span>
-        </label>
-        <label class="relative">
-          <input
-            type="radio"
-            name="{uid}-bottom"
-            class="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
-            value="theoretical"
-            checked={options.bottom === 'theoretical'}
-            onchange={() => (view.psmOptions.bottom = 'theoretical')} />
-          <span class={toggle}>Theoretical</span>
-        </label>
       </div>
     </div>
 
     {#if peaks}
+      {#if missing}
+        <p class="pb-1 text-xs text-muted-foreground" role="status" data-testid="peaks-missing-note">
+          {missing} Shown are the peaks NuXL annotated, with their intensities as NuXL scored the spectrum.
+        </p>
+      {:else if placed.unplaced > 0}
+        <p class="pb-1 text-xs text-muted-foreground" data-testid="unplaced-note">
+          {placed.unplaced} of NuXL's annotated {placed.unplaced + placed.matches.length === 1 ? 'peak has' : 'peaks have'} no observed peak within ±{tolerance.value}
+          {tolerance.unit}.
+        </p>
+      {/if}
       <SpectrumMirror
         bind:this={mirror}
         mz={peaks.mz}
         intensity={peaks.intensity}
         {groups}
         {reference}
+        upper={peaks.observed ? 'Observed' : "NuXL's annotated peaks"}
+        {legend}
         {bottom}
-        {similarity}
         title={spectrumTitle}
         description={spectrumDescription}
-        errors={{ matches: shown, tolerance }}
-        onTheoretical={() => (view.psmOptions.bottom = 'theoretical')} />
-      {#if hiddenOnePlus}
-        <p class="flex flex-wrap items-center gap-2 pb-1 text-xs text-muted-foreground" role="status" data-testid="oneplus-hint">
-          No fragment peaks match. 1+ fragments are hidden.
-          <Button variant="outline" size="sm" class="h-6 px-2 text-xs" onclick={() => setCharge(1, true)}>Show 1+</Button>
-        </p>
-      {/if}
-      {#if peakFilter}
-        <p class="pb-1 text-xs text-muted-foreground" data-testid="peak-filter-note">
-          Showing the top {peakFilter.top} peaks per {peakFilter.window} m/z, plus every peak ProSE annotated.
-        </p>
-      {/if}
+        errors={{ matches: errors, tolerance }} />
       {#if annotationError}
-        <p class="pb-1 text-xs text-destructive" role="alert">The spectrum could not be annotated: {annotationError}</p>
-      {:else if precursorError}
-        <p class="pb-1 text-xs text-muted-foreground" role="status" data-testid="precursor-note">
-          The precursor peaks could not be annotated ({precursorError.length > 90 ? `${precursorError.slice(0, 89)}…` : precursorError}), so the
-          fragments are shown without them. To try again, switch Precursor peaks off and on.
-        </p>
+        <p class="pb-1 text-xs text-muted-foreground" role="status">The theoretical spectrum could not be computed: {annotationError}</p>
       {/if}
     {:else if spectra === null}
       <div class="my-2 rounded-md border border-dashed px-4 py-8 text-center text-xs text-muted-foreground" data-testid="spectrum-loading">
@@ -602,19 +583,10 @@
       </div>
     {:else}
       <div class="my-2 rounded-md border border-dashed px-4 py-8 text-center" data-testid="spectrum-missing">
-        <p class="font-medium">Spectrum not stored</p>
-        {#if ps.nativeId[row] === ''}
-          <!-- (ProSE leaves the spectrum reference out when it stored no spectrum for the PSM, e.g. for a second
-               spectrum of a native ID) -->
-          <p class="mx-auto mt-1 max-w-[44rem] text-xs text-muted-foreground" data-testid="spectrum-not-referenced">
-            ProSE did not store a spectrum for this PSM. This happens, for example, when another spectrum of the run has
-            the same native ID.
-          </p>
-        {/if}
+        <p class="font-medium">No peaks to show</p>
         <p class="mx-auto mt-1 max-w-[44rem] text-xs text-muted-foreground">
-          The result has no peaks for this PSM, so its spectrum cannot be shown, annotated or exported. A search saves the spectra of
-          its PSMs within its PSM FDR. Results opened without them, such as the debug results, have none. The fragment ladder
-          needs the peaks too, but the table below lists the theoretical ions.
+          {missing ?? 'The spectrum has no peaks.'} NuXL annotated no peaks of this PSM either, so its spectrum cannot be shown or exported. The table below
+          lists the theoretical ions of the peptide.
         </p>
       </div>
     {/if}
@@ -632,7 +604,34 @@
       {/if}
     </div>
     <div class="min-w-[260px] flex-[1_1_420px] rounded-lg border bg-background px-3.5 py-3">
-      <PsmFeatures model={m} {row} {fixedMods} matched={summary} />
+      <PsmFeatures model={m} {row} {fixedMods} matched={share} />
     </div>
   </div>
 </section>
+
+<style>
+  .xl-badge {
+    border-radius: 4px;
+    border: 1px solid var(--mod-border);
+    background: var(--mod-bg);
+    color: var(--mod-fg);
+    padding: 1px 4px;
+    font-size: 10.5px;
+    line-height: 1;
+    font-weight: 500;
+  }
+  .site-sequence {
+    letter-spacing: 0.02em;
+  }
+  .site-sequence .candidate {
+    background: var(--mod-bg);
+    color: var(--mod-fg);
+    border-radius: 2px;
+  }
+  .site-sequence .site {
+    font-weight: 700;
+    text-decoration: underline;
+    text-decoration-color: var(--mod);
+    text-underline-offset: 2px;
+  }
+</style>

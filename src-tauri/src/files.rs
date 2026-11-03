@@ -1,20 +1,24 @@
 //! What the front end may read of the disk, and nothing more:
 //!
 //! - [`read_search_file`]: a file of one search's folder (`<searches>/<id>/`), by its name relative to
-//!   the folder (all of it, its last bytes, or a byte range), or the database that the search's `database.json` records (the shim
-//!   writes it when ProSE reads the user's FASTA as it is). Names are checked as text
+//!   the folder (all of it, its last bytes, or a byte range), or the database that the search's `database.json`
+//!   records (the shim writes it when OpenNuXL reads the user's FASTA as it is), or a part of one of the search's
+//!   inputs ([`input_file`]: byte ranges only, never for an imported search). Names are checked as text
 //!   (no `..`, `.`, empty parts, other absolute paths) and the file's canonical path must lie inside
 //!   the canonical folder, so no symlink leads out of it: the shim's input links (`<n>__<name>`, to the
-//!   user's files) are not readable through this. A file that does not exist rejects with
+//!   user's files) are not readable as the search's own files. A file that does not exist rejects with
 //!   `{ notFound: true, message }`, which the results reader takes for a missing output.
 //! - [`inspect`]: what the New search page shows of an input it was given by path (size, the spectrum
-//!   count of an mzML's header, the proteins and residues of a FASTA, and what in them ProSE cannot search:
+//!   count of an mzML's header, the proteins and residues of a FASTA, and what in them OpenNuXL cannot search:
 //!   `content`): numbers and short messages, never contents, and only of absolute paths with the suffixes
-//!   the shim searches (`.mzML`, `.mzML.gz`, `.fasta`, `.fa`, `.faa`); any other path is refused before
-//!   the disk is asked.
-//! - [`example_files`]: the bundled example, as the two named runs the web app searches.
+//!   the shim takes (`.mzML`, `.fasta`, `.fa`, `.faa`; `.mzML.gz` to say that it has to be unpacked); any other
+//!   path is refused before the disk is asked.
+//! - [`example_files`]: the bundled example, OpenMS' OpenNuXL test run and its FASTA.
 
-use crate::args::{is_fasta_file, is_input_link, is_spectrum_file, suffix_start, DATABASE_RECORD};
+use crate::args::{
+    is_compressed_mzml, is_fasta_file, is_input_link, is_spectrum_file, InputRecord,
+    DATABASE_RECORD,
+};
 use crate::content;
 use serde::Serialize;
 use std::fs;
@@ -165,7 +169,7 @@ pub fn resolve_search_file(
     // a link to an input (on Windows a hard link, which resolves inside the folder) is the user's file
     if is_input_link(name) {
         return Err(ReadError::refused(format!(
-            "{name} is an input of the search {search_id}, not one of its files."
+            "{name} is an input of the search {search_id}, not one of its files: it is read in parts only."
         )));
     }
     let canonical = fs::canonicalize(folder.join(name)).map_err(|e| ReadError::io(name, e))?;
@@ -185,11 +189,11 @@ pub fn resolve_search_file(
 pub enum ByteRange {
     /// All of it.
     All,
-    /// The last bytes (all of a smaller file): the footer of a Parquet file, which the results reader
-    /// reads to find a PSM's row group.
+    /// The last bytes (all of a smaller file): the index at the end of an indexed mzML, which the PSM view
+    /// reads to find a spectrum.
     Tail(u64),
-    /// `length` bytes from `offset` (fewer at the end of the file, none past it): a part of a Parquet file,
-    /// e.g. the row group of the peaks or the prediction of one PSM, which the PSM view reads.
+    /// `length` bytes from `offset` (fewer at the end of the file, none past it): a part of a file, e.g. one
+    /// spectrum of an input's mzML, which the PSM view reads.
     Range { offset: u64, length: u64 },
 }
 
@@ -212,18 +216,90 @@ impl ByteRange {
     }
 }
 
-/// The largest byte range [`read_search_file`] reads at once (the peaks of one row group are a few MB).
+/// The largest byte range [`read_search_file`] reads at once (a spectrum is a few kB to a few MB; the scan of
+/// an mzML without an index goes in parts of this or less).
 pub const MAX_RANGE: u64 = 1 << 30;
 
+/// The largest `inputs.json` read (a record per input, a few hundred bytes each).
+const MAX_INPUTS_RECORD: u64 = 16 << 20;
+
+/// The records of `inputs.json` of the search `folder` (canonical), if it has a readable one inside it.
+fn input_records(folder: &Path) -> Option<Vec<InputRecord>> {
+    let canonical = fs::canonicalize(folder.join("inputs.json")).ok()?;
+    if !canonical.starts_with(folder)
+        || fs::metadata(&canonical).map_or(true, |m| !m.is_file() || m.len() > MAX_INPUTS_RECORD)
+    {
+        return None;
+    }
+    serde_json::from_slice(&fs::read(&canonical).ok()?).ok()
+}
+
+/// The user's file of an input of the search `folder` (canonical), when `name` names one: the name of its link
+/// (`<n>__<name>`, or on Windows the file's own name when it was searched by its own path), or the absolute path
+/// `inputs.json` records for it. `Ok(None)`: `name` is no input. Refused for an imported search (its records
+/// name files of another computer, or would be an attempt to name one of this) and for anything but an `.mzML`.
+/// The file is the one at the recorded path now: moved or deleted, it is `not_found` (the PSM view then shows
+/// the annotated peaks only).
+pub fn input_file(
+    folder: &Path,
+    search_id: &str,
+    name: &str,
+) -> Result<Option<PathBuf>, ReadError> {
+    let absolute = Path::new(name).is_absolute();
+    // (a link name of an input, or an absolute path: only those can be inputs)
+    if !absolute && !is_spectrum_file(name) {
+        return Ok(None);
+    }
+    let Some(records) = input_records(folder) else {
+        return Ok(None);
+    };
+    let Some(record) = records
+        .iter()
+        .find(|r| r.link == name || (absolute && r.path == name))
+    else {
+        return Ok(None);
+    };
+    if is_imported(folder) {
+        return Err(ReadError::refused(format!(
+            "{name} is an input of the search {search_id}, which was imported: an imported search reads only its \
+             own folder."
+        )));
+    }
+    if !Path::new(&record.path).is_absolute() || !is_spectrum_file(&record.path) {
+        return Err(ReadError::refused(format!(
+            "{name} is not an input of the search {search_id} that can be read."
+        )));
+    }
+    let meta = fs::metadata(&record.path).map_err(|e| ReadError::io(&record.path, e))?;
+    if !meta.is_file() {
+        return Err(ReadError::refused(format!(
+            "{} is not a file.",
+            record.path
+        )));
+    }
+    Ok(Some(PathBuf::from(&record.path)))
+}
+
 /// The contents of `name` of the search `search_id` (see the module docs for what is served): the bytes of
-/// `range`.
+/// `range`. An input ([`input_file`]) is served by `Tail` or `Range` only, never whole (an mzML is up to
+/// gigabytes; the PSM view reads its index and one spectrum at a time).
 pub fn read_search_file(
     searches_dir: &Path,
     search_id: &str,
     name: &str,
     range: ByteRange,
 ) -> Result<Vec<u8>, ReadError> {
-    let path = resolve_search_file(searches_dir, search_id, name)?;
+    let folder = search_folder(searches_dir, search_id)?;
+    let path = match input_file(&folder, search_id, name)? {
+        Some(_) if range == ByteRange::All => {
+            return Err(ReadError::refused(format!(
+                "{name} is an input of the search {search_id}: it is read in parts (tail, or offset and length) \
+                 only, not whole."
+            )))
+        }
+        Some(path) => path,
+        None => resolve_search_file(searches_dir, search_id, name)?,
+    };
     if range == ByteRange::All {
         return fs::read(&path).map_err(|e| ReadError::io(name, e));
     }
@@ -273,19 +349,18 @@ pub struct FileFacts {
     pub name: String,
     /// Bytes (0 with an error).
     pub size: u64,
-    /// The `count` of an mzML's `<spectrumList>` (all spectra; of a `.mzML.gz` decompressed); None if the
-    /// header does not say.
+    /// The `count` of an mzML's `<spectrumList>` (all spectra); None if the header does not say.
     pub spectra: Option<u64>,
     /// The entries of a FASTA file and the residues (letters) of their sequences.
     pub proteins: Option<u64>,
     pub residues: Option<u64>,
     /// Why the file cannot be used (not absolute, missing, a folder, unreadable).
     pub error: Option<String>,
-    /// Why ProSE cannot search the file, which is there and readable (`content`): an mzML that is not one, is
-    /// cut off or has no spectra; a FASTA without entries, with an accession twice, a protein too long to index,
-    /// ... New search does not start with it. Sentences, the file named.
+    /// Why OpenNuXL cannot search the file, which is there and readable (`content`): an mzML that is not one,
+    /// is compressed, is cut off or has no spectra; a FASTA without entries, with an accession twice, ... New
+    /// search does not start with it. Sentences, the file named.
     pub problem: Option<String>,
-    /// What ProSE may mishandle (a FASTA's byte-order mark, lowercase residues): shown, not blocking.
+    /// What may surprise (an entry listed twice): shown, not blocking.
     pub warnings: Vec<String>,
 }
 
@@ -312,9 +387,9 @@ pub fn inspect(path: &str) -> FileFacts {
     }
     // only what a search takes, before anything is asked of the disk: other files (a key, a document)
     // are not even looked up, so the page learns nothing of them
-    if !is_spectrum_file(&name) && !is_fasta_file(&name) {
+    if !is_spectrum_file(&name) && !is_compressed_mzml(&name) && !is_fasta_file(&name) {
         facts.error = Some(format!(
-            "{path} is not an mzML file (.mzML, .mzML.gz) or a FASTA file (.fasta, .fa, .faa)."
+            "{path} is not an mzML file (.mzML) or a FASTA file (.fasta, .fa, .faa)."
         ));
         return facts;
     }
@@ -331,6 +406,14 @@ pub fn inspect(path: &str) -> FileFacts {
     };
     facts.size = meta.len();
     let file = Path::new(path);
+    if is_compressed_mzml(&name) {
+        // (not read: the search cannot take it as it is)
+        facts.problem = Some(format!(
+            "{name} is compressed: OpenNuXL reads .mzML files only. Unpack it first (e.g. with gunzip or 7-Zip) and \
+             add the .mzML."
+        ));
+        return facts;
+    }
     let counted = if is_fasta_file(&name) {
         content::fasta(file, &name).map(|f| {
             facts.proteins = Some(f.proteins);
@@ -339,12 +422,7 @@ pub fn inspect(path: &str) -> FileFacts {
             facts.warnings = f.warnings;
         })
     } else {
-        let mzml = if suffix_start(&name, ".gz").is_some() {
-            content::mzml_gz(file, &name)
-        } else {
-            content::mzml(file, &name)
-        };
-        mzml.map(|m| {
+        content::mzml(file, &name).map(|m| {
             facts.spectra = m.spectra;
             facts.problem = m.problem;
         })
@@ -355,7 +433,7 @@ pub fn inspect(path: &str) -> FileFacts {
     facts
 }
 
-/// [`inspect`] of each path, in the order given, several at once (a `.mzML.gz` is decompressed to be checked).
+/// [`inspect`] of each path, in the order given, several at once.
 pub fn inspect_all(paths: &[String]) -> Vec<FileFacts> {
     let workers = std::thread::available_parallelism()
         .map_or(1, |n| n.get())
@@ -377,13 +455,11 @@ pub fn inspect_all(paths: &[String]) -> Vec<FileFacts> {
     facts.into_iter().flatten().collect()
 }
 
-/// The bundled example: OpenMS' example run `share/OpenMS/examples/ID/Ecoli_MS2_small.mzML` (LTQ Orbitrap XL, CID,
-/// 139 MS2 spectra) and the E. coli K-12 proteins of OpenMS' `target_decoy_Ecoli_K12_TaxID_83333.proteomes.fasta`
-/// without its decoys (ProSE generates its own).
-pub const EXAMPLE_RUN: &str = "Ecoli_MS2_small.mzML";
-pub const EXAMPLE_FASTA: &str = "Ecoli_K12_proteome.fasta";
-/// The run is searched twice, as two replicates, under these names.
-pub const EXAMPLE_NAMES: [&str; 2] = ["Ecoli_1.mzML", "Ecoli_2.mzML"];
+/// The bundled example: OpenMS' OpenNuXL test data (`src/tests/topp/OpenNuXL_1_input.mzML`, a few MS2 spectra of
+/// a UV cross-linked protein–RNA sample, and `OpenNuXL_1_input.fasta`, its proteins, targets only: OpenNuXL
+/// generates the decoys).
+pub const EXAMPLE_RUN: &str = "OpenNuXL_1_input.mzML";
+pub const EXAMPLE_FASTA: &str = "OpenNuXL_1_input.fasta";
 
 /// Where the bundled example is. In development (no bundle yet) the folder in the source tree.
 pub fn bundled_example(resource_dir: Option<&Path>) -> Option<PathBuf> {
@@ -403,66 +479,16 @@ pub struct ExampleFiles {
     pub database: String,
 }
 
-/// Whether `link` already is the example run under its name: a symbolic link to `run` (Unix), or a file
-/// of the run's size (Windows: a hard link or copy of it, see `link_example`).
-fn is_example_link(link: &Path, run: &Path) -> bool {
-    if cfg!(unix) {
-        fs::read_link(link).ok().as_deref() == Some(run) && link.is_file()
-    } else {
-        let size = |p: &Path| {
-            fs::symlink_metadata(p)
-                .ok()
-                .filter(|m| m.is_file())
-                .map(|m| m.len())
-        };
-        size(link).is_some() && size(link) == size(run)
-    }
-}
-
-/// The bundled example run under another name. Windows has no symbolic links without a privilege: a
-/// hard link, or, where the app's data is on another drive than the app, a copy of the bundled file (the
-/// app's own example, 1.2 MB; the user's files are never copied).
-fn link_example(run: &Path, link: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    return std::os::unix::fs::symlink(run, link);
-    #[cfg(not(unix))]
-    return fs::hard_link(run, link).or_else(|_| fs::copy(run, link).map(|_| ()));
-}
-
-/// The example's inputs: the bundled run under its two names, as links in `<data_dir>/example/`
-/// (the app's own folder; nothing is written beside the bundle), and the bundled FASTA. Other files there
-/// (the links of an earlier version's example) are removed.
-pub fn example_files(source_dir: &Path, data_dir: &Path) -> Result<ExampleFiles, String> {
+/// The example's inputs: the bundled run and FASTA, by their paths in the app's resources (read where they are,
+/// as any input; nothing is written).
+pub fn example_files(source_dir: &Path) -> Result<ExampleFiles, String> {
     let run = source_dir.join(EXAMPLE_RUN);
     let fasta = source_dir.join(EXAMPLE_FASTA);
     if !run.is_file() || !fasta.is_file() {
         return Err("The example is not part of this installation.".to_string());
     }
-    let dir = data_dir.join("example");
-    fs::create_dir_all(&dir)
-        .map_err(|e| format!("The example folder {} cannot be made ({e}).", dir.display()))?;
-    // (the folder is the app's: what is not this example's is an earlier example's link or copy)
-    for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
-        let stale = !EXAMPLE_NAMES.iter().any(|n| entry.file_name() == *n);
-        if stale && entry.file_type().is_ok_and(|t| !t.is_dir()) {
-            let _ = fs::remove_file(entry.path());
-        }
-    }
-    let mut spectra = Vec::new();
-    for name in EXAMPLE_NAMES {
-        let link = dir.join(name);
-        if !is_example_link(&link, &run) {
-            if fs::symlink_metadata(&link).is_ok() {
-                fs::remove_file(&link).map_err(|e| format!("{} ({e})", link.display()))?;
-            }
-            link_example(&run, &link).map_err(|e| {
-                format!("The example cannot be prepared in {} ({e}).", dir.display())
-            })?;
-        }
-        spectra.push(link.to_string_lossy().into_owned());
-    }
     Ok(ExampleFiles {
-        spectra,
+        spectra: vec![run.to_string_lossy().into_owned()],
         database: fasta.to_string_lossy().into_owned(),
     })
 }

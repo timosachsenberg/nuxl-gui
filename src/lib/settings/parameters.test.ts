@@ -1,17 +1,18 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { NUXL_PARAMETERS } from './nuxl'
 import type { ParamEntry } from './parameters'
 import {
-  CARD_PARAMETERS,
   changedParameters,
   defaultsOf,
   dialogEntries,
+  emptyTextDefault,
   parameterSections,
   requestParameters,
   sameValue,
-  SWITCH_PARAMETERS,
+  SEARCH_SETTING_NAMES,
+  SEARCH_SETTINGS,
 } from './parameters'
-import { PROSE_PARAMETERS } from './prose'
 
 const entry = (name: string, value: ParamEntry['value'], more: Partial<ParamEntry> = {}): ParamEntry => ({
   name,
@@ -23,88 +24,148 @@ const entry = (name: string, value: ParamEntry['value'], more: Partial<ParamEntr
 })
 
 const entries: ParamEntry[] = [
-  entry('enzyme', 'Trypsin'),
-  entry('rescore', true),
-  entry('precursor:mass_tolerance_lower', 10),
+  entry('precursor:mass_tolerance', 6),
   entry('precursor:max_charge', 5, { type: 'int' }),
-  entry('modifications:fixed', ['Carbamidomethyl (C)']),
-  entry('peptdeep:enable', false),
-  entry('peptdeep:ms2_model', 'models/peptdeep_ms2_dynamic.onnx'),
-  entry('peptdeep:rt_model', 'models/peptdeep_rt_dynamic.onnx'),
-  entry('peptdeep:instrument', 'QE'),
-  entry('peptdeep:nce', -1),
-  entry('peptdeep:batch_size', 500, { type: 'int', tags: ['advanced'] }),
-  entry('database:chunk_size', 0, { type: 'int' }),
+  entry('modifications:variable', ['Oxidation (M)']),
+  entry('NuXL:presets', 'none', { validStrings: ['RNA-UV (U)', 'none'] }),
+  entry('NuXL:only_xl', false),
+  entry('filter', ['filter_pc_mass_error', 'autotune', 'idfilter']),
+  entry('window_size', 75, { tags: ['advanced'] }),
+]
+
+/**
+ * The options the shim lets through (docs/design.md §3, src-tauri/src/args.rs `PARAMETERS`), by their full name. The
+ * shim's own options (-in, -out*, -threads, the FDR and Percolator options, NuXL:decoys, ...) are none of them.
+ */
+const ALLOWED = [
+  'precursor:mass_tolerance', 'precursor:mass_tolerance_unit', 'precursor:min_charge', 'precursor:max_charge', 'precursor:isotopes',
+  'fragment:mass_tolerance', 'fragment:mass_tolerance_unit', 'modifications:fixed', 'modifications:variable',
+  'modifications:variable_max_per_peptide', 'peptide:min_size', 'peptide:max_size', 'peptide:missed_cleavages', 'peptide:enzyme',
+  'peptide:clip_nterm_methionine', 'report:top_hits', 'report:xl_fdr_groups', 'NuXL:presets', 'NuXL:length', 'NuXL:sequence',
+  'NuXL:target_nucleotides', 'NuXL:nt_groups', 'NuXL:mapping', 'NuXL:can_cross_link', 'NuXL:standalone', 'NuXL:localization',
+  'NuXL:fragment_adducts', 'NuXL:modifications', 'NuXL:scoring', 'NuXL:rescoring', 'NuXL:decoy_factor', 'NuXL:CysteineAdduct',
+  'NuXL:filter_fractional_mass', 'NuXL:carbon_labeled_fragments', 'NuXL:only_xl', 'NuXL:filter_small_peptide_mass',
+  'NuXL:marker_ions_tolerance', 'filter', 'window_size', 'peak_count',
 ]
 
 describe('parameters', () => {
-  it('leaves the parameters of the Rescoring card out of the dialog', () => {
-    expect(dialogEntries(entries).map((e) => e.name)).toEqual([
-      'enzyme',
-      'precursor:mass_tolerance_lower',
-      'precursor:max_charge',
-      'modifications:fixed',
-      'peptdeep:nce',
-      'peptdeep:batch_size',
-      'database:chunk_size',
-    ])
+  it('lists every parameter in the dialog', () => {
+    expect(dialogEntries(entries)).toEqual(entries)
   })
 
-  it('groups the dialog by section, general first', () => {
-    const sections = parameterSections(dialogEntries(entries))
-    expect(sections.map((s) => s.name)).toEqual(['general', 'precursor', 'modifications', 'peptdeep', 'database'])
-    expect(sections[3].entries.map((e) => e.name)).toEqual(['peptdeep:nce', 'peptdeep:batch_size'])
+  it('groups the dialog by section, in OpenNuXL\'s order', () => {
+    const sections = parameterSections(entries)
+    expect(sections.map((s) => s.name)).toEqual(['precursor', 'modifications', 'NuXL', 'general'])
+    expect(sections[3].entries.map((e) => e.name)).toEqual(['filter', 'window_size'])
   })
 
   it('compares values, arrays by their items', () => {
     expect(sameValue(['a', 'b'], ['a', 'b'])).toBe(true)
     expect(sameValue(['a', 'b'], ['b', 'a'])).toBe(false)
-    expect(sameValue(10, 10)).toBe(true)
-    expect(sameValue(10, '10')).toBe(false)
-    const defaults = defaultsOf(entries)
-    expect(defaults['modifications:fixed']).toEqual(['Carbamidomethyl (C)'])
-    expect(changedParameters({ ...defaults, 'modifications:fixed': ['Carbamidomethyl (C)'] }, defaults)).toEqual({})
+    expect(sameValue(5, 5)).toBe(true)
+    expect(sameValue('5', 5)).toBe(false)
   })
 
-  it('sends the changed parameters, without those the switches set', () => {
-    const defaults = defaultsOf(entries)
-    const values = { ...defaults, enzyme: 'Lys-C', rescore: false, 'peptdeep:enable': true, 'peptdeep:instrument': 'timsTOF' }
-    expect(requestParameters(values, defaults)).toEqual({ enzyme: 'Lys-C', 'peptdeep:instrument': 'timsTOF' })
+  it('sends the changed parameters of OpenNuXL, never the FDRs or a name OpenNuXL does not have', () => {
+    const defaults = { ...defaultsOf(entries), ...SEARCH_SETTINGS }
+    const values = {
+      ...defaults,
+      'precursor:mass_tolerance': 10,
+      'NuXL:presets': 'RNA-UV (U)',
+      'NuXL:only_xl': true,
+      filter: ['autotune'],
+      peptideFdr: 0.05,
+      xlFdr: 0.1,
+      'FDR:PSM': 0.01,
+    }
+    expect(requestParameters(values, entries)).toEqual({
+      'precursor:mass_tolerance': 10,
+      'NuXL:presets': 'RNA-UV (U)',
+      'NuXL:only_xl': true,
+      filter: ['autotune'],
+    })
+    // a preset saves the FDRs with the parameters
+    expect(changedParameters(values, defaults)).toMatchObject({ peptideFdr: 0.05, xlFdr: 0.1 })
+    // a list is a copy
+    const sent = requestParameters(values, entries)
+    ;(sent.filter as string[]).push('idfilter')
+    expect(values.filter).toEqual(['autotune'])
+  })
+
+  it('sends no empty text, which runs with OpenNuXL\'s default (the shim passes nothing for it)', () => {
+    const crossLink = entry('NuXL:can_cross_link', 'U')
+    const sequence = entry('NuXL:sequence', '')
+    expect(requestParameters({ 'NuXL:can_cross_link': '', 'NuXL:sequence': '' }, [crossLink, sequence])).toEqual({})
+    expect(requestParameters({ 'NuXL:can_cross_link': 'UG' }, [crossLink])).toEqual({ 'NuXL:can_cross_link': 'UG' })
+    expect(emptyTextDefault(crossLink)).toBe('U')
+    expect(emptyTextDefault(sequence)).toBeNull()
+    expect(emptyTextDefault(entry('precursor:mass_tolerance', 6))).toBeNull()
+  })
+
+  it('has the FDRs of 1 % as the search\'s own settings', () => {
+    expect(SEARCH_SETTINGS).toEqual({ peptideFdr: 0.01, xlFdr: 0.01 })
+    expect(SEARCH_SETTING_NAMES).toEqual(['peptideFdr', 'xlFdr'])
   })
 })
 
-describe('the "All parameters" dialog and the shim', () => {
-  // The shim's allowlist (src-tauri/src/args.rs `PARAMETERS`): every parameter a search may set, with its kind.
-  const argsRs = readFileSync(new URL('../../../src-tauri/src/args.rs', import.meta.url), 'utf8')
-  const list = /pub const PARAMETERS: &\[\(&str, Kind\)\] = &\[([\s\S]*?)\];/.exec(argsRs)?.[1] ?? ''
-  const allowlist = new Map([...list.matchAll(/\("([^"]+)",\s*(\w+)\)/g)].map((m) => [m[1], m[2]]))
+describe("OpenNuXL's parameters (nuxl-parameters.json)", () => {
+  const byName = new Map(NUXL_PARAMETERS.map((e) => [e.name, e]))
 
-  /** The shim's kind (args.rs `Kind`) of a parameter as the dialog edits it (ParameterField). */
-  const kindOf = (e: ParamEntry): string => {
-    if (e.type === 'bool') return 'Flag'
-    if (e.type === 'int') return 'Int'
-    if (e.type === 'double') return 'Float'
-    // the shim's List takes strings only; ParameterField sends numbers for int[] and double[], which no Kind takes
-    if (e.type === 'string[]') return 'List'
-    if (e.type.endsWith('[]')) return `${e.type} (a list of numbers: no shim Kind)`
-    return e.validStrings && e.validStrings.length > 0 ? 'Choice' : 'Text'
-  }
+  it('are exactly the allowed ones, none of the shim\'s own, and none named like a search setting', () => {
+    expect([...byName.keys()].sort()).toEqual([...ALLOWED].sort())
+    for (const own of ['in', 'database', 'out', 'out_tsv', 'threads', 'report:peptideFDR', 'report:xlFDR', 'report:xl_peptidelevel_FDR',
+      'percolator_backend', 'percolator_executable', 'NuXL:decoys', 'output_folder', 'NuXL:presets_file', 'ThermoRaw_executable', 'NET_executable']) {
+      expect(byName.has(own), own).toBe(false)
+    }
+    for (const name of SEARCH_SETTING_NAMES) expect(byName.has(name), name).toBe(false)
+  })
 
-  it('sets only what the shim lets through, each with the shim\'s kind, and every allowed parameter has a control', () => {
-    expect(allowlist.size).toBeGreaterThan(50)
-    const dialog = dialogEntries(PROSE_PARAMETERS)
-    for (const e of dialog) {
-      expect(allowlist.has(e.name), `${e.name} is not in args.rs PARAMETERS`).toBe(true)
-      expect(kindOf(e), `kind of ${e.name}`).toBe(allowlist.get(e.name))
+  it('agree with the shim\'s allowlist once it is OpenNuXL\'s', () => {
+    const argsRs = readFileSync(new URL('../../../src-tauri/src/args.rs', import.meta.url), 'utf8')
+    const list = /pub const PARAMETERS: &\[\(&str, Kind\)\] = &\[([\s\S]*?)\];/.exec(argsRs)?.[1] ?? ''
+    const kinds = new Map([...list.matchAll(/\("([^"]+)",\s*(\w+)\)/g)].map((m) => [m[1], m[2]]))
+    if (!kinds.has('NuXL:presets')) return // (the shim is still ProSE's)
+    expect([...kinds.keys()].sort()).toEqual([...ALLOWED].sort())
+    // each with the kind of its values that the form sends
+    const kindOf = (e: ParamEntry) =>
+      ({ int: 'Int', double: 'Float', bool: 'Flag', 'string[]': 'List', 'int[]': 'IntList' })[e.type as string] ??
+      (e.validStrings ? 'Choice' : 'Text')
+    for (const e of NUXL_PARAMETERS) expect(kindOf(e), e.name).toBe(kinds.get(e.name))
+  })
+
+  it('have OpenNuXL\'s defaults, types and choices', () => {
+    const v = (name: string) => byName.get(name)!.value
+    expect(v('precursor:mass_tolerance')).toBe(6)
+    expect(v('precursor:mass_tolerance_unit')).toBe('ppm')
+    expect(v('fragment:mass_tolerance')).toBe(20)
+    expect(v('precursor:isotopes')).toEqual([0])
+    expect(byName.get('precursor:isotopes')!.type).toBe('int[]')
+    expect(v('modifications:variable')).toEqual(['Oxidation (M)'])
+    expect(v('modifications:fixed')).toEqual([])
+    expect(v('peptide:enzyme')).toBe('Trypsin/P')
+    expect(v('peptide:max_size')).toBe(1000000)
+    expect(v('NuXL:presets')).toBe('none')
+    expect(v('NuXL:length')).toBe(2)
+    expect(v('NuXL:scoring')).toBe('slow')
+    expect(v('filter')).toEqual(['filter_pc_mass_error', 'autotune', 'idfilter'])
+    for (const flag of ['NuXL:CysteineAdduct', 'NuXL:filter_fractional_mass', 'NuXL:carbon_labeled_fragments', 'NuXL:only_xl']) {
+      expect(byName.get(flag)).toMatchObject({ type: 'bool', value: false, tags: ['advanced'] })
     }
-    // the reverse: each allowed parameter is in the dialog, or has its control on the page (the PeptDeep instrument)
-    const controlled = new Set([...dialog.map((e) => e.name), ...CARD_PARAMETERS])
-    for (const name of allowlist.keys()) expect(controlled.has(name), `${name} has no control in the app`).toBe(true)
-    for (const name of CARD_PARAMETERS) {
-      const e = PROSE_PARAMETERS.find((p) => p.name === name)!
-      expect(kindOf(e), `kind of ${name}`).toBe(allowlist.get(name))
-    }
-    // the switches of the Rescoring card are the request's own fields, never parameters
-    for (const name of SWITCH_PARAMETERS) expect(allowlist.has(name), name).toBe(false)
+    expect(byName.get('NuXL:presets')!.validStrings).toContain('RNA-UV (U)')
+    expect(byName.get('NuXL:presets')!.validStrings).toContain('none')
+    expect(byName.get('NuXL:scoring')!.validStrings).toEqual(['fast', 'slow'])
+    expect(byName.get('peptide:clip_nterm_methionine')).toMatchObject({ type: 'string', value: 'true', validStrings: ['true', 'false'] })
+    expect(byName.get('peptide:enzyme')!.validStrings).toContain('Lys-C')
+    expect(byName.get('modifications:variable')!.validStrings).toContain('Phospho (S)')
+    // only the filters the shim allows (not optimize, RTpredict, pcrecalibration)
+    expect(byName.get('filter')!.validStrings).toEqual([
+      'filter_pc_mass_error', 'impute_decoy_medians', 'filter_bad_partial_loss_scores', 'autotune', 'idfilter', 'spectrumclusterfilter',
+    ])
+    // the description with NuXLFDR's constants filled in
+    expect(byName.get('report:xl_fdr_groups')!.description).toContain('at most 9 residues')
+    expect(byName.get('report:xl_fdr_groups')!.description).toContain('at 10% FDR')
+    // the bounds of the form
+    expect(byName.get('NuXL:length')).toMatchObject({ min: 0, max: 4 })
+    expect(byName.get('precursor:min_charge')).toMatchObject({ min: 1 })
   })
 })

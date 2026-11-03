@@ -2,7 +2,7 @@
   // All PSMs of the protein in a table of their own (virtualized: a protein can have thousands),
   // best q-value first; a click opens the PSM in the PSM table.
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
-  import { massShift, peptideView } from '$lib/format/peptide'
+  import { peptideView } from '$lib/format/peptide'
   import { formatQValue, spectrumLabel } from '$lib/results/display'
   import { defaultFilters, sortRows } from '$lib/results/filters'
   import { proteinPsms, type ProteinDetail } from '$lib/results/protein'
@@ -29,7 +29,7 @@
   const columns = $derived<Column[]>([
     { id: 'peptide', header: 'Peptide', width: 'auto', align: 'left', sortKey: 'sequence', cell: () => peptideCell, cellTitle: (i) => m.tables.peptides.proforma[ps.peptide[i]] },
     { id: 'sample', header: 'Sample', width: 80, align: 'left', sortKey: 'sample', cell: (i) => m.samples[m.psmSample[i]].label },
-    { id: 'scan', header: 'Scan', width: 66, align: 'left', sortKey: 'nativeId', title: spectrumTitle, cell: (i) => spectrumLabel(ps.nativeId[i]), cellTitle: (i) => ps.nativeId[i] },
+    { id: 'scan', header: 'Spectrum', width: 72, align: 'left', sortKey: 'nativeId', title: spectrumTitle, cell: (i) => spectrumLabel(ps.nativeId[i]), cellTitle: (i) => ps.nativeId[i] },
     { id: 'charge', header: 'z', width: 34, align: 'right', sortKey: 'charge', title: 'Charge', cell: (i) => String(ps.charge[i]) },
     { id: 'error', header: 'Δ ppm', width: 72, align: 'right', sortKey: 'precursorErrorPpm', title: 'Precursor mass error', cell: (i) => signed(ps.precursorErrorPpm[i], 2) },
     { id: 'qValue', header: 'q-value', width: 80, align: 'right', sortKey: 'qValue', cell: (i) => formatQValue(ps.qValue[i]) },
@@ -37,9 +37,8 @@
 </script>
 
 {#snippet peptideCell(i: number)}
-  {@const shift = massShift(ps.deltaMass[i])}
-  {#if shift !== null}<span class="font-mono text-[12.5px] text-muted-foreground" title="Unassigned mass shift in Da. Its position on the peptide is not known.">[{shift}]?</span>{/if}<PeptideSequence
+  <PeptideSequence
     view={peptideView(m.tables.peptides, ps.peptide[i], fixedMods)} />
 {/snippet}
 
-<DataTable {label} {rows} {columns} {sort} {onSort} onRowClick={onOpenPsm} autoMinWidth={170} empty="No PSM of this protein passes the search's PSM FDR." />
+<DataTable {label} {rows} {columns} {sort} {onSort} onRowClick={onOpenPsm} autoMinWidth={170} empty="No PSM of this protein passes the search's FDRs." />

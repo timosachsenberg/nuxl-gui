@@ -1,10 +1,10 @@
-//! The front end's access to files: the search folder's files (scoped), what the New search page shows
-//! of an input (counts, never contents), and the bundled example.
+//! The front end's access to files: the search folder's files (scoped), the inputs' spectra (by byte range
+//! only), what the New search page shows of an input (counts, never contents), and the bundled example.
 
 mod common;
 
 use common::TempDir;
-use prose_desktop_lib::files::{
+use nuxl_desktop_lib::files::{
     example_files, inspect, read_search_file, recorded_database, ByteRange, ReadError,
 };
 use std::fs;
@@ -21,9 +21,9 @@ fn search_with(database: &str) -> (TempDir, std::path::PathBuf) {
     let tmp = TempDir::new("files");
     let searches = tmp.path().join("searches");
     let folder = searches.join("1-0");
-    fs::create_dir_all(folder.join("qpx")).unwrap();
+    fs::create_dir_all(folder.join("nuxl")).unwrap();
     fs::write(folder.join("inputs.json"), "[]").unwrap();
-    fs::write(folder.join("qpx/1__a.psm.parquet"), b"PAR1....PAR1").unwrap();
+    fs::write(folder.join("nuxl/1__a.idXML"), b"PAR1....PAR1").unwrap();
     fs::write(
         folder.join("database.json"),
         serde_json::json!({ "path": database }).to_string(),
@@ -61,7 +61,7 @@ fn a_file_of_the_search_folder_is_served() {
         b"[]"
     );
     assert_eq!(
-        read_search_file(&searches, "1-0", "qpx/1__a.psm.parquet", ByteRange::All).unwrap(),
+        read_search_file(&searches, "1-0", "nuxl/1__a.idXML", ByteRange::All).unwrap(),
         b"PAR1....PAR1"
     );
 }
@@ -69,11 +69,16 @@ fn a_file_of_the_search_folder_is_served() {
 #[test]
 fn a_missing_file_rejects_with_not_found_and_a_message() {
     let (_tmp, searches) = search_with("/nowhere/db.fasta");
-    let error =
-        read_search_file(&searches, "1-0", "qpx/quantms.pg.parquet", ByteRange::All).unwrap_err();
+    let error = read_search_file(
+        &searches,
+        "1-0",
+        "nuxl/1__a_1.0000_XLs.idXML",
+        ByteRange::All,
+    )
+    .unwrap_err();
     assert!(error.not_found);
     assert!(
-        error.message.contains("qpx/quantms.pg.parquet"),
+        error.message.contains("nuxl/1__a_1.0000_XLs.idXML"),
         "{}",
         error.message
     );
@@ -96,11 +101,11 @@ fn names_that_leave_the_folder_are_refused() {
     tmp.write("searches/secret.txt", "secret");
     for name in [
         "../secret.txt",
-        "qpx/../../secret.txt",
+        "nuxl/../../secret.txt",
         "./inputs.json",
-        "qpx/./1__a.psm.parquet",
+        "nuxl/./1__a.idXML",
         "",
-        "qpx",
+        "nuxl",
         "/etc/passwd",
     ] {
         assert!(
@@ -110,8 +115,8 @@ fn names_that_leave_the_folder_are_refused() {
     }
 }
 
-/// On Windows a search's inputs of one name are hard links in the folder while ProSE runs (removed
-/// when it ends): regular files inside the folder, which are still the user's and never served.
+/// On Windows a search's inputs of one name are hard links in the folder while OpenNuXL runs (removed
+/// when it ends): regular files inside the folder, which are still the user's and never served whole.
 #[test]
 fn the_inputs_hard_links_are_not_served() {
     let (tmp, searches) = search_with("/nowhere/db.fasta");
@@ -138,7 +143,7 @@ fn search_ids_that_are_paths_are_refused() {
         "",
         "..",
         "../secret",
-        "1-0/qpx",
+        "1-0/nuxl",
         "/tmp",
         "1-0.partial",
         "a b",
@@ -189,7 +194,7 @@ fn the_input_links_and_other_symlinks_cannot_lead_out_of_the_folder() {
 #[cfg(unix)]
 #[test]
 fn a_search_folder_that_is_a_link_is_refused_by_the_reader_and_by_history() {
-    use prose_desktop_lib::history;
+    use nuxl_desktop_lib::history;
     let (tmp, searches) = search_with("/nowhere/db.fasta");
     let folder = searches.join("1-0");
     fs::write(
@@ -200,7 +205,7 @@ fn a_search_folder_that_is_a_link_is_refused_by_the_reader_and_by_history() {
     let elsewhere = tmp.path().join("elsewhere");
     fs::rename(&folder, &elsewhere).unwrap();
     link(&elsewhere, &folder);
-    for name in ["inputs.json", "search.json", "qpx/1__a.psm.parquet"] {
+    for name in ["inputs.json", "search.json", "nuxl/1__a.idXML"] {
         let result = read_search_file(&searches, "1-0", name, ByteRange::All);
         assert!(refused(result.clone()), "{name}: {result:?}");
         assert!(result.unwrap_err().message.contains("not a folder"));
@@ -278,7 +283,7 @@ fn an_imported_search_never_reads_the_database_path_it_records() {
         "{err:?}"
     );
     // its own files are served as before
-    assert!(read_search_file(&searches, "1-0", "qpx/1__a.psm.parquet", ByteRange::All).is_ok());
+    assert!(read_search_file(&searches, "1-0", "nuxl/1__a.idXML", ByteRange::All).is_ok());
     // a record that cannot be read is not trusted either
     fs::write(&record, "{ broken").unwrap();
     assert!(refused(read_search_file(
@@ -338,7 +343,7 @@ fn the_database_path_is_read_from_database_json() {
 #[test]
 fn the_last_bytes_of_a_file_are_served() {
     let (_tmp, searches) = search_with("/nowhere/db.fasta");
-    let name = "qpx/1__a.psm.parquet";
+    let name = "nuxl/1__a.idXML";
     assert_eq!(
         read_search_file(&searches, "1-0", name, ByteRange::Tail(4)).unwrap(),
         b"PAR1"
@@ -354,7 +359,7 @@ fn the_last_bytes_of_a_file_are_served() {
     assert!(not_found(read_search_file(
         &searches,
         "1-0",
-        "qpx/x.psm.parquet",
+        "nuxl/x.idXML",
         ByteRange::Tail(4)
     )));
 }
@@ -362,7 +367,7 @@ fn the_last_bytes_of_a_file_are_served() {
 #[test]
 fn a_byte_range_of_a_file_is_served() {
     let (_tmp, searches) = search_with("/nowhere/db.fasta");
-    let name = "qpx/1__a.psm.parquet";
+    let name = "nuxl/1__a.idXML";
     let range = |offset, length| ByteRange::Range { offset, length };
     assert_eq!(
         read_search_file(&searches, "1-0", name, range(4, 4)).unwrap(),
@@ -383,7 +388,7 @@ fn a_byte_range_of_a_file_is_served() {
         name,
         range(0, (1 << 30) + 1)
     )));
-    // scoped as the whole file: an input link is no file of the search
+    // scoped as the whole file: an input link that inputs.json does not record is no file of the search
     assert!(refused(read_search_file(
         &searches,
         "1-0",
@@ -393,7 +398,7 @@ fn a_byte_range_of_a_file_is_served() {
     assert!(not_found(read_search_file(
         &searches,
         "1-0",
-        "qpx/x.psm.parquet",
+        "nuxl/x.idXML",
         range(0, 4)
     )));
 }
@@ -416,15 +421,106 @@ fn a_byte_range_is_tail_or_offset_and_length() {
     assert!(ByteRange::of(Some(1), Some(1), Some(2)).is_err());
 }
 
+/// A search whose inputs.json records the user's `a.mzML` (link `1__a.mzML`) and `b.mzML`, which is gone.
+fn search_with_inputs() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let (tmp, searches) = search_with("/nowhere/db.fasta");
+    let a = tmp.write("user/a.mzML", "<mzML>0123456789</mzML>");
+    let b = tmp.path().join("user/b.mzML");
+    let records = serde_json::json!([
+        { "id": "f0", "index": 0, "link": "1__a.mzML", "stem": "1__a", "name": "a.mzML", "path": a },
+        { "id": "f1", "index": 1, "link": "2__b.mzML", "stem": "2__b", "name": "b.mzML", "path": b },
+    ]);
+    fs::write(searches.join("1-0/inputs.json"), records.to_string()).unwrap();
+    (tmp, searches, a)
+}
+
+#[test]
+fn an_inputs_spectra_are_served_by_byte_range_through_its_link_or_its_path() {
+    let (_tmp, searches, a) = search_with_inputs();
+    let range = |offset, length| ByteRange::Range { offset, length };
+    // by the link's name (the link itself need not be there: on Windows it is gone, or never was) and by the
+    // recorded path
+    assert_eq!(
+        read_search_file(&searches, "1-0", "1__a.mzML", range(6, 4)).unwrap(),
+        b"0123"
+    );
+    assert_eq!(
+        read_search_file(&searches, "1-0", a.to_str().unwrap(), ByteRange::Tail(7)).unwrap(),
+        b"</mzML>"
+    );
+    // never whole: refused, not missing
+    for name in ["1__a.mzML", a.to_str().unwrap()] {
+        let err = read_search_file(&searches, "1-0", name, ByteRange::All).unwrap_err();
+        assert!(
+            !err.not_found && err.message.contains("in parts"),
+            "{err:?}"
+        );
+    }
+    // an input that is gone: not found (the PSM view shows the annotated peaks only)
+    assert!(not_found(read_search_file(
+        &searches,
+        "1-0",
+        "2__b.mzML",
+        range(0, 4)
+    )));
+    // another mzML, or a path inputs.json does not record: refused
+    let other = a.with_file_name("other.mzML");
+    fs::write(&other, "<mzML/>").unwrap();
+    assert!(refused(read_search_file(
+        &searches,
+        "1-0",
+        other.to_str().unwrap(),
+        range(0, 4)
+    )));
+    assert!(refused(read_search_file(
+        &searches,
+        "1-0",
+        "3__c.mzML",
+        range(0, 4)
+    )));
+}
+
+#[test]
+fn an_imported_search_never_reads_its_inputs() {
+    let (_tmp, searches, a) = search_with_inputs();
+    fs::write(
+        searches.join("1-0/search.json"),
+        r#"{"schema":1,"id":"1-0","imported":true}"#,
+    )
+    .unwrap();
+    for name in ["1__a.mzML", a.to_str().unwrap()] {
+        let err = read_search_file(&searches, "1-0", name, ByteRange::Tail(4)).unwrap_err();
+        assert!(
+            !err.not_found && err.message.contains("imported"),
+            "{err:?}"
+        );
+    }
+}
+
+#[test]
+fn a_recorded_input_that_is_no_mzml_is_not_served() {
+    let (tmp, searches) = search_with("/nowhere/db.fasta");
+    let secret = tmp.write("user/secret.txt", "secret");
+    let records = serde_json::json!([
+        { "id": "f0", "index": 0, "link": "1__a.mzML", "stem": "1__a", "name": "a.mzML", "path": secret },
+    ]);
+    fs::write(searches.join("1-0/inputs.json"), records.to_string()).unwrap();
+    assert!(refused(read_search_file(
+        &searches,
+        "1-0",
+        "1__a.mzML",
+        ByteRange::Tail(4)
+    )));
+    assert!(refused(read_search_file(
+        &searches,
+        "1-0",
+        secret.to_str().unwrap(),
+        ByteRange::Tail(4)
+    )));
+}
+
 /// An indexed mzML's end.
 const MZML_END: &str = "</run></mzML><indexListOffset>9</indexListOffset></indexedmzML>\n";
-
-fn gzip(bytes: &[u8]) -> Vec<u8> {
-    use std::io::Write;
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-    encoder.write_all(bytes).unwrap();
-    encoder.finish().unwrap()
-}
 
 #[test]
 fn an_mzml_shows_its_size_and_spectrum_count() {
@@ -438,16 +534,19 @@ fn an_mzml_shows_its_size_and_spectrum_count() {
     assert_eq!(facts.proteins, None);
     assert_eq!(facts.error, None);
     assert_eq!(facts.problem, None);
-    // compressed: decompressed to be counted and checked
-    let gz = tmp.path().join("run.mzML.gz");
-    fs::write(&gz, gzip(text.as_bytes())).unwrap();
+    // compressed: OpenNuXL cannot read it, and it is not read
+    let gz = tmp.write("run.mzML.gz", "not even gzip");
     let facts = inspect(gz.to_str().unwrap());
-    assert_eq!(facts.spectra, Some(2789));
-    assert_eq!((facts.error, facts.problem), (None, None));
+    assert_eq!((facts.spectra, facts.error), (None, None));
+    let problem = facts.problem.unwrap();
+    assert!(
+        problem.contains("OpenNuXL reads .mzML files only") && problem.contains("Unpack"),
+        "{problem}"
+    );
 }
 
 #[test]
-fn an_mzml_that_prose_cannot_search_has_a_problem() {
+fn an_mzml_that_opennuxl_cannot_search_has_a_problem() {
     let tmp = TempDir::new("inspect");
     let problem = |name: &str, contents: &[u8]| {
         let path = tmp.path().join(name);
@@ -473,13 +572,6 @@ fn an_mzml_that_prose_cannot_search_has_a_problem() {
     let path = tmp.path().join("long.mzML");
     fs::write(&path, &long).unwrap();
     assert_eq!(inspect(path.to_str().unwrap()).problem, None);
-    // compressed: not gzip, cut off, or an mzML cut off before it was compressed
-    assert!(problem("plain.mzML.gz", whole.as_bytes()).contains("is not gzip-compressed"));
-    let gz = gzip(whole.as_bytes());
-    assert!(
-        problem("cut.mzML.gz", &gz[..gz.len() - 12]).contains("cannot be decompressed to its end")
-    );
-    assert!(problem("cut-inside.mzML.gz", &gzip(cut)).contains("is incomplete"));
 }
 
 #[test]
@@ -494,7 +586,7 @@ fn a_fasta_shows_its_proteins_and_residues() {
 }
 
 #[test]
-fn a_fasta_that_prose_refuses_has_a_problem_and_what_it_may_mishandle_warnings() {
+fn a_fasta_that_fails_the_search_has_a_problem_and_what_may_surprise_a_warning() {
     let tmp = TempDir::new("inspect");
     for (name, contents, expected) in [
         ("empty.fasta", "", "empty.fasta is empty."),
@@ -527,9 +619,9 @@ fn a_fasta_that_prose_refuses_has_a_problem_and_what_it_may_mishandle_warnings()
         (facts.proteins, facts.residues, facts.problem),
         (Some(1), Some(3), None)
     );
-    // ProSE reads a byte-order mark and lowercase residues
+    // OpenMS reads a byte-order mark and lowercase residues
     assert!(facts.warnings.is_empty(), "{:?}", facts.warnings);
-    // an entry listed twice: searched once
+    // an entry listed twice: a warning
     let facts = inspect(
         tmp.write("twice.fasta", ">P1\nKK\n>P1\nKK\n")
             .to_str()
@@ -557,49 +649,27 @@ fn what_is_not_an_absolute_existing_file_has_an_error() {
 }
 
 #[test]
-fn the_example_is_two_named_links_to_the_bundled_run_and_its_fasta() {
+fn the_example_is_the_bundled_run_and_its_fasta_where_they_are() {
     let source = TempDir::new("example-src");
-    source.write("Ecoli_MS2_small.mzML", "<mzML/>");
-    source.write("Ecoli_K12_proteome.fasta", ">P\nK\n");
-    let data = TempDir::new("example-data");
-    // an earlier version's example links in the app's example folder
-    fs::create_dir_all(data.path().join("example")).unwrap();
-    fs::write(
-        data.path().join("example/DatabaseSuitability_1.mzML"),
-        "old",
-    )
-    .unwrap();
-    let example = example_files(source.path(), data.path()).unwrap();
-    assert!(!data
-        .path()
-        .join("example/DatabaseSuitability_1.mzML")
-        .exists());
-    let names: Vec<_> = example
-        .spectra
-        .iter()
-        .map(|p| {
-            Path::new(p)
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect();
-    assert_eq!(names, ["Ecoli_1.mzML", "Ecoli_2.mzML"]);
-    for p in &example.spectra {
-        assert!(Path::new(p).is_absolute());
-        assert_eq!(fs::read_to_string(p).unwrap(), "<mzML/>");
-    }
+    source.write("OpenNuXL_1_input.mzML", "<mzML/>");
+    source.write("OpenNuXL_1_input.fasta", ">P\nK\n");
+    let example = example_files(source.path()).unwrap();
     assert_eq!(
-        Path::new(&example.database).file_name().unwrap(),
-        "Ecoli_K12_proteome.fasta"
+        example.spectra,
+        [source
+            .path()
+            .join("OpenNuXL_1_input.mzML")
+            .to_string_lossy()]
     );
-    // again (the links exist): the same answer
-    let again = example_files(source.path(), data.path()).unwrap();
-    assert_eq!(again.spectra, example.spectra);
-    // no bundled example: an error, nothing made
+    assert_eq!(
+        Path::new(&example.database),
+        source.path().join("OpenNuXL_1_input.fasta")
+    );
+    // nothing was made beside them
+    assert_eq!(fs::read_dir(source.path()).unwrap().count(), 2);
+    // no bundled example: an error
     let empty = TempDir::new("example-none");
-    assert!(example_files(empty.path(), data.path()).is_err());
+    assert!(example_files(empty.path()).is_err());
 }
 
 #[test]
@@ -612,15 +682,17 @@ fn the_bundled_crap_has_the_counts_new_search_shows() {
 }
 
 #[test]
-fn the_bundled_example_is_the_e_coli_run_and_its_target_proteins() {
-    // the counts New search shows for the example (EmptyState.svelte, e2e/search.spec.ts)
+fn the_bundled_example_is_opennuxls_test_run_and_its_target_proteins() {
+    // the counts New search shows for the example
     let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/example");
-    let run = inspect(example.join("Ecoli_MS2_small.mzML").to_str().unwrap());
-    assert_eq!(run.spectra, Some(139));
-    let fasta_path = example.join("Ecoli_K12_proteome.fasta");
+    let run = inspect(example.join("OpenNuXL_1_input.mzML").to_str().unwrap());
+    assert_eq!((run.spectra, run.problem), (Some(20), None));
+    let fasta_path = example.join("OpenNuXL_1_input.fasta");
     let fasta = inspect(fasta_path.to_str().unwrap());
-    assert_eq!(fasta.proteins, Some(4136));
-    // targets only: ProSE makes the decoys
-    let text = fs::read_to_string(&fasta_path).unwrap();
-    assert!(!text.lines().any(|l| l.starts_with(">rev_")));
+    assert_eq!((fasta.proteins, fasta.problem), (Some(5), None));
+    // targets only: OpenNuXL makes the decoys
+    assert_eq!(
+        nuxl_desktop_lib::args::database_decoys(&fasta_path).unwrap(),
+        None
+    );
 }

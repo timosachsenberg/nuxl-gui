@@ -7,14 +7,15 @@
   // peptide's expander, the last new PSM's button.
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
   import { Button } from '$lib/components/ui/button'
-  import { massShift, peptideView } from '$lib/format/peptide'
-  import { formatCount, formatQValue, sampleHeader, spectrumLabel } from '$lib/results/display'
+  import { adductLabel, peptideView } from '$lib/format/peptide'
+  import { formatCount, formatQValue, sampleHeader, spectrumLabel, spectrumName } from '$lib/results/display'
   import { peptidePsms, type ProteinDetail } from '$lib/results/protein'
   import type { ResultsView } from '$lib/results/view.svelte'
   import { cn } from '$lib/utils'
   import ChevronRight from '@lucide/svelte/icons/chevron-right'
   import { tick } from 'svelte'
   import { signed } from '../results/cells'
+  import Marker from '../results/Marker.svelte'
 
   let {
     view,
@@ -62,6 +63,20 @@
   })
   const hasGroups = $derived(groups.some((g) => g.name !== null))
 
+  /**
+   * The width of each sample's count column: wider where its condition's name (over few samples: one condition
+   * "example" of one sample) would not fit in the group's columns (about 7 px a character of its bold xs text).
+   */
+  const sampleWidths = $derived.by(() => {
+    const out: number[] = []
+    for (const g of groups) {
+      const name = hasGroups && g.name ? Math.min(g.name.length, 16) * 7 + 12 : 0
+      for (let k = 0; k < g.size; k++) out.push(Math.max(sampleWidth, Math.ceil(name / g.size)))
+    }
+    return out
+  })
+  const samplesWidth = $derived(sampleWidths.reduce((a, b) => a + b, 0))
+
   /** "F2" next to the sample when the design has fractions. */
   const fractions = $derived(m.design.rows.some((r) => r.fraction > 1))
 
@@ -105,12 +120,12 @@
   const descriptionSpan = $derived(Math.min(nS, 6))
 
   /** "control 1 · F2 · scan 4711 · 2+ · Δ +0.6 ppm"; with a shift, the shift first (for the title). */
-  function describe(i: number, shift: string | null = null): string {
+  function describe(i: number): string {
     const parts: string[] = [m.samples[m.psmSample[i]].label]
     if (fractions) parts.push(`F${m.design.rows[ps.file[i]].fraction}`)
-    parts.push(`scan ${spectrumLabel(ps.nativeId[i])}`, `${ps.charge[i]}+`)
+    parts.push(spectrumName(ps.nativeId[i]), `${ps.charge[i]}+`)
     if (ps.precursorErrorPpm[i] === ps.precursorErrorPpm[i]) parts.push(`Δ ${signed(ps.precursorErrorPpm[i], 1)} ppm`)
-    return `${shift === null ? '' : `[${shift}]? `}${parts.join(' · ')}`
+    return parts.join(' · ')
   }
 
   const th = 'h-8 border-b px-2 text-right text-xs font-medium whitespace-nowrap text-muted-foreground'
@@ -122,7 +137,7 @@
 
 {#if detail.peptides.length === 0}
   <p class="py-8 text-center text-muted-foreground">
-    No peptide of this protein has a PSM at the search's PSM FDR.
+    No peptide of this protein has a PSM at the search's FDRs (peptides and cross-links).
   </p>
 {:else}
   <p class="mb-1.5 text-xs text-muted-foreground" data-testid="peptide-note">
@@ -139,24 +154,24 @@
   <div class="overflow-x-auto">
     <table
       class="w-full table-fixed border-separate border-spacing-0 text-[12.5px] tabular-nums"
-      style:min-width="{154 + sampleWidth * nS + 170}px"
+      style:min-width="{154 + samplesWidth + 170}px"
       aria-label="Peptides of the protein">
       <colgroup>
         <col />
         <col style:width="46px" />
         <col style:width="48px" />
         <col style:width="60px" />
-        {#each m.samples as s (s.index)}<col style:width="{sampleWidth}px" />{/each}
+        {#each m.samples as s, k (s.index)}<col style:width="{sampleWidths[k]}px" />{/each}
       </colgroup>
       <thead class="sticky top-0 z-10 bg-background">
         <tr>
           <th scope="col" rowspan={hasGroups ? 2 : 1} class={cn(th, 'text-left')}>Peptide</th>
           <th scope="col" rowspan={hasGroups ? 2 : 1} class={th} title="Position of the peptide's first residue in the protein, counting from 1">Start</th>
-          <th scope="col" rowspan={hasGroups ? 2 : 1} class={th} title="PSMs at the search's PSM FDR">PSMs</th>
+          <th scope="col" rowspan={hasGroups ? 2 : 1} class={th} title="PSMs at the search's FDRs: peptide PSMs at the peptide FDR, cross-link PSMs at the cross-link FDR">PSMs</th>
           <th scope="col" rowspan={hasGroups ? 2 : 1} class={th} title="Best PSM q-value">best q</th>
           {#if hasGroups}
             {#each groups as g, i (i)}
-              <th scope="colgroup" colspan={g.size} class="h-7 border-b border-l px-1 pt-1 text-center text-xs font-semibold text-foreground">{g.name ?? ''}</th>
+              <th scope="colgroup" colspan={g.size} class="h-7 truncate border-b border-l px-1 pt-1 text-center text-xs font-semibold text-foreground" title={g.name ?? undefined}>{g.name ?? ''}</th>
             {/each}
           {:else}
             {#each m.samples as s (s.index)}<th scope="col" class={th} title={s.label}>{s.label}</th>{/each}
@@ -190,7 +205,11 @@
                 class="flex max-w-full items-center gap-1 rounded-sm py-0.5 pr-1 text-left focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none">
                 <ChevronRight class={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} aria-hidden="true" />
                 <!-- a long peptide (ProForma text is longer) ends in an ellipsis; its title has all of it -->
-                <span class="min-w-0 truncate"><PeptideSequence view={peptideView(pt, e.peptide, fixedMods)} /></span><span class="sr-only">, {e.psms} PSMs</span>
+                <span class="min-w-0 truncate"><PeptideSequence view={peptideView(pt, e.peptide, fixedMods)} /></span>{#if pt.isXL[e.peptide]}<Marker
+                    text="XL"
+                    strong
+                    class="shrink-0"
+                    title="Cross-link{pt.adduct[e.peptide] ? ` with ${adductLabel(pt.adduct[e.peptide])}` : ''}" />{/if}<span class="sr-only">, {e.psms} PSMs</span>
               </button>
             </td>
             <td class={td} data-column="start" title={e.located ? `Residues ${e.spans.map((s) => `${s.start + 1}–${s.end}`).join(', ')}` : 'The search did not record where this peptide is in the sequence'}>
@@ -205,11 +224,10 @@
           </tr>
           {#if open}
             {#each psms.subarray(0, shown) as i (i)}
-              {@const shift = massShift(ps.deltaMass[i])}
               <!-- one line: the text takes the first columns (up to six), the q-value and the button what is right of them -->
               <tr data-testid="panel-psm" data-scan={spectrumLabel(ps.nativeId[i])} class="bg-subtle text-xs">
-                <td colspan={descriptionSpan} class="overflow-hidden border-b py-1 pr-2 pl-[34px] text-left text-ellipsis whitespace-nowrap" title={describe(i, shift)}>
-                  {#if shift !== null}<span class="font-mono text-muted-foreground">[{shift}]?</span>{' '}{/if}{describe(i)}
+                <td colspan={descriptionSpan} class="overflow-hidden border-b py-1 pr-2 pl-[34px] text-left text-ellipsis whitespace-nowrap" title={describe(i)}>
+                  {describe(i)}
                 </td>
                 <td colspan="2" class="border-b px-2 py-1 text-right whitespace-nowrap">{formatQValue(ps.qValue[i])}</td>
                 <td colspan={nS - descriptionSpan + 2} class="border-b px-2 py-1 text-left whitespace-nowrap">
@@ -218,7 +236,7 @@
                     id="{uid}-psm-{i}"
                     data-psm={i}
                     class="rounded-sm px-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                    aria-label="Open the PSM of scan {spectrumLabel(ps.nativeId[i])}"
+                    aria-label="Open the PSM of {spectrumName(ps.nativeId[i])}"
                     onclick={() => onOpenPsm(i)}>PSM ›</button>
                 </td>
               </tr>

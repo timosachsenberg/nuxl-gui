@@ -1,5 +1,5 @@
-// The ProSE tool the app runs (`tool_info`): asked once at start, for the rescoring card (whether it has
-// ONNX Runtime for PeptDeep) and the search's problem line (a tool that cannot be found).
+// The OpenNuXL tool the app runs (`tool_info`: its version and path): asked once at start, for the search's
+// problem line (a tool that cannot be found) and the results' versions.
 
 import { cpuCount, errorText, toolInfo, type ToolInfo } from '../desktop'
 

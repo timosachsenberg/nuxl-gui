@@ -13,7 +13,7 @@ export type Theme = 'light' | 'dark'
 export const THEME_PREFERENCES: readonly ThemePreference[] = ['system', 'light', 'dark']
 
 /** Where the preference is kept. */
-export const THEME_KEY = 'prose.theme'
+export const THEME_KEY = 'nuxl.theme'
 
 /** What the theme needs of localStorage (an in-memory one in the tests). */
 export type ThemeStorage = Pick<Storage, 'getItem' | 'setItem'>

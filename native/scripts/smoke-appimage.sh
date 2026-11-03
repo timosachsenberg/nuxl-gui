@@ -1,6 +1,6 @@
 #!/bin/bash
 # Smoke test of the AppImage: it runs with --appimage-extract-and-run from an empty environment (no sysroot,
-# no PROSE_BIN) under xvfb-run and searches the example with PeptDeep through WebDriver (e2e/appimage.smoke.ts).
+# no NUXL_TOOL) under xvfb-run and searches the example, with Percolator, through WebDriver (e2e/appimage.smoke.ts).
 #
 #   smoke-appimage.sh <AppImage> [--hide-openms <openms-build>]
 #
@@ -10,8 +10,8 @@
 # in CI from the runner (cargo install tauri-driver, webkit2gtk-driver). The AppImage itself does not inherit
 # their environment: tauri-driver starts e2e/appimage-app.sh, which clears it.
 #
-# --hide-openms: the bundled ProSE would find share/OpenMS and the PeptDeep models in the OpenMS source and
-# build tree first, by paths compiled into it (see bundle-prose.sh), and on the build machine those exist.
+# --hide-openms: the bundled OpenNuXL would find share/OpenMS (and its NUXL presets) in the OpenMS source and
+# build tree first, by paths compiled into it (see bundle-nuxl.sh), and on the build machine those exist.
 # The option renames them for the duration of the test (and back on exit), so the test sees what a user's
 # machine sees. The renamed paths, the build and source tree and the sysroot are passed to the test as
 # SMOKE_FORBIDDEN: no process of the AppImage may map a file below them.
@@ -19,8 +19,8 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SYSROOT=${TAURI_SYSROOT:-/scratch/sachsenb/tools/tauri-sysroot}
-if [ -d "$SYSROOT/usr/lib/x86_64-linux-gnu" ] && [ -z "${PROSE_IN_ENV:-}" ]; then
-  export PROSE_IN_ENV=1
+if [ -d "$SYSROOT/usr/lib/x86_64-linux-gnu" ] && [ -z "${NUXL_IN_ENV:-}" ]; then
+  export NUXL_IN_ENV=1
   exec "$ROOT/native/scripts/in-env.sh" "$ROOT/native/scripts/smoke-appimage.sh" "$@"
 fi
 die() { echo "error: $*" >&2; exit 1; }
@@ -80,11 +80,9 @@ if [ -n "$OPENMS_BUILD" ]; then
   [ -f "$cache" ] && [ -f "$header" ] || die "$OPENMS_BUILD is not an OpenMS build directory"
   macro() { sed -n "s/^#define $1 \"\(.*\)\"$/\1/p" "$header"; }
   src=$(sed -n 's/^CMAKE_HOME_DIRECTORY:[A-Z]*=//p' "$cache")
-  models=$(sed -n 's/^OPENMS_PEPTDEEP_MODEL_DIR:[A-Z]*=//p' "$cache")
   forbidden+=("$OPENMS_BUILD" "$src")
-  # the source's share/OpenMS (OPENMS_DATA_PATH), the downloaded models (below OPENMS_BINARY_PATH) and the
-  # build's tool registry
-  for path in "$(macro OPENMS_DATA_PATH)" "$models" "$(macro OPENMS_BUILD_TOOL_REGISTRY_PATH)"; do
+  # the source's share/OpenMS (OPENMS_DATA_PATH) and the build's tool registry
+  for path in "$(macro OPENMS_DATA_PATH)" "$(macro OPENMS_BUILD_TOOL_REGISTRY_PATH)"; do
     [ -n "$path" ] && [ -e "$path" ] || continue
     [ ! -e "$path.hidden-by-smoke" ] || die "$path.hidden-by-smoke exists (an earlier run did not restore it?)"
     mv "$path" "$path.hidden-by-smoke"
@@ -99,11 +97,11 @@ cd "$ROOT"
 # tauri-driver, which leaves no time to remove it: a TMPDIR of the test's own, removed on exit
 mkdir "$work/tmp"
 export TMPDIR=$work/tmp
-export PROSE_APPIMAGE=$APPIMAGE
+export NUXL_APPIMAGE=$APPIMAGE
 export E2E_APPLICATION=$ROOT/e2e/appimage-app.sh
 export SMOKE_FORBIDDEN
 SMOKE_FORBIDDEN=$(IFS=:; echo "${forbidden[*]}")
-unset PROSE_BIN
+unset NUXL_TOOL
 echo "smoke test of $APPIMAGE (forbidden: ${SMOKE_FORBIDDEN:-none})"
 # (no exec: the trap restores what was hidden)
 xvfb-run -a -s "-screen 0 1920x1080x24" npx wdio run e2e/wdio.conf.ts --spec "$ROOT/e2e/appimage.smoke.ts"

@@ -1,12 +1,12 @@
 #!/bin/bash
 # The application that tauri-driver starts for the AppImage smoke test (native/scripts/smoke-appimage.sh):
-# the AppImage in $PROSE_APPIMAGE, run with --appimage-extract-and-run (no FUSE needed) in an environment
+# the AppImage in $NUXL_APPIMAGE, run with --appimage-extract-and-run (no FUSE needed) in an environment
 # that keeps nothing of the development toolchain.
 #
 #   appimage-app.sh <data-home> [app arguments...]
 #
 # tauri-driver and WebKitWebDriver may run inside native/scripts/in-env.sh (the sysroot's WebKitWebDriver);
-# their environment (LD_LIBRARY_PATH, XDG_DATA_DIRS, GIO_EXTRA_MODULES, ... of the sysroot, PROSE_BIN) is
+# their environment (LD_LIBRARY_PATH, XDG_DATA_DIRS, GIO_EXTRA_MODULES, ... of the sysroot, NUXL_TOOL) is
 # not passed on: the AppImage starts from an empty environment with only the display, the user's basics,
 # the variables of the automation session (TAURI_AUTOMATION, TAURI_WEBVIEW_AUTOMATION,
 # WEBKIT_INSPECTOR_SERVER) and a plain PATH; on a host without libGLESv2.so.2 also LD_LIBRARY_PATH with
@@ -15,7 +15,7 @@
 set -euo pipefail
 home=$1
 shift
-appimage=${PROSE_APPIMAGE:?PROSE_APPIMAGE names the AppImage}
+appimage=${NUXL_APPIMAGE:?NUXL_APPIMAGE names the AppImage}
 
 keep=()
 kept=()

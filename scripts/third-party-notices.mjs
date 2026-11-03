@@ -4,7 +4,7 @@
 //   node scripts/third-party-notices.mjs
 //
 // - THIRD-PARTY-NOTICES.txt: the app's own licence, then the licences of
-//   - the Rust crates linked into the app: the normal dependencies of prose-desktop for this platform
+//   - the Rust crates linked into the app: the normal dependencies of nuxl-desktop for this platform
 //     (`cargo metadata --filter-platform`), with the licence files each crate ships;
 //   - the JavaScript packages bundled into the front end: those its code and CSS import (src/, not the
 //     tests), and their dependencies, with the licence files each package ships;
@@ -12,12 +12,11 @@
 //     (src/assets/fonts, their OFL texts);
 //   - the OpenMS logo of the top bar (src/assets/logo, the OpenMS Assets licence);
 //   identical licence texts are written once, after the list of what they cover.
-// - copyright: the app's licence in Debian's machine-readable format, the .deb's /usr/share/doc/prose/copyright
+// - copyright: the app's licence in Debian's machine-readable format, the .deb's /usr/share/doc/nuxl/copyright
 //   (tauri.conf.json, bundle.linux.deb.files).
 //
-// The ProSE tool's own libraries and data come with their licences in resources/prose/share/OpenMS/LICENSES and
-// the PeptDeep models' in resources/prose/share/OpenMS/models (native/scripts/bundle-prose.sh). No dependency:
-// Node and cargo.
+// OpenNuXL's and PercolatorAdapter's own libraries and data come with their licences in
+// resources/nuxl/share/OpenMS/LICENSES (native/scripts/bundle-nuxl.sh). No dependency: Node and cargo.
 
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -215,7 +214,8 @@ const logoList = logo()
 for (const name of ['tauri', 'tauri-plugin-dialog', 'serde', 'serde_json']) {
   if (!rust.some((c) => c.name === name)) throw new Error(`the crate ${name} is not among the app's dependencies`)
 }
-for (const name of ['svelte', 'bits-ui', '@tauri-apps/api', 'hyparquet', 'fflate', 'zstddec', 'fzstd', 'tailwindcss', '@fontsource-variable/inter']) {
+// (a few the app cannot be without: a list that lacks them was not read right)
+for (const name of ['svelte', 'bits-ui', '@tauri-apps/api', 'fflate', 'tailwindcss', '@fontsource-variable/inter']) {
   if (!js.some((p) => p.name === name)) throw new Error(`the package ${name} is not among the front end's`)
 }
 if (rust.length < 100) throw new Error(`only ${rust.length} crates: cargo metadata gave too little`)
@@ -223,18 +223,17 @@ const unlicensed = [...rust, ...js].filter((i) => i.files.length === 0 && !/MIT|
 if (unlicensed.length > 0) throw new Error(`no licence known for ${unlicensed.map((i) => i.name).join(', ')}`)
 
 const notices = [
-  'ProSE desktop: third-party notices',
+  'NuXL desktop: third-party notices',
   '',
-  'ProSE desktop is released under the licence below. It bundles the software listed after it, under their licences.',
-  'The ProSE tool and its libraries (resources/prose) come with their licences in resources/prose/share/OpenMS/LICENSES,',
-  "the PeptDeep models with AlphaPeptDeep's in resources/prose/share/OpenMS/models.",
-  'The example (resources/example) is OpenMS example data under the licence of ProSE desktop below: the run',
-  'Ecoli_MS2_small.mzML of share/OpenMS/examples/ID, and the E. coli K-12 proteins (TaxID 83333) of',
-  'share/OpenMS/examples/TOPPAS/data/Identification/target_decoy_Ecoli_K12_TaxID_83333.proteomes.fasta without its decoys.',
+  'NuXL desktop is released under the licence below. It bundles the software listed after it, under their licences.',
+  'OpenNuXL, PercolatorAdapter and their libraries (resources/nuxl) come with their licences in',
+  'resources/nuxl/share/OpenMS/LICENSES.',
+  'The example (resources/example) is OpenMS test data under the licence of NuXL desktop below: the run',
+  'OpenNuXL_1_input.mzML and its proteins, OpenNuXL_1_input.fasta, of src/tests/topp.',
   'OpenMS logo © OpenMS Inc., used with permission (the OpenMS Assets License, at the end).',
   '',
   RULE,
-  'ProSE desktop',
+  'NuXL desktop',
   RULE,
   '',
   licence,
@@ -247,11 +246,11 @@ const notices = [
 
 const debian = [
   'Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/',
-  'Upstream-Name: ProSE',
-  'Source: https://github.com/timosachsenberg/prose-gui',
-  'Comment: The software bundled with ProSE and its licences: /usr/lib/ProSE/resources/notices/THIRD-PARTY-NOTICES.txt',
-  ' (the Rust crates, JavaScript packages, fonts and OpenMS logo of the app), /usr/lib/ProSE/resources/prose/share/OpenMS/LICENSES',
-  ' (the ProSE tool and its libraries) and /usr/lib/ProSE/resources/prose/share/OpenMS/models (the PeptDeep models).',
+  'Upstream-Name: NuXL',
+  'Source: https://github.com/timosachsenberg/nuxl-gui',
+  'Comment: The software bundled with NuXL and its licences: /usr/lib/NuXL/resources/notices/THIRD-PARTY-NOTICES.txt',
+  ' (the Rust crates, JavaScript packages, fonts and OpenMS logo of the app) and',
+  ' /usr/lib/NuXL/resources/nuxl/share/OpenMS/LICENSES (OpenNuXL, PercolatorAdapter and their libraries).',
   '',
   'Files: *',
   'Copyright: OpenMS Inc. -- Eberhard Karls University Tuebingen, ETH Zurich, and Freie Universitaet Berlin 2002-present',

@@ -1,7 +1,6 @@
 /// <reference types="node" />
-// Test support: the example search folder of the pinned tool (results/fixtures/example; or another fixture of the
-// reader, as `suitability`, the web app's example, whose result has decoy proteins) and the result the session would
-// hold for it. Not part of the app.
+// Test support: the example search folder (results/fixtures/example: one input, OpenNuXL's test data; or another
+// fixture of the reader, as `runs`, three inputs) and the result the session would hold for it. Not part of the app.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -37,18 +36,19 @@ export async function exampleResult(folder: Record<string, Uint8Array>, id = '10
     id,
     createdAt: '2026-10-20T10:00:00.000Z',
     outcome: { ...read, seconds: 12.5 },
-    design: resolveDesign([input('Ecoli_1.mzML', { condition: 'a' }), input('Ecoli_2.mzML', { condition: 'b' })]),
-    // the example's PSM FDR (the run is too small for 1 %)
-    psmFdr: 0.02,
-    proteinFdr: 0.01,
+    design: resolveDesign(read.tables.files.map((path, k) => input(path.slice(path.lastIndexOf('/') + 1), { condition: k % 2 === 0 ? 'a' : 'b' }))),
+    // the peptides' FDR; OpenNuXL has no protein FDR
+    psmFdr: 0.01,
+    proteinFdr: 1,
     settings: {
-      parameters: { precursor_tolerance: 10 },
-      fixedMods: ['Carbamidomethyl (C)'],
-      database: 'human.fasta',
+      parameters: { 'precursor:mass_tolerance': 10, 'NuXL:presets': 'RNA-UV (U)' },
+      fixedMods: [],
+      database: 'OpenNuXL_1_input.fasta',
       rescore: true,
-      peptdeep: false,
       contaminants: true,
       presetId: 'example',
+      peptideFdr: 0.01,
+      xlFdr: 0.01,
     },
   }
 }

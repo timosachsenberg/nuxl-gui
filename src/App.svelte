@@ -14,7 +14,7 @@
   readHash()
   // the colour theme follows the system, or the user's choice (public/theme.js set it before the first paint)
   initTheme()
-  // the ProSE tool: its version and whether it has ONNX Runtime (the search form needs it)
+  // the OpenNuXL tool: its version and path (the search form says when it cannot be found)
   void loadTool()
   // finished searches are saved to History; the list is read
   initHistory()

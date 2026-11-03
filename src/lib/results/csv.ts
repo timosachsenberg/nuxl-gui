@@ -30,7 +30,7 @@ function field(text: string, isText: boolean): string {
  */
 export function toCsv(m: ResultModel, level: Level, rows: Uint32Array, columns: string[], filters: FilterState): string {
   const defs = expandColumns(m, level, columns).map((id) => columnDef(m, level, id)!)
-  const counts = peptideCounts(m, level === 'peptides' ? filters.maxQ : NaN)
+  const counts = peptideCounts(m, level === 'peptides' ? filters.maxQ : NaN, level === 'peptides' ? filters.maxXlQ : NaN)
   const lines: string[] = new Array(rows.length + 1)
   lines[0] = defs.map((d) => field(d.header, true)).join(',')
   for (let i = 0; i < rows.length; i++) {

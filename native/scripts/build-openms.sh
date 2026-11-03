@@ -1,13 +1,14 @@
 #!/bin/bash
-# Native (host toolchain) build of libOpenMS, the ProSE tool and the ProSE class tests.
+# Native (host toolchain) build of libOpenMS, OpenNuXL and PercolatorAdapter (OpenNuXL's rescoring), and
+# the tests of OpenNuXL.
 #
 #   build-openms.sh <openms-src> <build-dir>
 #
 # <openms-src> is any OpenMS checkout; <build-dir> is created if needed (an existing configured
 # directory is reconfigured in place, so the script is safe to re-run). It runs on the host
 # toolchain, outside native/scripts/in-env.sh. Environment overrides: JOBS (default 100),
-# VCPKG_BINARY_CACHE, VCPKG_MAX_CONCURRENCY (default 32), OPENMS_TARGETS (default: the library, ProSE
-# and the tests below; CI builds "OpenMS ProSE" only), VCPKG_INSTALL_OPTIONS (a CMake list, for
+# VCPKG_BINARY_CACHE, VCPKG_MAX_CONCURRENCY (default 32), OPENMS_TARGETS (default: the library, the two
+# tools and what their tests run, below; CI builds "OpenMS OpenNuXL PercolatorAdapter" only), VCPKG_INSTALL_OPTIONS (a CMake list, for
 # example --clean-after-build, which CI uses to save disk space), CC and CXX (CI: gcc-13; cl on
 # Windows), VCPKG_TRIPLET (default x64-linux-dynamic; CI: arm64-osx-dynamic-sysroot-vcrel on macOS,
 # x64-windows-static-md-release on Windows, as OpenMS's own CI), OPENMS_CMAKE_ARGS (more -D options,
@@ -33,7 +34,8 @@ TOOLCHAIN="$SRC/vcpkg/scripts/buildsystems/vcpkg.cmake"
 [ -f "$SRC/CMakeLists.txt" ] || { echo "error: $SRC is not an OpenMS checkout" >&2; exit 1; }
 [ -f "$TOOLCHAIN" ] || { echo "error: vcpkg toolchain missing: $TOOLCHAIN (submodule not checked out?)" >&2; exit 1; }
 
-# linuxbrew's binutils (as 2.36) cannot assemble ONNX Runtime's AVX-NE-CONVERT code: drop it from PATH.
+# linuxbrew's binutils (as 2.36, older than the toolchain's: they could not assemble ONNX Runtime's AVX code in the
+# ProSE build this script comes from): dropped from PATH, so that the toolchain's own are used.
 PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v 'linuxbrew' | paste -sd: -)
 export PATH
 
@@ -43,7 +45,8 @@ BINCACHE=$(native "$(cd "$BINCACHE" && pwd -P)")
 export VCPKG_BINARY_SOURCES="clear;files,$BINCACHE,readwrite"
 export VCPKG_MAX_CONCURRENCY=${VCPKG_MAX_CONCURRENCY:-32}
 
-# Thermo RAW is off because its bridge needs dotnet; OpenTIMS is off because the app does not read .d files.
+# Thermo RAW is off because its bridge needs dotnet (the app searches mzML only); OpenTIMS is off because the app
+# does not read .d files; ONNX Runtime is off: OpenNuXL predicts nothing with it (PeptDeep is ProSE's).
 # The update check is off: OpenMS tools otherwise contact openms-update.cs.uni-tuebingen.de once a day (the app has no
 # network access at run time; the app also sets OPENMS_DISABLE_UPDATE_CHECK for the tool, src-tauri/src/tool.rs).
 # shellcheck disable=SC2086 # OPENMS_CMAKE_ARGS: options, split at spaces
@@ -52,8 +55,7 @@ cmake -G Ninja -S "$SRC" -B "$BUILD" \
   -DOPENMS_USE_VCPKG=ON \
   -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
   -DVCPKG_TARGET_TRIPLET="$TRIPLET" \
-  -DVCPKG_MANIFEST_FEATURES=onnxruntime \
-  -DWITH_ONNX=ON \
+  -DWITH_ONNX=OFF \
   -DWITH_GUI=OFF \
   -DWITH_THERMO_RAW=OFF \
   -DWITH_OPENTIMS=OFF \
@@ -70,12 +72,9 @@ if [ "${OPENMS_CONFIGURE_ONLY:-}" = 1 ]; then
   exit 0
 fi
 
-# FileInfo, ParquetDiff and FuzzyDiff are what the TOPP_ProSE tests run to inspect and compare outputs;
-# without them those tests report "Not Run". PeptDeepLibraryPredictor_test is part of the PeptDeep set, the
-# QPX tests check the QPX Parquet output the app reads.
-TARGETS=${OPENMS_TARGETS:-OpenMS ProSE FileInfo ParquetDiff FuzzyDiff \
-  ProSEAlgorithm_test PeptDeepInference_test PeptDeepRescoring_test PeptDeepLibraryPredictor_test \
-  OpenSearchModificationAnalysis_test Percolator_test \
-  QPXFile_test QPXCollectionExport_test QPXValueValidation_test QPXIdentity_test ArrowIOHelpers_test}
+# OpenNuXL rescores through PercolatorAdapter (File::findSiblingTOPPExecutable: beside it in bin/), with the
+# Percolator built into OpenMS. FuzzyDiff is what the TOPP_OpenNuXL tests compare the outputs with; without it
+# those tests report "Not Run". Percolator_test checks the built-in Percolator.
+TARGETS=${OPENMS_TARGETS:-OpenMS OpenNuXL PercolatorAdapter FuzzyDiff Percolator_test}
 # shellcheck disable=SC2086 # a list of targets
 cmake --build "$BUILD" -j "$JOBS" --target $TARGETS

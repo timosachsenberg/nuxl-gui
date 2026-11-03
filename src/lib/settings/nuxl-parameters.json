@@ -1,0 +1,444 @@
+[
+ {
+  "name": "precursor:mass_tolerance",
+  "value": 6,
+  "type": "double",
+  "description": "Precursor mass tolerance (+/- around precursor m/z).",
+  "tags": []
+ },
+ {
+  "name": "precursor:mass_tolerance_unit",
+  "value": "ppm",
+  "type": "string",
+  "description": "Unit of precursor mass tolerance.",
+  "tags": [],
+  "validStrings": [
+   "ppm",
+   "Da"
+  ]
+ },
+ {
+  "name": "precursor:min_charge",
+  "value": 2,
+  "type": "int",
+  "description": "Minimum precursor charge to be considered.",
+  "tags": []
+ },
+ {
+  "name": "precursor:max_charge",
+  "value": 5,
+  "type": "int",
+  "description": "Maximum precursor charge to be considered.",
+  "tags": []
+ },
+ {
+  "name": "precursor:isotopes",
+  "value": [
+   0
+  ],
+  "type": "int[]",
+  "description": "Corrects for mono-isotopic peak misassignments. (E.g.: 1 = prec. may be misassigned to first isotopic peak).",
+  "tags": []
+ },
+ {
+  "name": "fragment:mass_tolerance",
+  "value": 20,
+  "type": "double",
+  "description": "Fragment mass tolerance (+/- around fragment m/z).",
+  "tags": []
+ },
+ {
+  "name": "fragment:mass_tolerance_unit",
+  "value": "ppm",
+  "type": "string",
+  "description": "Unit of fragment mass tolerance.",
+  "tags": [],
+  "validStrings": [
+   "ppm",
+   "Da"
+  ]
+ },
+ {
+  "name": "modifications:fixed",
+  "value": [],
+  "type": "string[]",
+  "description": "Fixed modifications, specified using UniMod (www.unimod.org) terms, e.g. 'Carbamidomethyl (C)'.",
+  "tags": []
+ },
+ {
+  "name": "modifications:variable",
+  "value": [
+   "Oxidation (M)"
+  ],
+  "type": "string[]",
+  "description": "Variable modifications, specified using UniMod (www.unimod.org) terms, e.g. 'Oxidation (M)'",
+  "tags": []
+ },
+ {
+  "name": "modifications:variable_max_per_peptide",
+  "value": 2,
+  "type": "int",
+  "description": "Maximum number of residues carrying a variable modification per candidate peptide.",
+  "tags": []
+ },
+ {
+  "name": "peptide:min_size",
+  "value": 6,
+  "type": "int",
+  "description": "Minimum size a peptide must have after digestion to be considered in the search.",
+  "tags": [
+   "advanced"
+  ]
+ },
+ {
+  "name": "peptide:max_size",
+  "value": 1000000,
+  "type": "int",
+  "description": "Maximum size a peptide may have after digestion to be considered in the search.",
+  "tags": [
+   "advanced"
+  ]
+ },
+ {
+  "name": "peptide:missed_cleavages",
+  "value": 2,
+  "type": "int",
+  "description": "Number of missed cleavages.",
+  "tags": []
+ },
+ {
+  "name": "peptide:enzyme",
+  "value": "Trypsin/P",
+  "type": "string",
+  "description": "The enzyme used for peptide digestion.",
+  "tags": [],
+  "validStrings": [
+   "2-iodobenzoate",
+   "Alpha-lytic protease",
+   "glutamyl endopeptidase",
+   "proline endopeptidase",
+   "elastase-trypsin-chymotrypsin",
+   "Clostripain/P",
+   "cyanogen-bromide",
+   "PepsinA + P",
+   "iodosobenzoate",
+   "Asp-N/B",
+   "staphylococcal protease/D",
+   "proline-endopeptidase/HKR",
+   "Glu-C+P",
+   "no cleavage",
+   "Trypsin",
+   "Arg-C",
+   "Asp-N_ambic",
+   "unspecific cleavage",
+   "Trypsin/P",
+   "Chymotrypsin",
+   "V8-DE",
+   "Chymotrypsin/P",
+   "Arg-C/P",
+   "CNBr",
+   "Asp-N",
+   "Formic_acid",
+   "Lys-C",
+   "Lys-N",
+   "V8-E",
+   "Lys-C/P",
+   "PepsinA",
+   "leukocyte elastase",
+   "TrypChymo"
+  ]
+ },
+ {
+  "name": "peptide:clip_nterm_methionine",
+  "value": "true",
+  "type": "string",
+  "description": "Also search protein N-terminal peptides after removal of their initial methionine (the form with the methionine is still searched). Generated decoys keep the initial methionine, so that targets and decoys gain the same peptides. Set false for the previous search space.",
+  "tags": [],
+  "validStrings": [
+   "true",
+   "false"
+  ]
+ },
+ {
+  "name": "report:top_hits",
+  "value": 1,
+  "type": "int",
+  "description": "Maximum number of top scoring hits per spectrum that are reported.",
+  "tags": [
+   "advanced"
+  ]
+ },
+ {
+  "name": "report:xl_fdr_groups",
+  "value": "auto",
+  "type": "string",
+  "description": "Separate FDR group for short cross-links (at most 9 residues, nucleic acid adduct of at least 2 nucleotides). They carry little sequence-specific fragment evidence next to their adduct, so with one FDR over all cross-links far more of the short ones are false. In their own group, the FDR of the short and of the other cross-links is each held at report:xlFDR (annotated as NuXL:fdr_group). 'auto': only if the short cross-links have at least 10 decoys at 10% FDR over all cross-links, enough to estimate their own FDR. 'on': whenever the short and the other cross-links both have decoys. 'off': one FDR over all cross-links.",
+  "tags": [],
+  "validStrings": [
+   "auto",
+   "on",
+   "off"
+  ]
+ },
+ {
+  "name": "NuXL:presets",
+  "value": "none",
+  "type": "string",
+  "description": "Set precursor and fragment adducts from presets (recommended). Custom presets can be defined in a 'nuxl_presets.json' file placed in the share/OpenMS/NUXL/ directory or specified via NuXL:presets_file.",
+  "tags": [],
+  "validStrings": [
+   "RNA-UV (U)",
+   "RNA-UV (UCGA)",
+   "RNA-UV Extended (U)",
+   "RNA-UV Extended (UCGA)",
+   "RNA-UV (4SU)",
+   "RNA-UV Extended (4SU)",
+   "RNA-UV (6SG)",
+   "RNA-UV Extended (6SG)",
+   "DNA-UV",
+   "DNA-UV Extended",
+   "DNA-UV (BrU)",
+   "RNA-DEB",
+   "RNA-DEB Extended",
+   "DNA-DEB",
+   "DNA-DEB Extended",
+   "DNA-NM",
+   "DNA-NM Extended",
+   "RNA-NM",
+   "RNA-NM Extended",
+   "RNA-NM Extended (+H2O)",
+   "RNA-FA",
+   "RNA-FA Extended",
+   "DNA-FA",
+   "DNA-FA Extended",
+   "RNA-SDA",
+   "none"
+  ]
+ },
+ {
+  "name": "NuXL:length",
+  "value": 2,
+  "type": "int",
+  "description": "Oligonucleotide maximum length. 0 = disable search for NA variants.",
+  "tags": []
+ },
+ {
+  "name": "NuXL:sequence",
+  "value": "",
+  "type": "string",
+  "description": "Sequence to restrict the generation of oligonucleotide chains. (disabled for empty sequence).",
+  "tags": []
+ },
+ {
+  "name": "NuXL:target_nucleotides",
+  "value": [
+   "A=C10H14N5O7P",
+   "C=C9H14N3O8P",
+   "G=C10H14N5O8P",
+   "U=C9H13N2O9P"
+  ],
+  "type": "string[]",
+  "description": "format:  target nucleotide=empirical formula of nucleoside monophosphate \n e.g. A=C10H14N5O7P, ..., U=C10H14N5O7P, X=C9H13N2O8PS  where X represents e.g. tU \n or e.g. Y=C10H14N5O7PS where Y represents tG.",
+  "tags": []
+ },
+ {
+  "name": "NuXL:nt_groups",
+  "value": [],
+  "type": "string[]",
+  "description": "Restrict which nucleotides can cooccur in a precursor adduct to be able to search both RNA and DNA (format: 'AU CG').",
+  "tags": []
+ },
+ {
+  "name": "NuXL:mapping",
+  "value": [
+   "A->A",
+   "C->C",
+   "G->G",
+   "U->U"
+  ],
+  "type": "string[]",
+  "description": "format: source->target e.g. A->A, ..., U->U, U->X.",
+  "tags": []
+ },
+ {
+  "name": "NuXL:can_cross_link",
+  "value": "U",
+  "type": "string",
+  "description": "format: 'U' if only U forms cross-links. 'CATG' if C, A, G, and T form cross-links.",
+  "tags": []
+ },
+ {
+  "name": "NuXL:standalone",
+  "value": "",
+  "type": "string",
+  "description": "Target nucleotides that only form precursor adducts on their own (e.g. 's' for a cross-linker without nucleotide). They are never combined with other nucleotides and are not restricted by NuXL:sequence. They need a NuXL:target_nucleotides entry, NuXL:modifications and NuXL:fragment_adducts, and must be listed in NuXL:can_cross_link. Hits with only standalone nucleotides count as peptides, not cross-links (FDR and reports), and are not searched with NuXL:only_xl.",
+  "tags": [
+   "advanced"
+  ]
+ },
+ {
+  "name": "NuXL:localization",
+  "value": "fragments",
+  "type": "string",
+  "description": "How cross-links are localized. 'fragments': at the residue the shifted fragment ions point to. 'NHS': for cross-linkers attached through an NHS ester (e.g. SDA), by its chemistry among the residues the fragment ions can't tell apart: the free protein N-terminus, then lysine, then S/T/Y with a histidine within four residues, skipping residues with a modification other than a pure isotope substitution (e.g. Acetyl (K) or TMT6plex (K), but not Label:13C(6) (K)) and, if the enzyme cleaves after lysine, a C-terminal lysine unless the peptide ends the protein; otherwise unlocalized. Reports how the site was chosen in NuXL:localization_method and the supported residues in NuXL:localization_range.",
+  "tags": [
+   "advanced"
+  ],
+  "validStrings": [
+   "fragments",
+   "NHS"
+  ]
+ },
+ {
+  "name": "NuXL:fragment_adducts",
+  "value": [
+   "U:C9H10N2O5;U-H3PO4",
+   "U:C4H4N2O2;U'",
+   "U:C4H2N2O1;U'-H2O",
+   "U:C3O;C3O",
+   "U:C9H13N2O9P1;U",
+   "U:C9H11N2O8P1;U-H2O",
+   "U:C9H12N2O6;U-HPO3"
+  ],
+  "type": "string[]",
+  "description": "format: [target nucleotide]:[formula] or [precursor adduct]->[fragment adduct formula];[name]: e.g., 'U:C9H10N2O5;U-H3PO4' or 'U:U-H2O->C9H11N2O8P1;U-H2O'.",
+  "tags": []
+ },
+ {
+  "name": "NuXL:modifications",
+  "value": [
+   "U:",
+   "U:-H2O",
+   "U:-HPO3",
+   "U:-H3PO4"
+  ],
+  "type": "string[]",
+  "description": "format: empirical formula e.g U:  U:-H2O, ..., U:H2O+PO3.",
+  "tags": []
+ },
+ {
+  "name": "NuXL:scoring",
+  "value": "slow",
+  "type": "string",
+  "description": "Scoring algorithm used in prescoring (fast: total-loss only, slow: all losses).",
+  "tags": [],
+  "validStrings": [
+   "fast",
+   "slow"
+  ]
+ },
+ {
+  "name": "NuXL:rescoring",
+  "value": "none",
+  "type": "string",
+  "description": "Additional evidence per hit, after ProSE. 'features': annotate the score margin over the best hit of another peptide sequence (NuXL:delta_score, and NuXL:delta_score_class within cross-links or peptides; needs slow scoring) and a fragment ion likelihood learned from the confident hits of the run (NuXL:ion_llr, NuXL:ion_llr_shifted, NuXL:ion_explained, NuXL:ion_topk_observed; needs decoys), and pass them to Percolator. The hits of each half of the spectra are scored by the ion model trained on the other half. 'native': in addition, add the delta score of cross-links and 0.3 times NuXL:ion_llr to the score of every hit, which ranks the hits and is reported in the idXML, the TSV report and the FDR filtered outputs (needs decoys).",
+  "tags": [],
+  "validStrings": [
+   "none",
+   "features",
+   "native"
+  ]
+ },
+ {
+  "name": "NuXL:decoy_factor",
+  "value": 1,
+  "type": "int",
+  "description": "Ratio of decoys to targets.",
+  "tags": [
+   "advanced"
+  ]
+ },
+ {
+  "name": "NuXL:CysteineAdduct",
+  "value": false,
+  "type": "bool",
+  "description": "Use this flag if the +152 adduct is expected.",
+  "tags": [
+   "advanced"
+  ]
+ },
+ {
+  "name": "NuXL:filter_fractional_mass",
+  "value": false,
+  "type": "bool",
+  "description": "Use this flag to filter non-crosslinks by fractional mass.",
+  "tags": [
+   "advanced"
+  ]
+ },
+ {
+  "name": "NuXL:carbon_labeled_fragments",
+  "value": false,
+  "type": "bool",
+  "description": "Generate fragment shifts assuming full labeling of carbon (e.g. completely labeled U13).",
+  "tags": [
+   "advanced"
+  ]
+ },
+ {
+  "name": "NuXL:only_xl",
+  "value": false,
+  "type": "bool",
+  "description": "Only search cross-links and ignore non-cross-linked peptides.",
+  "tags": [
+   "advanced"
+  ]
+ },
+ {
+  "name": "NuXL:filter_small_peptide_mass",
+  "value": 600,
+  "type": "double",
+  "description": "Filter precursor that can only correspond to non-crosslinks by mass.",
+  "tags": [
+   "advanced"
+  ]
+ },
+ {
+  "name": "NuXL:marker_ions_tolerance",
+  "value": 0.03,
+  "type": "double",
+  "description": "Tolerance used to determine marker ions (Da).",
+  "tags": [
+   "advanced"
+  ]
+ },
+ {
+  "name": "filter",
+  "value": [
+   "filter_pc_mass_error",
+   "autotune",
+   "idfilter"
+  ],
+  "type": "string[]",
+  "description": "Filtering steps applied to results.",
+  "tags": [
+   "advanced"
+  ],
+  "validStrings": [
+   "filter_pc_mass_error",
+   "impute_decoy_medians",
+   "filter_bad_partial_loss_scores",
+   "autotune",
+   "idfilter",
+   "spectrumclusterfilter"
+  ]
+ },
+ {
+  "name": "window_size",
+  "value": 75,
+  "type": "double",
+  "description": "Peak window for spectra precprocessing.",
+  "tags": [
+   "advanced"
+  ]
+ },
+ {
+  "name": "peak_count",
+  "value": 20,
+  "type": "int",
+  "description": "Retained peaks in peak window.",
+  "tags": [
+   "advanced"
+  ]
+ }
+]

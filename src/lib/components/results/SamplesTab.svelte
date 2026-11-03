@@ -1,11 +1,11 @@
 <script lang="ts">
-  // The Samples tab: for each sample of the design, grouped by condition, how many PSMs, peptides and
-  // proteins the search found in it, counted as the tables count (see `sampleTable`). A condition's row
+  // The Samples tab: for each sample of the design, grouped by condition, how many PSMs (and of them
+  // cross-link PSMs), peptides and proteins the search found in it, counted as the tables count (see `sampleTable`). A condition's row
   // and the last row count each peptide and protein once, so they are not the sums of the rows above.
   import { Switch } from '$lib/components/ui/switch'
   import * as Table from '$lib/components/ui/table'
-  import { formatPercent, formatQ } from '$lib/format/fdr'
   import { formatCount } from '$lib/results/display'
+  import { cutoffText } from '$lib/results/overview'
   import { sampleTable, type SampleCounts } from '$lib/results/samples'
   import type { ResultsView } from '$lib/results/view.svelte'
 
@@ -16,21 +16,15 @@
   const files = (samples: { files: number }[]) => samples.reduce((n, s) => n + s.files, 0)
   const allFiles = $derived(table.groups.reduce((n, g) => n + files(g.samples), 0))
 
-  const psmFdr = $derived(`${formatPercent(m.psmFdr)}, ${formatQ(m.psmFdr)}`)
-  const proteinFdr = $derived(`${formatPercent(m.proteinFdr)}, ${formatQ(m.proteinFdr)}`)
-  // a search without a protein FDR (off, or one ProSE did not apply) has no protein cutoff to name
-  const proteinFdrApplied = $derived(view.result.outcome.summary.proteinFdrApplied)
+  const cutoffs = $derived(`peptide PSMs at the peptide FDR, ${cutoffText(m.psmFdr)}, cross-link PSMs at the cross-link FDR, ${cutoffText(m.xlFdr)}`)
   const titles = $derived({
-    psms: `Target PSMs at the search's PSM FDR (${psmFdr}). Contaminants are included, decoys are not.`,
+    psms: `Target PSMs at the search's cutoffs (${cutoffs}). Contaminants are included.`,
+    xlPsms: `Of the PSMs, the cross-link PSMs (at the cross-link FDR, ${cutoffText(m.xlFdr)}).`,
     peptides:
-      `Distinct peptide sequences with a target PSM at the search's PSM FDR (${psmFdr}). A sequence and its modified forms count once, ` +
-      `like the protein counts. The Peptides tab lists each modified form in its own row. Condition rows and the All samples row count each sequence once.`,
+      `Distinct peptide sequences with a target PSM at the search's cutoffs. A sequence and its modified and cross-linked forms count once, ` +
+      `like the protein counts. The Peptides tab lists each form in its own row. Condition rows and the All samples row count each sequence once.`,
     proteins:
-      (proteinFdrApplied
-        ? `Protein groups at the search's protein FDR (${proteinFdr}) with a PSM in the sample. `
-        : 'Protein groups with a PSM in the sample (the search applied no protein FDR). ') +
-      `Proteins that cannot be told apart count once, as in the key figures. The Proteins tab lists every protein. ` +
-      `Condition rows and the All samples row count each group once.`,
+      'Proteins with a PSM in the sample (OpenNuXL estimates no protein FDR). Condition rows and the All samples row count each protein once.',
   })
 
   const head = 'h-auto border-b px-2.5 py-1.5 text-right font-medium text-muted-foreground'
@@ -40,6 +34,7 @@
 
 {#snippet numbers(c: SampleCounts, style: string)}
   <Table.Cell data-column="psms" class={style}>{formatCount(c.psms)}</Table.Cell>
+  <Table.Cell data-column="xl-psms" class={style}>{formatCount(c.xlPsms)}</Table.Cell>
   <Table.Cell data-column="peptides" class={style}>{formatCount(c.peptides)}</Table.Cell>
   <Table.Cell data-column="proteins" class={style}>{formatCount(c.proteins)}</Table.Cell>
 {/snippet}
@@ -47,9 +42,8 @@
 <div class="flex flex-col gap-3 pb-6">
   <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
     <p class="text-xs text-muted-foreground" data-testid="samples-note">
-      Counts use target PSMs at the search's PSM FDR ({psmFdr}). Peptides are distinct sequences, and proteins are protein groups{proteinFdrApplied
-        ? ' at the protein FDR'
-        : ''}. The key figures count peptide forms and protein groups. The totals here count distinct sequences and the groups with a PSM.
+      Counts use target PSMs at the search's cutoffs ({cutoffs}). Peptides are distinct sequences. The key figures count
+      peptide forms; the totals here count distinct sequences.
     </p>
     {#if view.hasTechReplicates}
       <!-- the same setting as the Columns menu of the Proteins and Peptides tabs -->
@@ -66,6 +60,7 @@
           <Table.Head scope="col" class="{head} text-left">Sample</Table.Head>
           <Table.Head scope="col" class={head} title="Searched files of this sample. These are its fractions, plus its repeats if technical replicates are merged.">Files</Table.Head>
           <Table.Head scope="col" class={head} title={titles.psms}>PSMs</Table.Head>
+          <Table.Head scope="col" class={head} title={titles.xlPsms}>Cross-link PSMs</Table.Head>
           <Table.Head scope="col" class={head} title={titles.peptides}>Peptides</Table.Head>
           <Table.Head scope="col" class={head} title={titles.proteins}>Proteins</Table.Head>
         </Table.Row>

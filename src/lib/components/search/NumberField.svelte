@@ -84,6 +84,7 @@
 {#if inGroup}
   <InputGroup.Input
     {id}
+    {placeholder}
     style={fit ? `width: calc(${Math.max(text.length, 1)}ch + 0.75rem)` : undefined}
     value={text}
     inputmode={kind === 'int' ? 'numeric' : 'decimal'}

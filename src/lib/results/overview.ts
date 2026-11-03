@@ -1,14 +1,18 @@
-// The Overview tab's per-file table: what the search reports of each file, in plain words.
+// The Overview tab: per searched file what OpenNuXL reports of its run, in plain words (its PSMs by kind, Percolator
+// applied or skipped and why, its other notes), and what the cross-link PSMs carry: their adducts and the amino acids
+// they are cross-linked to. Everything is counted at the search's cutoffs (`levelRows`).
 
 import { formatPercent, formatQ } from '../format/fdr'
 import type { ProSEFileStatus, ProSEFileSummary, ProSEMultiSummary } from '../results/types'
+import { levelRows } from './figures'
 import { baseName, type ResultModel } from './model'
+import type { NuxlSummary } from './summary'
 
 /** An engine's long text, with the short plain line the table shows (the long one goes in its tooltip). */
 export type EngineNote = { short: string; full: string }
 
 export type PercolatorStatus = {
-  /** `off`: the search did not rescore (the PSMs keep ProSE's scores). */
+  /** `off`: the search did not rescore (the PSMs keep NuXL's scores). */
   kind: 'applied' | 'skipped' | 'off'
   label: string
   /** Why Percolator was skipped. */
@@ -16,13 +20,16 @@ export type PercolatorStatus = {
   warning: EngineNote | null
 }
 
-/** ProSE's Percolator texts we know, in short plain words. */
+/** The Percolator texts we know (ProSE's and OpenNuXL's), in short plain words. */
 const SHORT_NOTES: [RegExp, string][] = [
   [/sanity check rejected the learned model/i, 'Too few confident PSMs, so scored by the best single feature'],
   [/^Only (\d+) PSMs, Percolator rescoring needs at least (\d+)/, 'Only $1 PSMs, at least $2 needed'],
   [/^No decoy PSMs for the target\/decoy competition/, 'No decoy PSMs to learn from'],
   [/^No search run .* to rescore/, 'No search run to rescore'],
   [/^Percolator failed/, 'Percolator failed'],
+  // OpenNuXL's (it rescores 1000 PSMs or more)
+  [/^Too few PSMs for score recalibration/, 'Too few PSMs (Percolator needs 1000)'],
+  [/^Score recalibration failed/, 'Percolator failed'],
 ]
 
 /** A long engine text as a short line: a known one in plain words, else its first sentence, cut at 80 characters. */
@@ -70,115 +77,129 @@ export type FileRow = {
   file: string
   /** The design's sample of the file, or null. */
   sample: string | null
-  /** The numbers of the search's summary; null if it has none for the file. */
+  /** The MS2 spectra of the file; null: not reported (OpenNuXL does not report the spectra it read). */
   ms2: number | null
-  targets: number | null
-  decoys: number | null
+  /** Its target PSMs at the search's cutoffs: peptide PSMs (at the peptide FDR) and cross-link PSMs (at the XL FDR). */
+  peptidePsms: number
+  xlPsms: number
   percolator: PercolatorStatus
-  /** The collision energy PeptDeep calibrated for the file, when PeptDeep ran. */
-  nce: number | null
+  /** OpenNuXL's other notes of the run (not the one that says why Percolator was skipped). */
+  notes: EngineNote[]
   seconds: number | null
   status: { ok: boolean; label: string }
-  /** The PSM FDR was requested but not applied to the file's PSMs (no decoy PSM): they have no q-value. */
-  psmFdrSkipped: boolean
 }
 
-/** One row per searched file, in the order of the search (the summary lists its files in that order). */
-export function fileRows(m: ResultModel, summary: ProSEMultiSummary): FileRow[] {
+/** The target PSMs of each file at the search's cutoffs, by kind. */
+function psmsByFile(m: ResultModel): { peptide: Uint32Array; xl: Uint32Array } {
+  const n = m.tables.files.length
+  const peptide = new Uint32Array(n)
+  const xl = new Uint32Array(n)
+  const { file, xl: cross } = m.tables.psms
+  for (const i of levelRows(m, 'psms', false)) (cross.isXL[i] ? xl : peptide)[file[i]]++
+  return { peptide, xl }
+}
+
+/**
+ * One row per searched file, in the order of the search (the summary lists its files in that order). `nuxl` (the
+ * reader's `SearchResult.nuxl`) adds OpenNuXL's notes and whether Percolator rescored a file the summary says nothing
+ * about.
+ */
+export function fileRows(m: ResultModel, summary: ProSEMultiSummary, nuxl?: NuxlSummary): FileRow[] {
+  const counts = psmsByFile(m)
   return m.tables.files.map((path, index) => {
     const f = summary.files[index]
     const designRow = m.design.rows[index]
+    const percolator = f?.percolator ?? (nuxl?.percolator[index] ? { applied: true, skipped: null, warning: null } : null)
+    const notes = (nuxl?.notes[index] ?? [])
+      .filter((n) => n !== percolator?.skipped && n !== percolator?.warning)
+      .map(engineNote)
+      .filter((n): n is EngineNote => n !== null)
     return {
       index,
       file: baseName(path),
       sample: designRow ? (m.design.samples[designRow.sample]?.label ?? null) : null,
-      ms2: f?.ms2Spectra ?? null,
-      targets: f?.targetPSMs ?? null,
-      decoys: f?.decoyPSMs ?? null,
-      percolator: percolatorStatus(f?.percolator ?? null),
-      nce: f?.peptdeepNce ?? null,
+      ms2: f && f.ms2Spectra > 0 ? f.ms2Spectra : null,
+      peptidePsms: counts.peptide[index],
+      xlPsms: counts.xl[index],
+      percolator: percolatorStatus(percolator),
+      notes,
       seconds: f?.secondsSearch ?? null,
       status: f ? fileStatus(f.status) : { ok: false, label: 'No report' },
-      psmFdrSkipped: f?.psmFdrApplied === false,
     }
   })
 }
 
-/** The files whose PSM FDR was requested but not applied (ProSE skips it for a file without decoy PSMs). */
-export function psmFdrSkipped(summary: ProSEMultiSummary): ProSEFileSummary[] {
-  return summary.files.filter((f) => f.psmFdrApplied === false)
+/** A cutoff as the Overview names it: "1 % (q ≤ 0.01)"; "none (1.0)" for a cutoff of 1, which keeps every target. */
+export function cutoffText(q: number): string {
+  return q >= 1 ? `none (${formatQ(q)})` : `${formatPercent(q)} (${formatQ(q)})`
 }
 
-/**
- * Whether the PSM FDR applies to none of the PSMs: every file with PSMs had it skipped (and some file has PSMs). Then
- * there are no PSM q-values to filter by.
- */
-export function psmFdrAppliedToNone(summary: ProSEMultiSummary): boolean {
-  const withPsms = summary.files.filter((f) => f.targetPSMs + f.decoyPSMs > 0)
-  return withPsms.length > 0 && withPsms.every((f) => f.psmFdrApplied === false)
-}
-
-/**
- * The search asked for no PSM FDR: a search without decoys (decoys 'ignore'), for which the app sends no FDR (ProSE could
- * not estimate one). Its PSMs have no q-value.
- */
-export function psmFdrOff(summary: ProSEMultiSummary): boolean {
-  return summary.psmFdr === 0
-}
-
-const NO_DECOYS = 'The search had no decoys, so ProSE could not estimate an FDR and applied none'
-
-/** The Overview's "PSM FDR": the cutoff, and to which files it was not applied. */
-export function psmFdrFact(summary: ProSEMultiSummary): { value: string; title: string } {
-  if (psmFdrOff(summary)) return { value: 'off (no decoys)', title: `${NO_DECOYS}: the PSMs have no q-value and are not FDR-controlled.` }
-  const cutoff = `${formatPercent(summary.psmFdr)} (${formatQ(summary.psmFdr)})`
-  const skipped = psmFdrSkipped(summary)
-  const why = 'ProSE skips the PSM FDR of a file whose PSMs match no decoy: without decoys it cannot estimate the FDR.'
-  if (skipped.length === 0) return { value: cutoff, title: cutoff }
-  if (skipped.length === summary.files.length) {
-    return { value: 'not applied (no decoy PSMs)', title: `${cutoff} was requested but not applied. ${why} The PSMs are not FDR-controlled.` }
-  }
-  return {
-    value: `${cutoff}, not applied to ${skipped.length} of ${summary.files.length} files`,
-    title: `Not applied to ${skipped.map((f) => baseName(f.path)).join(', ')}. ${why} Their PSMs are not FDR-controlled.`,
-  }
-}
-
-/**
- * The notice above the results when the PSM FDR was requested but not applied to some file, or null: its PSMs have
- * no q-value and are not FDR-controlled, though they are listed.
- */
-export function psmFdrNotice(summary: ProSEMultiSummary): string | null {
-  if (psmFdrOff(summary)) {
-    return summary.files.some((f) => f.targetPSMs > 0)
-      ? `${NO_DECOYS}: its PSMs have no q-value and are not FDR-controlled. Search with decoys to control the FDR.`
-      : null
-  }
-  const skipped = psmFdrSkipped(summary).filter((f) => f.targetPSMs > 0)
-  if (skipped.length === 0) return null
-  const cutoff = formatPercent(summary.psmFdr)
-  const names = skipped.map((f) => baseName(f.path))
-  const which =
-    skipped.length === summary.files.length
-      ? 'the search'
-      : names.length <= 3
-        ? names.join(', ')
-        : `${names.slice(0, 3).join(', ')} and ${names.length - 3} more files`
-  return (
-    `The PSM FDR of ${cutoff} was not applied to ${which}: no PSM matched a decoy, so ProSE could not estimate the FDR. ` +
-    `${skipped.length === summary.files.length ? 'The' : 'Their'} PSMs have no q-value and are not FDR-controlled: treat them with care, ` +
-    `or search with decoys (and more spectra).`
-  )
+/** The Overview's "Peptide FDR" and "Cross-link FDR": OpenNuXL's cutoffs, the peptide PSMs' and the cross-link PSMs'. */
+export function fdrFacts(m: Pick<ResultModel, 'psmFdr' | 'xlFdr'>): { name: string; value: string; title: string }[] {
+  return [
+    {
+      name: 'Peptide FDR',
+      value: cutoffText(m.psmFdr),
+      title: `PSMs without a nucleic acid cross-link count at q ≤ ${formatQ(m.psmFdr)} (OpenNuXL's FDR of the peptide PSMs, by target-decoy competition per file).`,
+    },
+    {
+      name: 'Cross-link FDR',
+      value: cutoffText(m.xlFdr),
+      title: `Cross-link PSMs count at q ≤ ${formatQ(m.xlFdr)} (OpenNuXL's FDR of the cross-links, estimated per file and per FDR group).`,
+    },
+  ]
 }
 
 /** The sums of the file rows (a file without numbers adds nothing). */
-export function totalsOf(rows: FileRow[]): { ms2: number; targets: number; decoys: number; seconds: number } {
-  const totals = { ms2: 0, targets: 0, decoys: 0, seconds: 0 }
+export function totalsOf(rows: FileRow[]): { ms2: number | null; peptidePsms: number; xlPsms: number; seconds: number } {
+  const totals = { ms2: null as number | null, peptidePsms: 0, xlPsms: 0, seconds: 0 }
   for (const r of rows) {
-    totals.ms2 += r.ms2 ?? 0
-    totals.targets += r.targets ?? 0
-    totals.decoys += r.decoys ?? 0
+    if (r.ms2 !== null) totals.ms2 = (totals.ms2 ?? 0) + r.ms2
+    totals.peptidePsms += r.peptidePsms
+    totals.xlPsms += r.xlPsms
     totals.seconds += r.seconds ?? 0
   }
   return totals
+}
+
+// ---- the cross-links
+
+/** A category of the cross-link PSMs (an adduct, an amino acid) with its PSMs. */
+export type CategoryCount = { name: string; count: number }
+
+const byCount = (a: CategoryCount, b: CategoryCount) => b.count - a.count || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+
+/**
+ * The adducts of the target cross-link PSMs at the search's cross-link FDR, with their PSMs, most PSMs first (equal
+ * counts by name). A cross-link without an adduct (OpenNuXL gives each one) is counted as 'none'.
+ */
+export function adductCounts(m: ResultModel): CategoryCount[] {
+  const counts = new Map<string, number>()
+  const { adduct } = m.tables.psms.xl
+  for (const i of levelRows(m, 'psms', false, 'xl')) {
+    const name = adduct[i] || 'none'
+    counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
+  return [...counts].map(([name, count]) => ({ name, count })).sort(byCount)
+}
+
+/**
+ * The amino acids the target cross-link PSMs at the search's cross-link FDR are cross-linked to (the residue at
+ * `psms.xl.site` of the peptide), most PSMs first, and the PSMs whose cross-link is not localized.
+ */
+export function residueCounts(m: ResultModel): { residues: CategoryCount[]; unlocalized: number } {
+  const counts = new Map<string, number>()
+  let unlocalized = 0
+  const { site } = m.tables.psms.xl
+  const { peptide } = m.tables.psms
+  const sequence = m.tables.peptides.sequence
+  for (const i of levelRows(m, 'psms', false, 'xl')) {
+    const residue = site[i] >= 0 ? sequence[peptide[i]][site[i]] : undefined
+    if (residue === undefined) {
+      unlocalized++
+      continue
+    }
+    counts.set(residue, (counts.get(residue) ?? 0) + 1)
+  }
+  return { residues: [...counts].map(([name, count]) => ({ name, count })).sort(byCount), unlocalized }
 }

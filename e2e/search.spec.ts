@@ -1,47 +1,44 @@
-// The example searched through the app's screens: New search with the example, Start, Results.
-// Gated: runs only with PROSE_BIN set (the app inherits it). Every test that needs a result searches the
-// example itself, so each runs alone; the searches' folders (in the spec's own data folder) are removed
-// after each test.
-import { existsSync, readFileSync } from 'node:fs'
+// The example searched through the app's screens: New search with the example, Start, Results, the PSM view,
+// History, and a project file exported and opened again.
+// Gated: runs only with NUXL_TOOL set (the app inherits it; NUXL_FAKE=1 sets it to the stand-in, e2e/run.sh).
+// Every test that needs a result searches the example itself, so each runs alone; the searches' folders (in the
+// spec's own data folder) are removed after each test.
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { zstdDecompressSync } from 'node:zlib'
-import { parquetReadObjects } from 'hyparquet'
-import { clearSearches, freshForm, openFirstPsm, runExample, searchesDir, waitForResults } from './lib.ts'
+import {
+  countOf,
+  dataHome,
+  EXAMPLE_PROTEINS,
+  EXAMPLE_PSMS,
+  clearSearches,
+  freshForm,
+  goTo,
+  jsClick,
+  openFirstPsm,
+  resultsId,
+  runExample,
+  searchesDir,
+  textOf,
+  waitForResults,
+} from './lib.ts'
 
-const enabled = Boolean(process.env.PROSE_BIN)
+const enabled = Boolean(process.env.NUXL_TOOL)
 
 describe('the example search', () => {
   before(function () {
     if (!enabled) {
-      console.log('skipped: set PROSE_BIN to run the example search through the app')
+      console.log('skipped: set NUXL_TOOL (or NUXL_FAKE=1) to run the example search through the app')
       this.skip()
     }
   })
 
   afterEach(() => clearSearches())
 
-  it('the CSP lets the results reader start its WebAssembly zstd decoder (from a data: URL)', async () => {
-    await $('header').waitForDisplayed({ timeout: 20000 })
-    // the smallest module, loaded as zstddec loads its own
-    const outcome = await browser.execute(() =>
-      fetch('data:application/wasm;base64,AGFzbQEAAAA=')
-        .then((r) => r.arrayBuffer())
-        .then((b) => WebAssembly.instantiate(b))
-        .then(
-          () => 'ok',
-          (e) => String(e),
-        ),
-    )
-    expect(outcome).toBe('ok')
-  })
-
   it('the monospace fonts are the bundled ones (Liberation Mono, Inconsolata), not a wider system one', async () => {
     await $('header').waitForDisplayed({ timeout: 20000 })
-    // In the web app's headless Chromium, 'NDSVIVADQTPTPTR' at 12.5px is 93.75 px in the peptide stack
-    // (a 0.5 em font there) and 112.53 px in font-mono (Liberation Mono, 0.6 em). The app bundles
-    // Inconsolata (0.5 em) for sequences and Liberation Mono. WebKitGTK sets text at whole pixel sizes
-    // (12.5px as 13px) and Inconsolata's and Liberation Mono's hinted advances fall on whole pixels, so here
-    // they measure 90 and 120 px; the system's DejaVu Sans Mono 120.
+    // 'NDSVIVADQTPTPTR' at 12.5px: Inconsolata (0.5 em) for sequences and Liberation Mono (0.6 em) for font-mono.
+    // WebKitGTK sets text at whole pixel sizes (12.5px as 13px) and the hinted advances fall on whole pixels, so
+    // here they measure 90 and 120 px; the system's DejaVu Sans Mono 120.
     const widths = await browser.execute(async () => {
       await document.fonts.load('12.5px "Inconsolata"')
       await document.fonts.load('12.5px "Liberation Mono"')
@@ -57,7 +54,6 @@ describe('the example search', () => {
         return w
       }
       return {
-        // as the components use them: the peptide stack, and Tailwind's font-mono class
         sequence: width('12.5px var(--font-sequence)'),
         mono: width('', 'font-mono'),
         inconsolata: width('12.5px "Inconsolata"'),
@@ -68,7 +64,6 @@ describe('the example search', () => {
     console.log('monospace widths', JSON.stringify(widths))
     expect(widths.sequence).toBe(widths.inconsolata)
     expect(widths.mono).toBe(widths.liberation)
-    // 0.5 em and 0.6 em per character (at 12.5 or 13 px; hinted advances rounded to whole pixels)
     expect(widths.sequence / 15).toBeGreaterThanOrEqual(6)
     expect(widths.sequence / 15).toBeLessThanOrEqual(6.5)
     expect(widths.mono / 15).toBeGreaterThanOrEqual(7.5)
@@ -76,24 +71,19 @@ describe('the example search', () => {
     expect(widths.sequence).toBeLessThan(widths.dejavu - 10)
   })
 
-  it('the example search shows 154 PSMs', async () => {
-    await $('header').waitForDisplayed({ timeout: 20000 })
+  it('the example search shows PSMs with cross-links, and the PSM view its adduct, site and peaks', async () => {
+    await freshForm()
     await $('button=Try the example').click()
-    // the two files in the design table, the database counted
-    await expect($('[data-testid="design-summary"]')).toHaveText('2 files → 2 samples · 1 condition')
-    await expect($('[data-testid="fasta-proteins"]')).toHaveText('4,136 proteins')
-    // the example's fragment tolerance for its ion-trap spectra, its PSM FDR of 2 % and its protein FDR off (the run is
-    // too small for 1 % and for a protein FDR)
-    await expect($('#fragment-tolerance')).toHaveValue('0.5')
-    await expect($('#psm-fdr')).toHaveValue('2')
-    await expect($('#protein-fdr')).toHaveValue('off')
-    await expect($('button=Off')).toHaveAttribute('aria-pressed', 'true')
+    // one file (no design summary: one file needs no design), the database counted, the example's precursor tolerance
+    await browser.waitUntil(async () => (await textOf('[data-testid="design-scroll"]')).includes('OpenNuXL_1_input.mzML'))
+    await expect($('[data-testid="fasta-proteins"]')).toHaveText(EXAMPLE_PROTEINS)
+    await expect($('#precursor-tolerance')).toHaveValue('10')
+    await expect($('[data-testid="protocol-summary"]')).toHaveText(expect.stringContaining('cross-links at U'))
     // (textContent: the footer line is cut to the window's width)
-    expect(await $('[data-testid="search-plan"]').getProperty('textContent')).toBe('2 files in 2 samples · 4,136 proteins + 116 cRAP + decoys')
+    expect(await textOf('[data-testid="search-plan"]')).toBe('1 file · 5 proteins + 116 cRAP + decoys')
     // the example's note, on a line of its own that wraps (not cut)
-    // (textContent: WebKitWebDriver reads no visible text of a line-clamped box)
-    expect(await $('[data-testid="search-note"]').getProperty('textContent')).toBe(
-      "Ion-trap example with a 0.5 Da fragment tolerance, a 2 % PSM FDR and no protein FDR: the run is too small for 1 % and for a protein FDR. It has too few PSMs for Percolator's full model.",
+    expect(await textOf('[data-testid="search-note"]')).toBe(
+      "OpenMS' test run of OpenNuXL (20 spectra, 5 proteins) with its 10 ppm precursor tolerance. It has too few PSMs for Percolator, which OpenNuXL skips below 1,000 PSMs.",
     )
     const clipped = await browser.execute(() => {
       const note = document.querySelector('[data-testid="search-note"]') as HTMLElement
@@ -101,81 +91,97 @@ describe('the example search', () => {
     })
     expect(clipped).toBe(false)
     await $('button*=Start search').click()
-    await expect($('[data-testid="search-progress"]')).toBeDisplayed()
-    await browser.waitUntil(async () => /#\/results\/[^/]+$/.test(await browser.getUrl()), {
-      timeout: 180000,
-      interval: 500,
-      timeoutMsg: 'the search did not open its result',
-    })
-    const count = $('[data-testid="psm-count"]')
-    await count.waitForDisplayed({ timeout: 20000 })
-    await expect(count).toHaveText(expect.stringContaining('154'))
-    expect(await $('[data-testid="result-chip"]').getProperty('textContent')).toContain('Ecoli · 2 files')
-    // real data: the first PSM's precursor error is not 0 ppm, its peaks have intensities of their own
+    const id = await waitForResults()
+    await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 20000 })
+    const psms = await countOf('psm-count')
+    const xls = await countOf('xl-psm-count')
+    if (EXAMPLE_PSMS) {
+      expect(psms).toBe(EXAMPLE_PSMS.psms)
+      expect(xls).toBe(EXAMPLE_PSMS.xls)
+    }
+    expect(xls).toBeGreaterThan(0)
+    expect(psms).toBeGreaterThanOrEqual(xls)
+    expect(await countOf('protein-count')).toBeGreaterThan(0)
+    expect(await textOf('[data-testid="result-chip"]')).toContain('OpenNuXL_1_input · 1 file')
+    // OpenNuXL's outputs and the shim's record of them (docs/design.md §2)
+    const outputs = JSON.parse(readFileSync(join(searchesDir(), id, 'nuxl', '1__OpenNuXL_1_input.outputs.json'), 'utf8'))
+    expect(outputs.percolator).toBe(false)
+    expect(outputs.notes.join(' ')).toContain('Too few PSMs')
+
+    // the PSM view of the best PSM: a cross-link (the PSMs tab lists them first), its adduct and site, and the peaks
+    // of the input mzML
     await openFirstPsm()
-    const header = String(await $('[data-testid="psm-header"]').getProperty('textContent'))
-    const ppm = /([−+-]?\d+\.\d) ppm/.exec(header)
-    if (!ppm) throw new Error(`no precursor error in the PSM header: ${header}`)
-    expect(Number(ppm[1].replace('−', '-'))).not.toBe(0)
+    await expect($('[data-testid="psm-crosslink"]')).toBeDisplayed()
+    expect(await textOf('[data-testid="psm-adduct"]')).toMatch(/adduct \S+ \(\+\d+\.\d+ Da\)/)
+    expect(await textOf('[data-testid="psm-site"]')).toMatch(/on [A-Z]\d+/)
+    expect(await textOf('[data-testid="psm-header"]')).toMatch(/[−+-]?\d+\.\d ppm/)
     const sticks = String(await $('[data-testid="unmatched-peaks"]').getAttribute('d'))
     const tops = new Set([...sticks.matchAll(/V(-?[\d.]+)/g)].map((m) => m[1]))
     expect(tops.size).toBeGreaterThan(5)
-    // the fragment mass errors under the spectrum, in Da (the example's tolerance is in Da), each dot under its peak
+    expect((await $$('[data-testid="matched-peaks"]')).length).toBeGreaterThan(0)
+    // the fragment mass errors under the spectrum, in ppm (the preset's fragment tolerance), each dot under its peak
     const strip = await browser.execute(() => {
       const svg = document.querySelector('[data-testid="spectrum"]')!
       const peaks = [...svg.querySelectorAll('[data-testid="matched-peaks"]')].map((p) => p.getAttribute('d') ?? '').join('')
       const dots = [...svg.querySelectorAll('[data-testid="error-dot"]')].map((d) => d.getAttribute('cx'))
       return { unit: svg.querySelector('[data-testid="error-unit"]')?.textContent, dots: dots.length, unaligned: dots.filter((cx) => !peaks.includes(`M${cx} `)) }
     })
-    expect(strip.unit).toBe('Da')
+    expect(strip.unit).toBe('ppm')
     expect(strip.dots).toBeGreaterThan(5)
     expect(strip.unaligned).toEqual([])
+    expect(await $$('[data-testid="peaks-missing-note"]')).toHaveLength(0)
+    await browser.keys('Escape')
+
+    // the proteins with their cross-linked sites: the first protein's panel lists them
+    await jsClick(await $('[role="tablist"]').$('button*=Proteins'))
+    const proteins = $('[role="grid"][aria-label="Proteins"]')
+    await proteins.waitForDisplayed({ timeout: 10000 })
+    await jsClick((await proteins.$$('tbody tr[aria-rowindex]'))[0])
+    const panel = $('[data-testid="protein-panel"]')
+    await panel.waitForDisplayed({ timeout: 10000 })
+    expect(await textOf('[data-testid="panel-xl"]')).toMatch(/^[1-9]\d* XL PSMs? · [1-9]\d* cross-linked sites?$/)
   })
 
-  it('Remove all and Start over empty the form, give back the preset\'s tolerance and protein FDR, and can be undone', async () => {
+  it("Remove all and Start over empty the form, give back the preset's precursor tolerance, and can be undone", async () => {
     await freshForm()
     await $('button=Try the example').click()
-    await expect($('[data-testid="fasta-proteins"]')).toHaveText('4,136 proteins')
-    await expect($('#fragment-tolerance')).toHaveValue('0.5')
-    await expect($('#protein-fdr')).toHaveValue('off')
+    await expect($('[data-testid="fasta-proteins"]')).toHaveText(EXAMPLE_PROTEINS)
+    await expect($('#precursor-tolerance')).toHaveValue('10')
     await expect($('button=Start over')).toHaveAttribute(
       'title',
-      "Removes the spectra and the database. Your settings stay, but the example's fragment tolerance, PSM FDR and protein FDR go back to the preset's.",
+      "Removes the spectra and the database. Your settings stay, but the example's precursor tolerance goes back to the preset's.",
     )
     await $('button=Remove all').click()
     await expect($('button=Try the example')).toBeDisplayed()
-    await expect($('[data-testid="fasta-proteins"]')).toHaveText('4,136 proteins')
-    // the example's 0.5 Da and its protein FDR off do not stay for the next files
-    await expect($('#fragment-tolerance')).toHaveValue('20')
-    await expect($('#protein-fdr')).toHaveValue('1')
-    await expect($('[data-testid="removed-note"]')).toHaveText(expect.stringContaining('Removed 2 files.'))
+    await expect($('[data-testid="fasta-proteins"]')).toHaveText(EXAMPLE_PROTEINS)
+    // the example's 10 ppm does not stay for the next files: the preset's (OpenNuXL's 6 ppm)
+    await expect($('#precursor-tolerance')).toHaveValue('6')
+    await expect($('[data-testid="removed-note"]')).toHaveText(expect.stringContaining('Removed 1 file.'))
     await $('[data-testid="removed-note"]').$('button=Undo').click()
-    await expect($('[data-testid="design-summary"]')).toHaveText('2 files → 2 samples · 1 condition')
-    await expect($('#fragment-tolerance')).toHaveValue('0.5')
-    await expect($('#protein-fdr')).toHaveValue('off')
+    await browser.waitUntil(async () => (await textOf('[data-testid="design-scroll"]')).includes('OpenNuXL_1_input.mzML'))
+    await expect($('#precursor-tolerance')).toHaveValue('10')
     await $('button=Start over').click()
     await expect($('button=Try the example')).toBeDisplayed()
     await expect($('#fasta-chosen')).toHaveText('Choose a FASTA file…')
-    expect(await $('[data-testid="search-plan"]').getProperty('textContent')).toBe('No spectra yet')
-    await expect($('#fragment-tolerance')).toHaveValue('20')
-    await expect($('#protein-fdr')).toHaveValue('1')
-    await expect($('[data-testid="removed-note"]')).toHaveText(expect.stringContaining('Removed 2 files and the database.'))
+    expect(await textOf('[data-testid="search-plan"]')).toBe('No spectra yet')
+    await expect($('#precursor-tolerance')).toHaveValue('6')
+    await expect($('[data-testid="removed-note"]')).toHaveText(expect.stringContaining('Removed 1 file and the database.'))
     await expect($('button=Start over')).not.toBeExisting()
   })
 
-  it('a parameter set in "All parameters" reaches ProSE', async () => {
+  it('a parameter set in "All parameters" reaches OpenNuXL', async () => {
     await freshForm()
     await $('button=Try the example').click()
-    await expect($('[data-testid="fasta-proteins"]')).toHaveText('4,136 proteins')
+    await expect($('[data-testid="fasta-proteins"]')).toHaveText(EXAMPLE_PROTEINS)
     await $('button*=parameters').click()
     const dialog = $('[role="dialog"]')
     await dialog.waitForDisplayed({ timeout: 10000 })
     await expect(dialog.$('[data-slot="dialog-title"]')).toHaveText(expect.stringMatching(/^All \d+ parameters$/))
-    // an advanced parameter without a field on the page, found by its name (PeptDeep is off: no effect on the result)
-    await dialog.$('input[aria-label="Find a parameter"]').setValue('batch_size')
-    const field = dialog.$('#param-peptdeep-batch_size')
+    // an advanced parameter without a field on the page, found by its name
+    await dialog.$('input[aria-label="Find a parameter"]').setValue('marker_ions')
+    const field = dialog.$('#param-NuXL-marker_ions_tolerance')
     await field.waitForDisplayed({ timeout: 10000 })
-    await field.setValue('32')
+    await field.setValue('0.05')
     await expect(dialog.$('button*=default:')).toBeDisplayed()
     await dialog.$('button=Done').click()
     await expect(dialog).not.toBeDisplayed()
@@ -183,45 +189,28 @@ describe('the example search', () => {
     await expect($('span=modified')).toBeDisplayed()
     await $('button*=Start search').click()
     const id = await waitForResults()
-    // ProSE's own record of its parameters: the provenance view's configuration
-    const bytes = readFileSync(join(searchesDir(), id, 'qpx', 'quantms.provenance.parquet'))
-    const rows = (await parquetReadObjects({
-      file: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
-      columns: ['step_name', 'config'],
-      compressors: { ZSTD: (input: Uint8Array) => new Uint8Array(zstdDecompressSync(input)) },
-    })) as { step_name: string; config: string }[]
-    const config = JSON.parse(rows.find((r) => r.step_name === 'peptide_search')!.config)
-    expect(config['Search:peptdeep:batch_size']).toBe(32)
-    expect(config['Search:fragment:mass_tolerance']).toBe(0.5)
-  })
-
-  it('the example without PeptDeep still shows the prediction', async () => {
-    // PeptDeep is off for the search (no rescoring features), yet ProSE writes the prediction of every PSM
-    await runExample()
-    await openFirstPsm()
-    await expect($('[data-testid="bottom-label"]')).toHaveText(expect.stringContaining('PeptDeep'))
-    expect((await $$('[data-testid="bottom-peaks"]')).length).toBeGreaterThan(0)
-    expect(await $$('[data-testid="bottom-status"]')).toHaveLength(0)
-    expect(await $('input[type="radio"][value="peptdeep"]').isSelected()).toBe(true)
-    expect(await $('input[type="radio"][value="peptdeep"]').isEnabled()).toBe(true)
-    // the stored spectra are filtered (the footer of the QPX files says how): the view says so
-    await expect($('[data-testid="peak-filter-note"]')).toHaveText(expect.stringContaining('Showing the top 100 peaks per 100 m/z'))
+    // the command line of the run, in the search's log (docs/design.md §2)
+    const log = readFileSync(join(searchesDir(), id, 'nuxl.log'), 'utf8')
+    const command = log.split('\n').find((l) => l.startsWith('$ '))!
+    expect(command).toMatch(/ -NuXL:marker_ions_tolerance 0\.05( |$)/)
+    expect(command).toMatch(/ -precursor:mass_tolerance 10( |$)/)
+    expect(command).toContain(' -NuXL:presets ')
   })
 
   it('History survives a restart: the search is listed, can be renamed, and opens again with its results', async () => {
     const searchId = await runExample()
+    const psms = await countOf('psm-count')
     const row = () => $(`[data-testid="history-row"][data-id="${searchId}"]`)
-    await $('nav[aria-label="Main"]').$('a=History').click()
+    await goTo('History')
     await row().waitForDisplayed({ timeout: 20000 })
     // (textContent: WebKit's visible text leaves out the cells that the table cuts to its width)
-    expect(await row().getProperty('textContent')).toContain('Ecoli_1.mzML, Ecoli_2.mzML')
-    // the folder has its record: the shim's outputs, proteins.fasta and search.json; proteins.fasta replaced the
-    // copy of the database with the contaminants
+    expect(await row().getProperty('textContent')).toContain('OpenNuXL_1_input.mzML')
+    // the folder has its record: proteins.fasta and search.json; proteins.fasta replaced the copy of the database
+    // with the contaminants
     expect(existsSync(join(searchesDir(), searchId, 'search.json'))).toBe(true)
     expect(existsSync(join(searchesDir(), searchId, 'proteins.fasta'))).toBe(true)
     expect(existsSync(join(searchesDir(), searchId, 'database.fasta'))).toBe(false)
-    // the record's PSMs (written when ProSE ended, from its QPX run view) are the result's
-    expect(await row().$('[data-column="psms"]').getProperty('textContent')).toBe('154')
+    expect(await row().$('[data-column="psms"]').getProperty('textContent')).toBe(String(psms))
 
     await row().$('button=Rename').click()
     await row().$('input').waitForDisplayed()
@@ -233,13 +222,51 @@ describe('the example search', () => {
     // the app starts again (a new process): History lists the search, and it opens with its results
     await browser.reloadSession()
     await $('header').waitForDisplayed({ timeout: 30000 })
-    await $('nav[aria-label="Main"]').$('a=History').click()
+    await goTo('History')
     await row().waitForDisplayed({ timeout: 20000 })
     expect(await row().getProperty('textContent')).toContain('Renamed_search')
     await row().$('button=Open').click()
     await browser.waitUntil(async () => (await browser.getUrl()).endsWith(`#/results/${searchId}`), { timeout: 30000 })
-    const count = $('[data-testid="psm-count"]')
-    await count.waitForDisplayed({ timeout: 30000 })
-    await expect(count).toHaveText(expect.stringContaining('154'))
+    await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 30000 })
+    expect(await countOf('psm-count')).toBe(psms)
+  })
+
+  it('Export › Project writes a .nuxl that Open project opens again, as a search of its own', async () => {
+    const searchId = await runExample()
+    const psms = await countOf('psm-count')
+    const xls = await countOf('xl-psm-count')
+    // (debug builds take the file of NUXL_TEST_DIALOG_PATH in place of the save and open dialogs: e2e/app.sh)
+    const chosen = join(dataHome(), 'chosen.nuxl')
+    rmSync(chosen, { force: true })
+    await $('header').$('button*=Export').click()
+    await $('[role="menuitem"]*=Project (.nuxl)').click()
+    await browser.waitUntil(async () => existsSync(chosen) && statSync(chosen).size > 0 && (await textOf('header')).includes('Export'), {
+      timeout: 30000,
+      timeoutMsg: 'no project was written',
+    })
+    // a zip: OpenNuXL's outputs and the record, not the log
+    const zip = readFileSync(chosen)
+    expect(zip.subarray(0, 2).toString()).toBe('PK')
+    expect(zip.includes('search.json')).toBe(true)
+    expect(zip.includes('nuxl/1__OpenNuXL_1_input.outputs.json')).toBe(true)
+    expect(zip.includes('nuxl.log')).toBe(false)
+
+    await goTo('History')
+    await $('[data-testid="open-project"]').click()
+    // it opens as a search of its own, with the same results
+    await browser.waitUntil(async () => {
+      const id = await resultsId()
+      return id !== null && id !== searchId
+    }, { timeout: 30000, timeoutMsg: 'the project did not open' })
+    await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 30000 })
+    expect(await countOf('psm-count')).toBe(psms)
+    expect(await countOf('xl-psm-count')).toBe(xls)
+    // the project has no spectra and its inputs.json no paths: the PSM view shows the peaks NuXL annotated, and says so
+    await openFirstPsm()
+    await expect($('[data-testid="psm-crosslink"]')).toBeDisplayed()
+    await expect($('[data-testid="peaks-missing-note"]')).toBeDisplayed()
+    await goTo('History')
+    await browser.waitUntil(async () => (await $$('[data-testid="history-row"]')).length === 2, { timeoutMsg: 'History does not list both searches' })
+    rmSync(chosen, { force: true })
   })
 })

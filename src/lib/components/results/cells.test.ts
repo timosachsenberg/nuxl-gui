@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fixed, sampleIndex, signed, tableColumns } from './cells'
+import { adductTitle, fdrGroupLabel, fixed, sampleIndex, signed, siteScoreText, tableColumns } from './cells'
 
 describe('cell helpers', () => {
   it('formats fixed and signed numbers, missing ones as a dash', () => {
@@ -25,5 +25,28 @@ describe('cell helpers', () => {
     expect(columns).toHaveLength(1)
     expect(columns[0]).toMatchObject({ id: 'psms', header: 'PSMs', width: 80, align: 'right', sortKey: 'psms', title: 'at FDR' })
     expect(columns[0].cell(21)).toBe('42')
+  })
+})
+
+describe('cross-link cells', () => {
+  it('name the FDR groups', () => {
+    expect([fdrGroupLabel('peptide'), fdrGroupLabel('XL'), fdrGroupLabel('short_XL'), fdrGroupLabel('other')]).toEqual([
+      'Peptide',
+      'Cross-link',
+      'Short cross-link',
+      'other',
+    ])
+  })
+
+  it('say what an adduct is in its tooltip', () => {
+    expect(adductTitle('U-H3O4P1', 226.058973, 'U', true)).toBe('U-H₃PO₄ · +226.0590 Da · nucleotide U')
+    expect(adductTitle('UC', 611.0, 'U,C', true)).toBe('UC · +611.0000 Da · nucleotides U, C')
+    expect(adductTitle('U', NaN, '', false)).toBe('U · not a cross-link')
+    expect(adductTitle('', 0, '', false)).toBe('')
+  })
+
+  it('write the localization score with two decimals', () => {
+    expect(siteScoreText(0.9312)).toBe('0.93')
+    expect(siteScoreText(NaN)).toBe('–')
   })
 })

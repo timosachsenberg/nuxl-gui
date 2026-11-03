@@ -1,6 +1,6 @@
 <script lang="ts">
-  // The proteins of a peptide in a table cell: the first accession and how many more, or "below
-  // protein FDR" when all of its proteins failed the protein FDR (the engine then lists none).
+  // The proteins of a peptide in a table cell: the first accession and how many more, or "no protein" when
+  // OpenNuXL lists none for it (its hit has no usable protein reference; there is no protein FDR).
   import { parseAccession } from '$lib/results/display'
   import type { ResultModel } from '$lib/results/model'
   import Marker from './Marker.svelte'
@@ -12,7 +12,7 @@
 </script>
 
 {#if first === null}
-  <span class="text-muted-foreground italic" title="None of this peptide's proteins pass the protein FDR">below protein FDR</span>
+  <span class="text-muted-foreground italic" title="OpenNuXL lists no protein for this peptide">no protein</span>
 {:else}
   <span class="font-mono text-[12.5px]">{first.id}</span>{#if proteins.length > 1}<span class="text-muted-foreground">
       +{proteins.length - 1}</span

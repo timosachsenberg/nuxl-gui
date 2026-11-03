@@ -1,7 +1,7 @@
 // The search of this session: its progress while it runs, its error, and the result it opened. Kept
 // outside the views, so that a search goes on (with its progress in the footer, or in the top bar on
-// other views) while the user looks elsewhere. The search runs in the ProSE tool through the shim
-// (desktop.ts); when it is done, its folder is read into the web app's result types (results/read.ts).
+// other views) while the user looks elsewhere. The search runs OpenNuXL through the shim (desktop.ts), once
+// per input file; when it is done, its folder is read into the result types (results/read.ts).
 
 import type { DesignResolution } from '../design/model'
 import {
@@ -20,7 +20,7 @@ import { describeFailure, type Failure } from './failure'
 
 /** What a search gave: the reader's result and how long the search took. */
 export type SearchOutcome = SearchResult & {
-  /** The time from the start of ProSE to its end (s). */
+  /** The time from the start of the search to the end of its last OpenNuXL run (s). */
   seconds: number
 }
 
@@ -31,31 +31,37 @@ export type OpenResult = {
   createdAt: string
   outcome: SearchOutcome
   design: DesignResolution
-  /** The search's cutoffs (q-values). */
+  /**
+   * The search's cutoffs (q-values): `psmFdr` is that of the peptide PSMs (`settings.peptideFdr`); `proteinFdr` is 1,
+   * as OpenNuXL has no protein FDR. The cross-link PSMs' is `settings.xlFdr`.
+   */
   psmFdr: number
   proteinFdr: number
   /** Set for a result opened from History or a project file: its name there and who made it. */
   stored?: { name: string; appVersion: string; moduleVersion: string }
   settings: {
-    /** The parameters that differ from ProSE's defaults. */
+    /** OpenNuXL's parameters that differ from its defaults, as the request sent them. */
     parameters: Record<string, unknown>
     /** The fixed modifications of the search (OpenMS names), which the tables do not mark. */
     fixedMods: string[]
     /** The FASTA's file name. */
     database: string
+    /** Percolator was asked for (OpenNuXL skips it for a run of fewer than 1000 PSMs). */
     rescore: boolean
-    peptdeep: boolean
     contaminants: boolean
     presetId?: string
+    /** The FDRs of the peptide PSMs and of the cross-link PSMs (fractions), as the request gave them. */
+    peptideFdr: number
+    xlFdr: number
   }
 }
 
 /**
- * A search whose ProSE has ended successfully, before its results are read: History saves its record from
+ * A search whose OpenNuXL runs have ended successfully, before its results are read: History saves its record from
  * this at once (history.svelte.ts), so that a search whose results then cannot be read is not lost.
  */
 export type EndedSearch = Omit<OpenResult, 'outcome' | 'stored'> & {
-  /** The time from the start of ProSE to its end (s). */
+  /** The time from the start of the search to the end of its last OpenNuXL run (s). */
   seconds: number
 }
 
@@ -76,10 +82,10 @@ export const searchRun = $state<{
   movedAt: number
   startedAt: number
   now: number
-  /** What went wrong: the stage and file, the message, ProSE's raw text. */
+  /** What went wrong: the stage and file, the message, OpenNuXL's raw text. */
   failure: Failure | null
   /**
-   * ProSE has ended (successfully) and the results are being read: the search is complete and saved, so it
+   * OpenNuXL has ended (successfully) and the results are being read: the search is complete and saved, so it
    * can no longer be cancelled (Cancel is hidden).
    */
   toolEnded: boolean
@@ -100,14 +106,14 @@ export const searchRun = $state<{
 /** No move of the fraction for this long: the progress turns indeterminate (Percolator sends no progress). */
 export const STALL_MS = 2000
 
-/** "16 threads", "all threads" (0: all cores, as ProSE's -threads 0). */
+/** "16 threads", "all threads" (0: all cores, as the shim's -threads 0). */
 export function threadsLabel(threads: number): string {
   return threads > 0 ? `${threads} ${threads === 1 ? 'thread' : 'threads'}` : 'all threads'
 }
 
 class ProgressView {
   running = $derived(searchRun.status === 'running')
-  /** Indeterminate while the fraction does not move: starting ProSE, Percolator, reading the results. */
+  /** Indeterminate while the fraction does not move: starting OpenNuXL, Percolator, reading the results. */
   indeterminate = $derived(
     this.running && (searchRun.fraction === 0 || searchRun.now - searchRun.movedAt > STALL_MS),
   )
@@ -116,7 +122,10 @@ class ProgressView {
     const s = Math.max(0, Math.floor((searchRun.now - searchRun.startedAt) / 1000))
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
   })
-  /** The step, with its file when the search has several ("File 2 of 6 · Post-processing PSMs…"). */
+  /**
+   * The step as the shim says it ("Scoring run.mzML (2 of 3)… this step 45 %"), with its file when the search has several and
+   * the label does not name it ("File 2 of 3 · Post-processing…").
+   */
   label = $derived.by(() => {
     const label = searchRun.label.replace(/\.\.\.$/, '…')
     const { file } = searchRun
@@ -183,13 +192,13 @@ export function closeResult(id: string): boolean {
 }
 
 /**
- * Called with every search of this session whose ProSE has ended successfully, before its results are read;
+ * Called with every search of this session whose OpenNuXL runs have ended successfully, before its results are read;
  * the read waits for the listeners (History writes the search's record).
  */
 type EndedListener = (search: EndedSearch) => Promise<void> | void
 const endedListeners = new Set<EndedListener>()
 
-/** Registers `listener` for the searches whose ProSE ends from now on; returns the way to remove it. */
+/** Registers `listener` for the searches whose OpenNuXL runs end from now on; returns the way to remove it. */
 export function onSearchEnded(listener: EndedListener): () => void {
   endedListeners.add(listener)
   return () => endedListeners.delete(listener)
@@ -281,11 +290,11 @@ function stopClock() {
   clock = undefined
 }
 
-/** The label of the step after ProSE: its outputs are read into the result. */
+/** The label of the step after OpenNuXL: its outputs are read into the result. */
 export const READING_RESULTS = 'Reading the results...'
 
 /**
- * Runs a search in the ProSE tool. Resolves with the id of the opened result, or null if the search
+ * Runs a search with OpenNuXL. Resolves with the id of the opened result, or null if the search
  * failed or was cancelled (`searchRun` says which). When it finishes, its result becomes the open one,
  * unless `keepOpen` says that the user is elsewhere (another result, a PSM): then a result that is open
  * stays open, and the finished one waits in memory until it is shown (`openFinished`).
@@ -301,7 +310,7 @@ export async function runSearch(
   const now = performance.now()
   Object.assign(searchRun, {
     status: 'running',
-    label: 'Starting ProSE...',
+    label: 'Starting OpenNuXL...',
     file: -1,
     files: request.files.map((f) => f.path.split(/[\\/]/).pop() ?? f.path),
     fraction: 0,
@@ -338,7 +347,7 @@ export async function runSearch(
     const seconds = (performance.now() - now) / 1000
     // a cancel that came too late (the search had finished): the user asked to stop, so it stays cancelled
     if (id !== runId) return null
-    // ProSE has ended: the search is complete, and from here on it is kept, not cancelled
+    // OpenNuXL has ended: the search is complete, and from here on it is kept, not cancelled
     Object.assign(searchRun, { label: READING_RESULTS, file: -1, toolEnded: true })
     const createdAt = new Date().toISOString()
     const ended: EndedSearch = { ...meta, id: started.searchId, createdAt, seconds }
@@ -381,7 +390,7 @@ export async function runSearch(
         ),
       )
     } else {
-      // the shim refused the request (a file that cannot be read, ProSE not found)
+      // the shim refused the request (a file that cannot be read, OpenNuXL not found)
       fail({ context: 'Before the search', summary: errorText(e), detail: null })
     }
     return null
@@ -396,7 +405,7 @@ export async function runSearch(
 
 /**
  * Cancels the running search: the run ends at once (a search finishing meanwhile is not opened), and
- * the shim ends ProSE and removes its folder. Once ProSE has ended (`toolEnded`: its results are being
+ * the shim ends OpenNuXL and removes its folder. Once OpenNuXL has ended (`toolEnded`: its results are being
  * read) there is nothing to cancel: the search is complete and saved, and this does nothing.
  */
 export function cancelSearch(): void {

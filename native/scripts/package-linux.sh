@@ -1,7 +1,7 @@
 #!/bin/bash
-# Builds the app's Linux packages, the .deb and the AppImage, with the bundled ProSE in them.
+# Builds the app's Linux packages, the .deb and the AppImage, with the bundled OpenNuXL in them.
 #
-#   package-linux.sh        (src-tauri/resources/prose has to be filled first: bundle-prose.sh)
+#   package-linux.sh        (src-tauri/resources/nuxl has to be filled first: bundle-nuxl.sh)
 #
 # CI (ubuntu-22.04 and ubuntu-22.04-arm: x64 and arm64, WebKitGTK installed as packages) and the development
 # machine (x64, WebKitGTK from the sysroot of in-env.sh, which this script enters by itself when the sysroot
@@ -10,13 +10,13 @@
 #
 # Both get the third-party notices (scripts/third-party-notices.mjs, into resources/notices) and the font
 # licences (dist/assets, vite.config.ts). The .deb is Tauri's, with two changes: its package name is
-# `prose` (Tauri derives `pro-se` from the product name and has no setting for it), and its
-# /usr/share/doc/prose/copyright is the notices' (tauri.conf.json). The AppImage is not Tauri's: linuxdeploy,
+# `nuxl` (Tauri derives `nu-xl` from the product name and has no setting for it), and its
+# /usr/share/doc/nuxl/copyright is the notices' (tauri.conf.json). The AppImage is not Tauri's: linuxdeploy,
 # which Tauri's AppImage step runs, treats
-# every ELF file in the AppDir as its own, so it would copy ProSE's whole library closure a second time
+# every ELF file in the AppDir as its own, so it would copy the tools' whole library closure a second time
 # into usr/lib and rewrite the bundle's DT_RPATH into a RUNPATH, which the AppImage's LD_LIBRARY_PATH
 # (usr/lib, with the libraries of WebKit) overrides. So the AppImage is bundled without
-# resources/prose, which is then copied into the AppDir unchanged, and the AppDir is packed again with
+# resources/nuxl, which is then copied into the AppDir unchanged, and the AppDir is packed again with
 # linuxdeploy's AppImage plugin (from Tauri's tool cache).
 #
 # On the development machine two more things are needed, because Tauri's AppImage tooling expects GTK
@@ -32,17 +32,17 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SYSROOT=${TAURI_SYSROOT:-/scratch/sachsenb/tools/tauri-sysroot}
-if [ -d "$SYSROOT/usr/lib/x86_64-linux-gnu" ] && [ -z "${PROSE_IN_ENV:-}" ]; then
-  export PROSE_IN_ENV=1
+if [ -d "$SYSROOT/usr/lib/x86_64-linux-gnu" ] && [ -z "${NUXL_IN_ENV:-}" ]; then
+  export NUXL_IN_ENV=1
   exec "$ROOT/native/scripts/in-env.sh" "$ROOT/native/scripts/package-linux.sh" "$@"
 fi
 BUNDLE_DIR=$ROOT/src-tauri/target/release/bundle
 TOOLS=${XDG_CACHE_HOME:-$HOME/.cache}/tauri
-PROSE=$ROOT/src-tauri/resources/prose
+NUXL=$ROOT/src-tauri/resources/nuxl
 
 die() { echo "error: $*" >&2; exit 1; }
-[ -x "$PROSE/bin/ProSE" ] && [ -f "$PROSE/build.json" ] \
-  || die "src-tauri/resources/prose holds no bundled ProSE: run native/scripts/bundle-prose.sh <openms-build> src-tauri/resources/prose"
+[ -x "$NUXL/bin/OpenNuXL" ] && [ -x "$NUXL/bin/PercolatorAdapter" ] && [ -f "$NUXL/build.json" ] \
+  || die "src-tauri/resources/nuxl holds no bundled OpenNuXL: run native/scripts/bundle-nuxl.sh <openms-build> src-tauri/resources/nuxl"
 sysroot_mode=false
 case "$(pkg-config --variable=libdir webkit2gtk-4.1 2>/dev/null)" in
   "$SYSROOT"/*) sysroot_mode=true ;;
@@ -62,23 +62,23 @@ rm -rf "$BUNDLE_DIR/appimage" "$BUNDLE_DIR/deb"
 npx tauri bundle --bundles deb
 deb=$(find "$BUNDLE_DIR/deb" -maxdepth 1 -name '*.deb' -type f | head -n 1)
 [ -n "$deb" ] || die "no .deb in $BUNDLE_DIR/deb"
-# the package name: prose (packed again as it was, files owned by root)
+# the package name: nuxl (packed again as it was, files owned by root)
 debroot=$(mktemp -d)
 dpkg-deb -R "$deb" "$debroot/pkg"
-sed -i 's/^Package: .*/Package: prose/' "$debroot/pkg/DEBIAN/control"
+sed -i 's/^Package: .*/Package: nuxl/' "$debroot/pkg/DEBIAN/control"
 dpkg-deb --root-owner-group -b "$debroot/pkg" "$deb" >/dev/null
 rm -rf "$debroot"
 
-# --- the AppImage, without resources/prose ------------------------------------------------------------
+# --- the AppImage, without resources/nuxl -------------------------------------------------------------
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 product=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["productName"])' src-tauri/tauri.conf.json)
-python3 -I - src-tauri/tauri.conf.json "$work/no-prose.json" <<'PY'
+python3 -I - src-tauri/tauri.conf.json "$work/no-nuxl.json" <<'PY'
 import json, sys
 resources = json.load(open(sys.argv[1]))["bundle"]["resources"]
-kept = [r for r in resources if r.rstrip("/") != "resources/prose"]
+kept = [r for r in resources if r.rstrip("/") != "resources/nuxl"]
 if len(kept) != len(resources) - 1:
-    sys.exit("tauri.conf.json: bundle.resources has no resources/prose/ entry")
+    sys.exit("tauri.conf.json: bundle.resources has no resources/nuxl/ entry")
 json.dump({"bundle": {"resources": kept}}, open(sys.argv[2], "w"))
 PY
 if [ "$sysroot_mode" = true ]; then
@@ -95,9 +95,9 @@ exec "$real_pkg_config" "\$@"
 EOF
     chmod +x "$work/bin/$name"
   done
-  PATH="$work/bin:$PATH" npx tauri bundle --bundles appimage --config "$work/no-prose.json"
+  PATH="$work/bin:$PATH" npx tauri bundle --bundles appimage --config "$work/no-nuxl.json"
 else
-  npx tauri bundle --bundles appimage --config "$work/no-prose.json"
+  npx tauri bundle --bundles appimage --config "$work/no-nuxl.json"
 fi
 
 appdir=$(find "$BUNDLE_DIR/appimage" -maxdepth 1 -name '*.AppDir' -type d | head -n 1)
@@ -105,10 +105,10 @@ appimage=$(find "$BUNDLE_DIR/appimage" -maxdepth 1 -name '*.AppImage' -type f | 
 [ -n "$appdir" ] && [ -n "$appimage" ] || die "tauri bundle made no AppDir/AppImage in $BUNDLE_DIR/appimage"
 resources=$appdir/usr/lib/$product/resources
 [ -f "$resources/fasta/crap.fasta" ] || die "the AppDir's resources are not at $resources"
-[ ! -e "$resources/prose" ] || die "$resources/prose is there already: linuxdeploy has seen it"
+[ ! -e "$resources/nuxl" ] || die "$resources/nuxl is there already: linuxdeploy has seen it"
 
-# --- ProSE into the AppDir, unchanged ---------------------------------------------------------------
-cp -a "$PROSE" "$resources/prose"
+# --- OpenNuXL into the AppDir, unchanged ------------------------------------------------------------
+cp -a "$NUXL" "$resources/nuxl"
 
 if [ "$sysroot_mode" = true ]; then
   helpers=$appdir/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
@@ -144,29 +144,29 @@ chmod +x "$appimage"
 # --- checks -------------------------------------------------------------------------------------------
 mkdir "$work/deb"
 dpkg-deb -x "$deb" "$work/deb"
-[ "$(dpkg-deb -f "$deb" Package)" = prose ] || die "the .deb's package name is $(dpkg-deb -f "$deb" Package), not prose"
-grep -q '^License: BSD-3-Clause' "$work/deb/usr/share/doc/prose/copyright" \
-  || die "the .deb has no /usr/share/doc/prose/copyright with the app's licence"
+[ "$(dpkg-deb -f "$deb" Package)" = nuxl ] || die "the .deb's package name is $(dpkg-deb -f "$deb" Package), not nuxl"
+grep -q '^License: BSD-3-Clause' "$work/deb/usr/share/doc/nuxl/copyright" \
+  || die "the .deb has no /usr/share/doc/nuxl/copyright with the app's licence"
 for notices in "$resources/notices/THIRD-PARTY-NOTICES.txt" "$work/deb/usr/lib/$product/resources/notices/THIRD-PARTY-NOTICES.txt"; do
   [ -s "$notices" ] || die "$notices is missing"
 done
-[ -f "$resources/prose/share/OpenMS/models/LICENSE-AlphaPeptDeep.txt" ] || die "the PeptDeep models' licence is missing"
-for exe in "$resources/prose/bin/ProSE" "$work/deb/usr/lib/$product/resources/prose/bin/ProSE"; do
+[ -f "$resources/nuxl/share/OpenMS/NUXL/nuxl_presets.json" ] || die "OpenNuXL's presets are missing"
+for exe in "$resources/nuxl/bin/OpenNuXL" "$resources/nuxl/bin/PercolatorAdapter" \
+  "$work/deb/usr/lib/$product/resources/nuxl/bin/OpenNuXL" "$work/deb/usr/lib/$product/resources/nuxl/bin/PercolatorAdapter"; do
   [ -x "$exe" ] || die "$exe is missing or not executable"
   readelf -d "$exe" | grep -q 'RPATH.*\[\$ORIGIN/\.\./lib\]' || die "$exe lost its RPATH \$ORIGIN/../lib"
 done
-# glibc is the system's (bundle-prose.sh's exclude list): neither its loader (ld-linux-x86-64.so.2,
+# glibc is the system's (bundle-nuxl.sh's exclude list): neither its loader (ld-linux-x86-64.so.2,
 # ld-linux-aarch64.so.1) nor libc may be in the bundle
-glibc=$(find "$resources/prose/lib" \( -name 'ld-linux*' -o -name 'libc.so*' -o -name 'libm.so*' -o -name 'libpthread.so*' \) -printf '%f ')
-[ -z "$glibc" ] || die "the bundled ProSE holds glibc's libraries: $glibc"
-for lib in libOpenMS.so libonnxruntime.so.1 libarrow.so.2400 libgomp.so.1; do
-  [ ! -e "$appdir/usr/lib/$lib" ] || die "$lib was deployed into the AppDir's usr/lib (ProSE's closure belongs to resources/prose)"
-done
+glibc=$(find "$resources/nuxl/lib" \( -name 'ld-linux*' -o -name 'libc.so*' -o -name 'libm.so*' -o -name 'libpthread.so*' \) -printf '%f ')
+[ -z "$glibc" ] || die "the bundled OpenNuXL holds glibc's libraries: $glibc"
+deployed=$(find "$appdir/usr/lib" -maxdepth 1 \( -name 'libOpenMS.so*' -o -name 'libarrow.so*' -o -name 'libgomp.so*' \) -printf '%f ')
+[ -z "$deployed" ] || die "deployed into the AppDir's usr/lib: $deployed(the tools' closure belongs to resources/nuxl)"
 
 echo
 echo "packages:"
 for f in "$appimage" "$deb"; do
   echo "  $(du -h "$f" | cut -f1)	$(basename "$f")"
 done
-echo "  $(du -sh "$appdir" | cut -f1)	AppDir (unpacked AppImage), of which $(du -sh "$resources/prose" | cut -f1) ProSE"
+echo "  $(du -sh "$appdir" | cut -f1)	AppDir (unpacked AppImage), of which $(du -sh "$resources/nuxl" | cut -f1) OpenNuXL"
 echo "  $(dpkg-deb -f "$deb" Installed-Size) KiB	installed size of the .deb $(dpkg-deb -f "$deb" Package) ($(dpkg-deb -f "$deb" Depends))"

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 import type { FileFacts } from '../desktop'
 
 // What New search checks of its inputs before a search starts (the shim's commands, the session and the router are
-// replaced): files ProSE cannot search, the same file twice, design cells and ranges that are not valid, and what
+// replaced): files OpenNuXL cannot search, the same file twice, design cells and ranges that are not valid, and what
 // Remove all, Start over and Undo bring back.
 
 vi.mock('./session.svelte', () => ({ searchRun: { status: 'idle' }, runSearch: vi.fn(async () => null) }))
@@ -30,8 +30,8 @@ const facts = (path: string): FileFacts => {
 vi.mock('../desktop', () => ({
   inspectFiles: vi.fn(async (paths: string[]) => paths.map(facts)),
   exampleFiles: vi.fn(async () => ({
-    spectra: ['/data/example/Ecoli_1.mzML', '/data/example/Ecoli_2.mzML'],
-    database: '/app/resources/example/Ecoli_K12_proteome.fasta',
+    spectra: ['/app/resources/example/OpenNuXL_1_input.mzML'],
+    database: '/app/resources/example/OpenNuXL_1_input.fasta',
   })),
   errorText: (e: unknown) => String(e),
 }))
@@ -57,8 +57,8 @@ describe('the inputs of New search', () => {
     form.notices = []
     form.removed = null
     form.invalidCells = {}
-    form.choosePreset('orbitrap-hcd-tryptic')
-    Object.assign(toolState, { status: 'ready', info: { version: '3.7.0', path: '/x/ProSE', onnx: true }, error: null })
+    form.choosePreset('nuxl-defaults')
+    Object.assign(toolState, { status: 'ready', info: { version: '3.7.0', path: '/x/OpenNuXL' }, error: null })
   })
 
   test('the same path is added once, in one go or again later; files of one name from two folders stay apart', async () => {
@@ -79,7 +79,7 @@ describe('the inputs of New search', () => {
     expect(searchPlan.problem).toBeNull()
   })
 
-  test('a file ProSE cannot search joins the table marked, and the search waits until it is removed', async () => {
+  test('a file OpenNuXL cannot search joins the table marked, and the search waits until it is removed', async () => {
     special.set('trunc.mzML', { problem: 'trunc.mzML is incomplete: it ends before its closing </mzML> tag.' })
     special.set('fake.mzML', { spectra: null, problem: 'fake.mzML is not an mzML file: it is not XML.' })
     await ready()
@@ -93,10 +93,10 @@ describe('the inputs of New search', () => {
     expect(searchPlan.problem).toBeNull()
   })
 
-  test('a database ProSE cannot search holds the search; what it treats specially does not', async () => {
+  test('a database OpenNuXL cannot search holds the search; what it treats specially does not', async () => {
     special.set('empty.fasta', { proteins: 0, residues: 0, problem: 'empty.fasta is empty.' })
     special.set('lower.fasta', {
-      warnings: ['lower.fasta lists 3 entries twice, with the same accession and sequence (the first: P1), e.g. the file was added twice: ProSE searches each protein once.'],
+      warnings: ['lower.fasta lists 3 entries twice, with the same accession and sequence (the first: P1), e.g. the file was added twice: the search uses each protein once.'],
     })
     await ready()
     await form.setDatabase('/db/empty.fasta')
@@ -143,9 +143,10 @@ describe('the inputs of New search', () => {
     expect(searchPlan.inverted.map((r) => r.label)).toEqual(['Charges'])
     expect(searchPlan.problem).toBe('Charges: the lowest (5) is above the highest (2).')
     form.setParam('precursor:max_charge', 5)
-    form.setParam('fragment:min_mz', 2500)
-    expect(searchPlan.problem).toBe('Fragment m/z: the lowest (2500) is above the highest (2000).')
-    form.setParam('fragment:min_mz', 150)
+    form.setParam('peptide:min_size', 40)
+    form.setParam('peptide:max_size', 30)
+    expect(searchPlan.problem).toBe('Peptide length: the lowest (40) is above the highest (30).')
+    form.setParam('peptide:min_size', 6)
     expect(searchPlan.canStart).toBe(true)
   })
 
@@ -174,7 +175,7 @@ describe('the inputs of New search', () => {
     expect(form.edited).toBe(false)
     form.setParam('peptide:missed_cleavages', 3)
     expect(form.edited).toBe(true)
-    form.choosePreset('timstof-tryptic')
+    form.choosePreset('nuxl-defaults')
     expect(form.edited).toBe(false)
     expect(form.modified).toBe(false)
   })

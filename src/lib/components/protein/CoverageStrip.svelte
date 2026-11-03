@@ -1,10 +1,11 @@
 <script lang="ts">
   // The protein's sequence as one strip: its peptides along it (light blue), the selected peptide below
-  // (blue) and a dot on every modified residue (--mod, the colour of a modified residue everywhere).
+  // (blue), a dot on every modified residue (--mod, the colour of a modified residue everywhere) and a
+  // violet tick below the strip at every cross-linked residue.
   // Positions are percentages of the sequence, so the strip is as wide as the panel. It is a picture:
   // the Coverage tab has the same as text, and the Peptides tab lists the peptides.
   import { formatCount } from '$lib/results/display'
-  import { siteTitle, type ProteinDetail, type Span } from '$lib/results/protein'
+  import { crossLinkTitle, siteTitle, type ProteinDetail, type Span } from '$lib/results/protein'
 
   let { detail, selected = [] }: { detail: ProteinDetail; selected?: Span[] } = $props()
 
@@ -47,7 +48,7 @@
   const summary = $derived(
     length === 0
       ? 'The protein has no sequence, so there is no coverage to show.'
-      : `Sequence coverage ${(detail.coverage * 100).toFixed(1)} % of ${formatCount(length)} residues, ${detail.sites.length} modified ${detail.sites.length === 1 ? 'site' : 'sites'}.`,
+      : `Sequence coverage ${(detail.coverage * 100).toFixed(1)} % of ${formatCount(length)} residues, ${detail.sites.length} modified ${detail.sites.length === 1 ? 'site' : 'sites'}, ${detail.xlSites.length} cross-linked ${detail.xlSites.length === 1 ? 'site' : 'sites'}.`,
   )
 </script>
 
@@ -79,13 +80,21 @@
           class="absolute -top-[5px] -ml-[3.5px] size-[7px] rounded-full border-[1.5px] border-card bg-mod"
           style:left={left(site.position + 0.5)}></b>
       {/each}
+      {#each detail.xlSites as site (site.position)}
+        <b
+          data-testid="xl-tick"
+          title="Cross-linked: {crossLinkTitle(site)}"
+          class="absolute -bottom-[5px] -ml-[3.5px] size-[7px] rotate-45 rounded-[1.5px] border-[1.5px] border-card bg-violet-500"
+          style:left={left(site.position + 0.5)}></b>
+      {/each}
     {/if}
   </div>
   <div class="mt-0.5 flex items-start justify-between gap-3 text-xs text-muted-foreground" aria-hidden="true">
     <span>1</span>
     <span class="text-center"
       >peptides along the sequence{#if selected.length > 0}&nbsp;· selected peptide below{/if}&nbsp;· <b
-        class="mr-0.5 inline-block size-2 rounded-full bg-mod align-[-0.5px]"></b>modified site</span>
+        class="mr-0.5 inline-block size-2 rounded-full bg-mod align-[-0.5px]"></b>modified site{#if detail.xlSites.length > 0}&nbsp;· <b
+          class="mr-0.5 inline-block size-2 rotate-45 rounded-[1.5px] bg-violet-500 align-[-0.5px]"></b>cross-linked site{/if}</span>
     <span>{formatCount(length)}</span>
   </div>
 </div>

@@ -1,11 +1,11 @@
 <script lang="ts">
-  // The protein database: the FASTA file, decoys (ProSE's `decoys`) and the cRAP contaminants. Under it, why
-  // ProSE cannot search the file (the search does not start), and what ProSE may mishandle in it (notices).
+  // The protein database: the FASTA file and the cRAP contaminants; OpenNuXL makes the decoys (or uses the database's
+  // own, which the shim finds). Under it, why OpenNuXL cannot search the file (the search does not start), and what
+  // the search treats specially in it (notices).
   import * as Card from '$lib/components/ui/card'
   import { Label } from '$lib/components/ui/label'
   import { chooseFiles } from '$lib/desktop'
   import { CRAP_PROTEINS, searchForm as form } from '$lib/search/form.svelte'
-  import { choiceLabel } from '$lib/settings/labels'
   import ChoiceSelect from './ChoiceSelect.svelte'
   import NoticeList from './NoticeList.svelte'
 
@@ -13,13 +13,6 @@
     const [path] = await chooseFiles('database')
     if (path !== undefined) await form.setDatabase(path)
   }
-
-  const decoyOptions = $derived(
-    (form.entry('decoys')?.validStrings ?? ['auto', 'generate', 'ignore']).map((v) => ({
-      value: v,
-      label: choiceLabel('decoys', v),
-    })),
-  )
 
   const proteins = $derived(form.database?.proteins ?? null)
 </script>
@@ -55,12 +48,10 @@
       </button>
     </div>
     <div class="grid min-w-0 gap-1">
-      <Label for="decoys" class="text-xs">Decoys</Label>
-      <ChoiceSelect
-        id="decoys"
-        value={String(form.value('decoys') ?? 'auto')}
-        options={decoyOptions}
-        onChange={(v) => form.setParam('decoys', v)} />
+      <span class="text-xs font-medium">Decoys</span>
+      <p class="flex h-8 items-center text-[12.5px] text-muted-foreground" title="Shuffled peptides of the proteins, with the prefix DECOY_, unless the database has decoys already.">
+        Made by OpenNuXL
+      </p>
     </div>
     <div class="grid min-w-0 gap-1">
       <Label for="contaminants" class="text-xs">Contaminants</Label>

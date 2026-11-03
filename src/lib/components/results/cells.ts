@@ -1,6 +1,7 @@
 // Helpers of the results tables' columns.
 
 import { signedNumber } from '$lib/format/number'
+import { adductLabel } from '$lib/format/peptide'
 import type { ColumnSpec } from '$lib/results/table-columns'
 import type { Column } from './DataTable.svelte'
 
@@ -35,4 +36,27 @@ export function fixed(x: number, digits: number): string {
 /** A signed number with fixed decimals ("+1.25", "−0.40" with a real minus; what rounds to zero is "0.00"); NaN as "–". */
 export function signed(x: number, digits: number): string {
   return signedNumber(x, digits)
+}
+
+/** What an FDR group of OpenNuXL ('peptide', 'XL', 'short_XL') is called in the tables; another as it is. */
+export function fdrGroupLabel(group: string): string {
+  return ({ peptide: 'Peptide', XL: 'Cross-link', short_XL: 'Short cross-link' } as Record<string, string>)[group] ?? group
+}
+
+/**
+ * The tooltip of an adduct cell: the adduct, its mass and the cross-linked nucleotide(s) ("U-H₃PO₄ · +306.0253 Da ·
+ * nucleotide U"); a peptide whose adduct is no cross-link says so. '' for no adduct.
+ */
+export function adductTitle(adduct: string, mass: number, nucleotide: string, isXL: boolean): string {
+  if (adduct === '') return ''
+  const parts = [adductLabel(adduct)]
+  if (mass === mass) parts.push(`${signed(mass, 4)} Da`)
+  if (nucleotide !== '') parts.push(`${nucleotide.includes(',') ? 'nucleotides' : 'nucleotide'} ${nucleotide.replaceAll(',', ', ')}`)
+  if (!isXL) parts.push('not a cross-link')
+  return parts.join(' · ')
+}
+
+/** A localization score (0–1) with two decimals; NaN as "–". */
+export function siteScoreText(score: number): string {
+  return fixed(score, 2)
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // "Save as preset": the settings that differ from ProSE's defaults, kept by the app on this computer. A name
+  // "Save as preset": the settings that differ from OpenNuXL's defaults, and the FDRs, kept by the app on this computer. A name
   // a user preset has already replaces that preset, and the dialog says so first (its button reads Replace).
   import { Button } from '$lib/components/ui/button'
   import * as Dialog from '$lib/components/ui/dialog'
@@ -32,8 +32,8 @@
     <Dialog.Header>
       <Dialog.Title>Save as preset</Dialog.Title>
       <Dialog.Description>
-        The app saves the settings that differ from ProSE's defaults on this computer. Percolator and PeptDeep are not
-        part of a preset.
+        The app saves the settings that differ from OpenNuXL's defaults, with the FDRs, on this computer. Percolator and
+        the threads are not part of a preset.
       </Dialog.Description>
     </Dialog.Header>
     <form

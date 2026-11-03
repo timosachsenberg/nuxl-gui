@@ -1,37 +1,41 @@
 <script lang="ts">
   // The peptide with its fragment ladder (mockup 3): the residues in large monospace, a modified one
-  // marked (the colour --mod and a short label below it, as in the tables), and at each cleavage a
-  // mark above it where an N-terminal ion explains it (b blue, a or c dark grey) and below it where a
-  // C-terminal ion does (y orange, x or z dark grey). Long peptides get smaller to fit the width.
+  // marked (the colour --mod and a short label below it, as in the tables; the cross-linked residue carries its
+  // adduct so), and at each cleavage a mark above it where an N-terminal ion of NuXL's annotation explains it and
+  // below it where a C-terminal one does: an unshifted ion in its series' colour (a/b/c blue, x/y/z orange), an ion
+  // shifted by the nucleotide in the cross-link's colour (--mod) — a bracket of its own when no unshifted ion
+  // explains the cleavage, else a dot at the end of the bracket. Long peptides get smaller to fit the width.
   import { modTitle, type PeptideView } from '$lib/format/peptide'
   import { COLORS } from '$lib/psm/psm'
+  import type { Cut } from './nuxl-psm'
 
   let {
     peptide,
     cuts,
-    shift = null,
     available = 0,
   }: {
     peptide: PeptideView
-    /** Per cleavage: the series explaining it from either end, or null (see `ladderCuts`). */
-    cuts: { n: (string | null)[]; c: (string | null)[] }
-    /** An open search's unlocalized mass shift ("+15.9949"), shown before the sequence. */
-    shift?: string | null
+    /** Per cleavage: what explains it from either end, or null (see `nuxlLadder`). */
+    cuts: { n: Cut[]; c: Cut[] }
     /** The width of the row (pixels): a long peptide gets smaller to fit it, down to half size, then wraps. */
     available?: number
   } = $props()
 
   const n = $derived(peptide.residues.length)
   // a residue is 32 px and a cleavage 10 px at full size; long peptides shrink to the width
-  const full = $derived(n * 42 + (shift ? 110 : 0) + (peptide.nTerm ? 22 : 0) + (peptide.cTerm ? 22 : 0))
+  const full = $derived(n * 42 + (peptide.nTerm ? 22 : 0) + (peptide.cTerm ? 22 : 0))
   const s = $derived(available > 0 ? Math.max(0.5, Math.min(1, (available - 4) / full)) : 1)
 
-  const color = (type: string | null, best: string) => (type === best ? (best === 'b' ? COLORS.b : COLORS.y) : COLORS.other)
+  const color = (cut: NonNullable<Cut>, terminal: 'n' | 'c') => (cut.type === null ? COLORS.mod : terminal === 'n' ? COLORS.b : COLORS.y)
 
   const explained = $derived.by(() => {
-    const cutsN = cuts.n.filter((t) => t !== null).length
-    const cutsC = cuts.c.filter((t) => t !== null).length
-    return `${cutsN} of ${n - 1} cleavages explained by N-terminal ions, ${cutsC} by C-terminal ions`
+    const count = (list: Cut[], f: (c: NonNullable<Cut>) => boolean) => list.filter((c) => c !== null && f(c)).length
+    const part = (list: Cut[]) => {
+      const all = count(list, () => true)
+      const shifted = count(list, (c) => c.shifted)
+      return shifted > 0 ? `${all} (${shifted} by shifted ions)` : String(all)
+    }
+    return `${part(cuts.n)} of ${n - 1} cleavages explained by N-terminal ions, ${part(cuts.c)} by C-terminal ions`
   })
 </script>
 
@@ -42,7 +46,6 @@
     data-testid="fragment-ladder"
     role="img"
     aria-label="{peptide.proforma}: {explained}">
-    {#if shift}<span class="shift" title="Unassigned mass shift in Da. Its position on the peptide is not known.">[{shift}]?</span>{/if}
     {#if peptide.nTerm}<span class="term" title={modTitle(peptide.nTerm)}>{peptide.nTerm.label}</span>{/if}
     {#each peptide.residues as r, i (i)}
       <span class="aa" class:mod={r.mod !== undefined} title={r.mod ? modTitle(r.mod) : undefined}>
@@ -51,8 +54,18 @@
       </span>
       {#if i < n - 1}
         <span class="cut">
-          {#if cuts.n[i]}<i class="n" data-cut={cuts.n[i]} style:--c={color(cuts.n[i], 'b')}></i>{/if}
-          {#if cuts.c[i]}<i class="c" data-cut={cuts.c[i]} style:--c={color(cuts.c[i], 'y')}></i>{/if}
+          {#if cuts.n[i]}{@const cut = cuts.n[i]!}<i
+              class="n"
+              class:both={cut.type !== null && cut.shifted}
+              data-cut={cut.type ?? 'shifted'}
+              data-shifted={cut.shifted ? '' : undefined}
+              style:--c={color(cut, 'n')}></i>{/if}
+          {#if cuts.c[i]}{@const cut = cuts.c[i]!}<i
+              class="c"
+              class:both={cut.type !== null && cut.shifted}
+              data-cut={cut.type ?? 'shifted'}
+              data-shifted={cut.shifted ? '' : undefined}
+              style:--c={color(cut, 'c')}></i>{/if}
         </span>
       {/if}
     {/each}
@@ -103,11 +116,6 @@
     font-weight: 600;
     color: var(--mod-fg);
   }
-  .shift {
-    margin-right: 8px;
-    font-size: 13px;
-    color: var(--color-muted-foreground);
-  }
   .cut {
     position: relative;
     width: calc(10px * var(--s));
@@ -142,5 +150,21 @@
   .cut .c::after {
     left: 0;
     bottom: 0;
+  }
+  /* an unshifted and a shifted ion explain the cleavage: a dot of the cross-link's colour at the bracket's end */
+  .cut i.both::before {
+    content: '';
+    position: absolute;
+    left: -1px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--mod);
+  }
+  .cut .n.both::before {
+    bottom: -5px;
+  }
+  .cut .c.both::before {
+    top: -5px;
   }
 </style>

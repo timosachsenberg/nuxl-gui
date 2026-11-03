@@ -31,7 +31,7 @@ export function unframe(body: Uint8Array): { name: string; data: Uint8Array }[] 
 
 export class MemoryBackend implements HistoryBackend {
   folders = new Map<string, Map<string, Uint8Array>>()
-  /** The `.prose` files "on disk", by path, and the one the open dialog gives (null: cancelled). */
+  /** The `.nuxl` files "on disk", by path, and the one the open dialog gives (null: cancelled). */
   projects = new Map<string, Uint8Array>()
   chosen: string | null = null
   /** What the save dialog got (the zip as the Rust side writes it), and whether the user cancels it. */
@@ -82,8 +82,8 @@ export class MemoryBackend implements HistoryBackend {
       }
       try {
         const json = JSON.parse(new TextDecoder().decode(record))
-        if (typeof json?.schema !== 'number') throw new Error('search.json has no schema: it is not a ProSE search record.')
-        if (json.schema > 1) throw new Error(`This search was saved by a newer version of ProSE (schema ${json.schema}).`)
+        if (typeof json?.schema !== 'number') throw new Error('search.json has no schema: it is not a NuXL search record.')
+        if (json.schema > 1) throw new Error(`This search was saved by a newer version of NuXL Desktop (schema ${json.schema}).`)
         Object.assign(entry, {
           name: json.name ?? null,
           createdAt: json.createdAt ?? null,

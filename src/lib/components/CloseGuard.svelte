@@ -1,6 +1,6 @@
 <script lang="ts">
   // Closing the window while a search runs: the app keeps the window and asks here first. Closing ends
-  // ProSE, and the search leaves nothing behind; "Keep searching" leaves the window open. (Closing the
+  // OpenNuXL, and the search leaves nothing behind; "Keep searching" leaves the window open. (Closing the
   // window again before an answer closes it: the app's rule, src-tauri/src/lib.rs `close_requested`.)
   // Should the search end while the question is open, the app is answered "keep" at once (so that a later
   // close with a search running asks again), and the question says what is left (search/close-guard.ts).

@@ -4,7 +4,7 @@
 mod common;
 
 use common::{set_folder_modified, TempDir};
-use prose_desktop_lib::history::{
+use nuxl_desktop_lib::history::{
     delete, finish_partial, folder_files, frame, import, list, lock_partial, read_chosen_project,
     remove_partial, rename, save_proteins, save_record, sweep, with_backoff, BACKOFF_TRIES,
     LOCK_FILE, NOT_A_SEARCH, NO_RECORD, SWEEP_GRACE,
@@ -31,8 +31,8 @@ fn searches() -> (TempDir, PathBuf) {
 /// A finished search folder with outputs, saved to History under `name`.
 fn saved(dir: &Path, id: &str, name: &str) {
     let folder = dir.join(id);
-    fs::create_dir_all(folder.join("qpx")).unwrap();
-    fs::write(folder.join("qpx/1__a.psm.parquet"), b"PAR1....PAR1").unwrap();
+    fs::create_dir_all(folder.join("nuxl")).unwrap();
+    fs::write(folder.join("nuxl/1__a.idXML"), b"PAR1....PAR1").unwrap();
     fs::write(folder.join("inputs.json"), "[]").unwrap();
     save_record(dir, id, &record(id, name)).unwrap();
     save_proteins(dir, id, ">P1 first\nPEPTIDE\n").unwrap();
@@ -83,8 +83,8 @@ fn history_lists_renames_and_deletes() {
     delete(&dir, "1-0").unwrap();
     // only ids of the searches folder
     assert!(delete(&dir, "..").is_err());
-    assert!(delete(&dir, "2-0/qpx").is_err());
-    assert!(dir.join("2-0/qpx").exists());
+    assert!(delete(&dir, "2-0/nuxl").is_err());
+    assert!(dir.join("2-0/nuxl").exists());
 }
 
 /// (symbolic links: Unix; Windows makes none without a privilege)
@@ -156,7 +156,7 @@ fn history_lists_an_incomplete_folder_with_its_message() {
     assert!(get("2-0").error.as_ref().unwrap().contains("search.json"));
     let newer = get("4-0").error.as_ref().unwrap();
     assert!(
-        newer.contains("newer version of ProSE") && newer.contains("schema 2"),
+        newer.contains("newer version of NuXL") && newer.contains("schema 2"),
         "{newer}"
     );
     // the good one first, the broken ones after
@@ -175,7 +175,7 @@ fn history_lists_an_incomplete_folder_with_its_message() {
 }
 
 fn get_error<'a>(
-    entries: &'a [prose_desktop_lib::history::HistoryEntry],
+    entries: &'a [nuxl_desktop_lib::history::HistoryEntry],
     id: &str,
 ) -> Option<&'a str> {
     entries.iter().find(|e| e.id == id)?.error.as_deref()
@@ -186,8 +186,8 @@ fn a_folder_that_is_no_search_by_its_name_is_listed_and_can_be_deleted() {
     let (tmp, dir) = searches();
     saved(&dir, "1-0", "kept");
     for name in ["bad id", "a.b", "copy of 1-0"] {
-        fs::create_dir_all(dir.join(name).join("qpx")).unwrap();
-        fs::write(dir.join(name).join("qpx/x.parquet"), "x".repeat(10)).unwrap();
+        fs::create_dir_all(dir.join(name).join("nuxl")).unwrap();
+        fs::write(dir.join(name).join("nuxl/x.idXML"), "x".repeat(10)).unwrap();
     }
     let entries = list(&dir);
     assert_eq!(entries.len(), 4);
@@ -211,7 +211,7 @@ fn a_folder_that_is_no_search_by_its_name_is_listed_and_can_be_deleted() {
         ".",
         "",
         "../searches",
-        "copy of 1-0/qpx",
+        "copy of 1-0/nuxl",
         "2-0.partial",
         ".hidden",
         "a\\b",
@@ -219,7 +219,7 @@ fn a_folder_that_is_no_search_by_its_name_is_listed_and_can_be_deleted() {
     ] {
         assert!(delete(&dir, bad).is_err(), "{bad:?} is refused");
     }
-    assert!(dir.join("copy of 1-0/qpx").exists());
+    assert!(dir.join("copy of 1-0/nuxl").exists());
     assert!(dir.join("2-0.partial").exists() && dir.join(".hidden").exists());
     assert!(tmp.path().join("searches").exists());
     // a file of that name is not a folder
@@ -303,8 +303,8 @@ fn the_record_comes_first_then_proteins_fasta_replaces_the_database_copy() {
     let (_tmp, dir) = searches();
     // a finished search as the shim leaves it: its outputs and database.fasta (the FASTA with cRAP)
     let folder = dir.join("1-0");
-    fs::create_dir_all(folder.join("qpx")).unwrap();
-    fs::write(folder.join("qpx/quantms.psm.parquet"), "psm").unwrap();
+    fs::create_dir_all(folder.join("nuxl")).unwrap();
+    fs::write(folder.join("nuxl/1__a.tsv"), "psm").unwrap();
     fs::write(
         folder.join("database.fasta"),
         ">P1\nPEPTIDE\n>CON__P2\nKR\n",
@@ -329,8 +329,8 @@ fn the_record_comes_first_then_proteins_fasta_replaces_the_database_copy() {
 fn a_finished_folder_without_record_is_listed_as_not_saved() {
     let (_tmp, dir) = searches();
     saved(&dir, "1-0", "kept");
-    fs::create_dir_all(dir.join("2-0/qpx")).unwrap();
-    fs::write(dir.join("2-0/qpx/1__a.psm.parquet"), "x".repeat(100)).unwrap();
+    fs::create_dir_all(dir.join("2-0/nuxl")).unwrap();
+    fs::write(dir.join("2-0/nuxl/1__a.idXML"), "x".repeat(100)).unwrap();
     let entries = list(&dir);
     assert_eq!(entries.len(), 2);
     let unsaved = entries.iter().find(|e| e.id == "2-0").unwrap();
@@ -353,21 +353,21 @@ fn folder_files_lists_regular_files_only() {
     #[cfg(unix)]
     std::os::unix::fs::symlink("/etc/hostname", dir.join("1-0/0__a.mzML")).unwrap();
     // a hard link to an input that a search on Windows left (it removes them; one in use may stay)
-    let input = tmp.path().join("b.mzML.gz");
+    let input = tmp.path().join("b.mzML");
     fs::write(&input, "<mzML/>").unwrap();
-    fs::hard_link(&input, dir.join("1-0/2__b.mzML.gz")).unwrap();
+    fs::hard_link(&input, dir.join("1-0/2__b.mzML")).unwrap();
     let files = folder_files(&dir, "1-0").unwrap();
     let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(
         names,
         [
             "inputs.json",
+            "nuxl/1__a.idXML",
             "proteins.fasta",
-            "qpx/1__a.psm.parquet",
             "search.json"
         ]
     );
-    assert_eq!(files[2].size, 12);
+    assert_eq!(files[1].size, 12);
     assert!(folder_files(&dir, "9-9").is_err());
     assert!(folder_files(&dir, "..").is_err());
 }
@@ -386,17 +386,14 @@ fn import_writes_a_fresh_folder() {
     let body = project(
         "old-id",
         &[
-            ("qpx/1__a.psm.parquet", b"PAR1"),
+            ("nuxl/1__a.idXML", b"PAR1"),
             ("proteins.fasta", b">P\nAA\n"),
         ],
     );
     let id = import(&dir, &body).unwrap();
     assert_ne!(id, "old-id");
     let folder = dir.join(&id);
-    assert_eq!(
-        fs::read(folder.join("qpx/1__a.psm.parquet")).unwrap(),
-        b"PAR1"
-    );
+    assert_eq!(fs::read(folder.join("nuxl/1__a.idXML")).unwrap(), b"PAR1");
     assert_eq!(
         fs::read(folder.join("proteins.fasta")).unwrap(),
         b">P\nAA\n"
@@ -446,7 +443,7 @@ fn import_rechecks_every_path() {
 fn import_needs_a_record_of_this_schema() {
     let (_tmp, dir) = searches();
     // no search.json
-    assert!(import(&dir, &frame(&[("qpx/a", b"x")]))
+    assert!(import(&dir, &frame(&[("nuxl/a", b"x")]))
         .unwrap_err()
         .contains("search.json"));
     // not JSON, no schema
@@ -455,7 +452,7 @@ fn import_needs_a_record_of_this_schema() {
     // a newer schema: refused, with a message
     let err = import(&dir, &frame(&[("search.json", br#"{"schema":2}"#)])).unwrap_err();
     assert!(
-        err.contains("newer version of ProSE") && err.contains("schema 2"),
+        err.contains("newer version of NuXL") && err.contains("schema 2"),
         "{err}"
     );
     // nothing is empty
@@ -491,25 +488,25 @@ fn frames_have_a_fixed_layout() {
 #[test]
 fn read_chosen_project_serves_any_regular_file() {
     let tmp = TempDir::new("project");
-    let good = tmp.write("a.prose", "zip");
+    let good = tmp.write("a.nuxl", "zip");
     assert_eq!(read_chosen_project(&good).unwrap(), b"zip");
-    let upper = tmp.write("B.PROSE", "zip");
+    let upper = tmp.write("B.NUXL", "zip");
     assert!(read_chosen_project(&upper).is_ok());
     // any name: the front end checks what the file holds
-    for name in ["a.zip", "project", "a.prose.zip", "Ergebnis ü.txt"] {
+    for name in ["a.zip", "project", "a.nuxl.zip", "Ergebnis ü.txt"] {
         assert_eq!(
             read_chosen_project(&tmp.write(name, "zip")).unwrap(),
             b"zip"
         );
     }
     assert!(
-        read_chosen_project(Path::new("a.prose")).is_err(),
+        read_chosen_project(Path::new("a.nuxl")).is_err(),
         "absolute paths only"
     );
-    assert!(read_chosen_project(&tmp.path().join("absent.prose")).is_err());
-    fs::create_dir_all(tmp.path().join("dir.prose")).unwrap();
-    assert!(read_chosen_project(&tmp.path().join("dir.prose")).is_err());
-    assert!(read_chosen_project(&tmp.write("empty.prose", ""))
+    assert!(read_chosen_project(&tmp.path().join("absent.nuxl")).is_err());
+    fs::create_dir_all(tmp.path().join("dir.nuxl")).unwrap();
+    assert!(read_chosen_project(&tmp.path().join("dir.nuxl")).is_err());
+    assert!(read_chosen_project(&tmp.write("empty.nuxl", ""))
         .unwrap_err()
         .contains("empty"));
 }
@@ -519,7 +516,7 @@ fn read_chosen_project_serves_any_regular_file() {
 fn read_chosen_project_does_not_follow_a_link() {
     let tmp = TempDir::new("project-link");
     let secret = tmp.write("secret.txt", "not a project");
-    let link = tmp.path().join("x.prose");
+    let link = tmp.path().join("x.nuxl");
     std::os::unix::fs::symlink(&secret, &link).unwrap();
     let err = read_chosen_project(&link).unwrap_err();
     assert!(err.contains("not a regular file"), "{err}");
@@ -530,8 +527,8 @@ fn the_sweep_removes_what_an_interrupted_search_left_and_no_finished_search() {
     let (_tmp, dir) = searches();
     saved(&dir, "1-0", "kept");
     // a partial folder of an interrupted search of an older version (no lock file)
-    fs::create_dir_all(dir.join("2-0.partial/qpx")).unwrap();
-    fs::write(dir.join("2-0.partial/prose.log"), "x").unwrap();
+    fs::create_dir_all(dir.join("2-0.partial/nuxl")).unwrap();
+    fs::write(dir.join("2-0.partial/nuxl.log"), "x").unwrap();
     // a finished folder that never got its record (the app ended as the search finished): the user's
     fs::create_dir_all(dir.join("3-0")).unwrap();
     fs::write(dir.join("3-0/inputs.json"), "x").unwrap();
@@ -566,11 +563,11 @@ fn a_live_partial_folder_survives_the_sweep() {
     fs::create_dir_all(&live).unwrap();
     // the owner (a search or import of this or another app instance) holds the lock
     let lock = lock_partial(&live).unwrap();
-    fs::write(live.join("prose.log"), "x").unwrap();
+    fs::write(live.join("nuxl.log"), "x").unwrap();
     // however long ago it was written
     let much_later = SystemTime::now() + SWEEP_GRACE * 1000;
     assert!(sweep(&dir, much_later, SWEEP_GRACE).is_empty());
-    assert!(live.join("prose.log").exists());
+    assert!(live.join("nuxl.log").exists());
     drop(lock);
 }
 
@@ -581,7 +578,7 @@ fn a_partial_folder_whose_owner_is_gone_is_removed() {
     fs::create_dir_all(&stale).unwrap();
     // locked, then released (the owner ended; the system releases the lock of a process that died)
     drop(lock_partial(&stale).unwrap());
-    fs::write(stale.join("prose.log"), "x").unwrap();
+    fs::write(stale.join("nuxl.log"), "x").unwrap();
     // a lock file that is brand new is not taken for a stale one (the owner may be about to lock it)
     assert!(sweep(&dir, SystemTime::now(), SWEEP_GRACE).is_empty());
     assert!(stale.exists());
@@ -625,14 +622,14 @@ fn the_sweep_spares_an_old_partial_folder_that_was_just_written() {
     // a partial folder of an older version (no lock file) whose own time is old but whose log was written a
     // moment ago (a long search of another instance that is still running)
     fs::create_dir_all(dir.join("3-0.partial")).unwrap();
-    fs::write(dir.join("3-0.partial/prose.log"), "x").unwrap();
+    fs::write(dir.join("3-0.partial/nuxl.log"), "x").unwrap();
     let old = SystemTime::now() - Duration::from_secs(3600);
     set_folder_modified(&dir.join("3-0.partial"), old);
     assert!(sweep(&dir, SystemTime::now(), SWEEP_GRACE).is_empty());
     // and one whose log is old too goes
     fs::File::options()
         .write(true)
-        .open(dir.join("3-0.partial/prose.log"))
+        .open(dir.join("3-0.partial/nuxl.log"))
         .unwrap()
         .set_modified(old)
         .unwrap();
@@ -791,15 +788,15 @@ fn a_partial_folder_is_removed_while_its_lock_is_held() {
     let (_tmp, dir) = searches();
     // std's remove_dir_all, with the lock held by the remover
     let partial = dir.join("10-0.partial");
-    fs::create_dir_all(partial.join("qpx")).unwrap();
+    fs::create_dir_all(partial.join("nuxl")).unwrap();
     let lock = lock_partial(&partial).unwrap();
-    fs::write(partial.join("qpx/a.psm.parquet"), "x").unwrap();
+    fs::write(partial.join("nuxl/a.idXML"), "x").unwrap();
     fs::remove_dir_all(&partial).unwrap();
     assert!(!partial.exists());
     drop(lock);
     // remove_partial, with the lock held by the remover and the lock file open in another handle
     let partial = dir.join("11-0.partial");
-    fs::create_dir_all(partial.join("qpx")).unwrap();
+    fs::create_dir_all(partial.join("nuxl")).unwrap();
     let lock = lock_partial(&partial).unwrap();
     let other = fs::File::open(partial.join(LOCK_FILE)).unwrap();
     let closer = std::thread::spawn(move || {

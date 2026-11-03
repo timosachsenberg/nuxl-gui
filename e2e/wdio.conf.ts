@@ -67,7 +67,7 @@ function cleanUp() {
 
 /** Starts tauri-driver for the run, once the port is free; throws if that is not possible. */
 async function prepare() {
-  if (!process.env.E2E_APPLICATION && !existsSync(resolve(root, 'src-tauri/target/debug/prose-desktop'))) {
+  if (!process.env.E2E_APPLICATION && !existsSync(resolve(root, 'src-tauri/target/debug/nuxl-desktop'))) {
     throw new Error('The debug build is missing: run `npm run tauri:build:debug` (e2e/run.sh does).')
   }
   if (await listening(driverPort)) {
@@ -76,7 +76,7 @@ async function prepare() {
         'Stop it (`pkill tauri-driver`) and run again.',
     )
   }
-  dataRoot = mkdtempSync(join(tmpdir(), 'prose-e2e-data-'))
+  dataRoot = mkdtempSync(join(tmpdir(), 'nuxl-e2e-data-'))
   process.env.E2E_DATA_ROOT = dataRoot
   // a group of its own (detached), so that stopDriver reaches everything below it
   driver = spawn('tauri-driver', ['--port', String(driverPort)], {

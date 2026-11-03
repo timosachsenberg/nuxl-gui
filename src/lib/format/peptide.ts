@@ -32,9 +32,36 @@ const shortLabels: Readonly<Record<string, string>> = {
   TMT6plex: 'tmt',
 }
 
-/** The short label of a modification ("Oxidation" is "ox"); unlisted ones get their first three letters, lower-cased. */
+/** A nucleic acid adduct of OpenNuXL: nucleotides, then a formula gained or lost ('U-H3O4P1', 'UU-H2O1', 'AU', 'U'). */
+const ADDUCT = /^([ACGTU]+)(?:[-+][A-Za-z0-9+-]*)?$/
+
+/**
+ * The short label of a modification ("Oxidation" is "ox"; a nucleic acid adduct its nucleotides, "U-H3O4P1" is
+ * "U"); unlisted ones get their first three letters, lower-cased.
+ */
 export function shortModLabel(name: string): string {
-  return Object.hasOwn(shortLabels, name) ? shortLabels[name] : name.slice(0, 3).toLowerCase()
+  if (Object.hasOwn(shortLabels, name)) return shortLabels[name]
+  const adduct = ADDUCT.exec(name)
+  return adduct ? adduct[1] : name.slice(0, 3).toLowerCase()
+}
+
+const SUBSCRIPT: Record<string, string> = { '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉' }
+
+/** One formula of an adduct as chemists write it: no counts of one, subscripts, and phosphates H₃PO₄, HPO₃. */
+function formulaText(formula: string): string {
+  const parts = [...formula.matchAll(/([A-Z][a-z]?)(\d*)/g)].map(([, element, n]) => ({ element, n: n === '1' ? '' : n }))
+  if (parts.map((p) => p.element).join() === 'H,O,P') parts.splice(1, 2, parts[2], parts[1]) // H3O4P1 is H₃PO₄
+  return parts.map((p) => p.element + p.n.replace(/\d/g, (d) => SUBSCRIPT[d])).join('')
+}
+
+/**
+ * How an adduct of OpenNuXL (NuXL:NA) reads: its nucleotides, then its formulas without counts of one, in
+ * subscripts ('U-H2O1' is 'U-H₂O', 'U-H3O4P1' is 'U-H₃PO₄', 'UU-H2O1' is 'UU-H₂O'); '' stays ''. The tables' CSV
+ * keep OpenNuXL's own text.
+ */
+export function adductLabel(adduct: string): string {
+  const head = /^[^-+]*/.exec(adduct)?.[0] ?? ''
+  return head + adduct.slice(head.length).replace(/(?:[A-Z][a-z]?\d*)+/g, formulaText)
 }
 
 /** A modification's hover title: "Oxidation (Unimod:35) +15.9949". */
@@ -100,20 +127,3 @@ export function peptideView(t: ResultTables['peptides'], k: number, fixedMods: s
   return view
 }
 
-/** ProSE counts an open-search PSM as unmodified when its mass shift is at most this (Da). */
-export const UNMODIFIED_SHIFT_DA = 0.05
-
-/**
- * The unassigned mass shift of an open-search PSM (`psms.deltaMass`), signed with four decimals
- * ("+15.9949", "-57.0215"); null when there is none to show: NaN (a closed search) or |Δ| ≤ 0.05 Da.
- */
-export function massShift(delta: number): string | null {
-  if (!(Math.abs(delta) > UNMODIFIED_SHIFT_DA)) return null // NaN too
-  return `${delta < 0 ? '-' : '+'}${Math.abs(delta).toFixed(4)}`
-}
-
-/** A PSM's ProForma: the peptide's, after its unlocalized mass shift if any ("[+15.9949]?PEPTIDE"). */
-export function psmProforma(proforma: string, delta: number): string {
-  const shift = massShift(delta)
-  return shift === null ? proforma : `[${shift}]?${proforma}`
-}

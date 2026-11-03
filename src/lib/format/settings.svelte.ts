@@ -2,7 +2,7 @@
 
 export type ModMode = 'marked' | 'proforma'
 
-const storageKey = 'prose.modMode'
+const storageKey = 'nuxl.modMode'
 
 function read(): ModMode {
   try {

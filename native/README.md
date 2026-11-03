@@ -1,8 +1,9 @@
-# Native engine and Tauri toolchain
+# Native tools and Tauri toolchain
 
-The ProSE desktop app (Tauri 2) runs on a native C++ engine built against OpenMS. This
-directory holds the tooling for the two things that engine needs: a user-space toolchain for the
-Tauri and Rust side, and a native OpenMS build that the C++ engine compiles against.
+The NuXL desktop app (Tauri 2) runs OpenNuXL of OpenMS, with PercolatorAdapter for its score recalibration, as
+its only native code. This directory holds the tooling for the two things the app needs: a user-space toolchain
+for the Tauri and Rust side, and a native OpenMS build of the two tools, bundled with their libraries and data.
+(It started as ProSE desktop's, whose toolchain sections below are unchanged.)
 
 ## Tauri toolchain without root
 
@@ -105,96 +106,84 @@ and a webview under Xvfb, for example a minimal Tauri 2 app built with
 
 ## Native OpenMS build
 
-`scripts/build-openms.sh <openms-src> <build-dir>` configures and builds libOpenMS, the
-`ProSE` tool and the ProSE class tests with the host toolchain (outside `in-env.sh`):
+`scripts/build-openms.sh <openms-src> <build-dir>` configures and builds libOpenMS, `OpenNuXL`,
+`PercolatorAdapter` and what their tests run, with the host toolchain (outside `in-env.sh`):
 
 ```bash
-native/scripts/build-openms.sh /scratch/sachsenb/openms-pr10564 \
-  /scratch/sachsenb/openms-pr10564/build/native-release
+native/scripts/build-openms.sh <OpenMS checkout> <OpenMS checkout>/build
 ```
 
-It uses Ninja, a Release build, the vcpkg toolchain of the OpenMS checkout
-(`x64-linux-dynamic`, feature `onnxruntime`) and a vcpkg binary cache in
-`/scratch/sachsenb/vcpkg-bincache-native`, so a rebuild in a fresh directory does not rebuild
-the dependencies. `JOBS` (default 100) sets the parallelism. Notes on the configuration:
+It uses Ninja, a Release build, the vcpkg toolchain of the OpenMS checkout (`x64-linux-dynamic`) and a vcpkg
+binary cache (`VCPKG_BINARY_CACHE`, default `/scratch/sachsenb/vcpkg-bincache-native`), so a rebuild in a fresh
+directory does not rebuild the dependencies. `JOBS` (default 100) sets the parallelism. Notes on the
+configuration:
 
-- `WITH_THERMO_RAW=OFF`: the Thermo bridge needs dotnet. `WITH_OPENTIMS=OFF`, `WITH_GUI=OFF`,
-  `ENABLE_DOCS=OFF` and `PYOPENMS=OFF` leave out what the app does not use.
+- `WITH_THERMO_RAW=OFF`: the Thermo bridge needs dotnet, and the app searches mzML only. `WITH_ONNX=OFF`:
+  OpenNuXL uses no ONNX model. `WITH_OPENTIMS=OFF`, `WITH_GUI=OFF`, `ENABLE_DOCS=OFF` and `PYOPENMS=OFF` leave
+  out what the app does not use.
 - `ENABLE_UPDATE_CHECK=OFF`: an OpenMS tool otherwise contacts `openms-update.cs.uni-tuebingen.de` once a day
-  (and waits up to 5 s for it when offline), and the app makes no network contact. The app also runs every
-  ProSE with `OPENMS_DISABLE_UPDATE_CHECK=ON` (`src-tauri/src/tool.rs`), for a tool from `PROSE_BIN` or the PATH.
-- `PATH` is rebuilt without linuxbrew: its binutils (`as` 2.36) cannot assemble the
-  AVX-NE-CONVERT code in ONNX Runtime.
-- The targets include `FileInfo`, `ParquetDiff` and `FuzzyDiff` (the `TOPP_ProSE` tests run them)
-  and `PeptDeepLibraryPredictor_test`; without them those tests report "Not Run".
-- The build directory is `build/native-release` inside the OpenMS checkout, next to the wasm
-  build directories, which it does not touch.
+  (and waits up to 5 s for it when offline), and the app makes no network contact. The app also runs OpenNuXL
+  with `OPENMS_DISABLE_UPDATE_CHECK=ON` (`src-tauri/src/tool.rs`), for a tool from `NUXL_TOOL` or the PATH, and
+  the PercolatorAdapter it starts inherits it.
+- `PATH` is rebuilt without linuxbrew (its binutils are older than the toolchain's).
+- The targets: `OpenNuXL`, `PercolatorAdapter` (OpenNuXL runs it for the score recalibration, and looks for it
+  beside itself: `File::findSiblingTOPPExecutable`), `FuzzyDiff` (the `TOPP_OpenNuXL` tests compare with it;
+  without it they report "Not Run") and `Percolator_test`. CI builds `OpenMS OpenNuXL PercolatorAdapter`.
 
-Check the build with the ProSE class tests (83 tests):
+Check the build with OpenNuXL's tests:
 
 ```bash
-ctest --test-dir /scratch/sachsenb/openms-pr10564/build/native-release \
-  -R "ProSE|PeptDeep|OpenSearchModificationAnalysis|Percolator_test" -j 32 --output-on-failure
+ctest --test-dir <OpenMS checkout>/build -R "OpenNuXL|Percolator_test" -j 32 --output-on-failure
 ```
 
 ## The OpenMS pin
 
-`OPENMS_COMMIT` holds the full hash of the OpenMS commit the app's ProSE is built from: a commit of `develop`, which
-since #10676 (`-qpx_extended`, the optional columns and footer metadata of the QPX psm view the app reads: all scores,
-native ID, isotope error, protein mappings, the filtered peaks and PeptDeep's predictions, the run's statistics; the
-pooled and singleton protein groups, `-keep_decoys`; see `docs/parity.md`) has everything the app needs. Before, the pin
-was the branch `claude/prose-desktop-pin` (develop with the pull requests not merged yet). The per-input QPX files are in
-`qpx/runs/`; the reader also reads the layout of app 0.1.x (per-input files next to `quantms.*`). CI checks the commit out
-of OpenMS/OpenMS; it never builds from local state. Build it with
+`OPENMS_COMMIT` holds the full hash of the OpenMS commit the app's OpenNuXL is built from, a commit of
+`develop`. The app's allowlist of OpenNuXL's options (`src-tauri/src/args.rs`, `PARAMETERS`), the stages of its
+progress (`progress.rs`) and the names of its derived outputs (`run.rs`, `find_outputs`; `NuXLFDR.cpp`) are those
+of the pinned `OpenNuXL.cpp`: check them when the pin moves. CI checks the commit out of OpenMS/OpenMS; it never
+builds from local state.
 
-```bash
-native/scripts/build-openms.sh <OpenMS checkout at the pin> <OpenMS checkout>/build
-```
+## Bundling OpenNuXL
 
-and check it with `ctest --test-dir <OpenMS checkout>/build -R "ProSE|PeptDeep|QPX|Percolator_test|ArrowIOHelpers_test|ArrowSchemaRegistry_test"`
-(with the default targets plus `ArrowSchemaRegistry_test` and `QPXDatasetExport_test`). Then make the parameter table
-(`scripts/prose-parameters.mjs`) and the reader's fixtures (`scripts/results-fixture-native.mjs`) with its ProSE again.
-
-## Bundling ProSE
-
-`scripts/bundle-prose.sh <openms-build> <out>` (host toolchain) fills `<out>`, normally
-`src-tauri/resources/prose` (git-ignored; `tauri.conf.json` bundles the folder, and `build.rs` makes an empty
+`scripts/bundle-nuxl.sh <openms-build> <out>` (host toolchain) fills `<out>`, normally
+`src-tauri/resources/nuxl` (git-ignored; `tauri.conf.json` bundles the folder, and `build.rs` makes an empty
 one so builds without it work), with what the app ships:
 
 ```bash
-native/scripts/bundle-prose.sh /scratch/sachsenb/openms-desktop/build src-tauri/resources/prose
+native/scripts/bundle-nuxl.sh <OpenMS checkout>/build src-tauri/resources/nuxl
 ```
 
 | Part | What |
 | --- | --- |
-| `bin/ProSE` | stripped, `DT_RPATH` `$ORIGIN/../lib` |
-| `lib/` | the whole closure that `ldd` lists, under its sonames, stripped, `DT_RPATH` `$ORIGIN`: libOpenMS, ONNX Runtime, Arrow/Parquet, the AWS SDK Arrow links, Xerces, HiGHS, ..., libgomp (the one OpenMP runtime; the script fails on any other) and the GCC runtime (libstdc++, libgcc_s: OpenMS needs GCC 13, newer than Ubuntu 22.04's). Left out: glibc only. |
-| `share/OpenMS/` | `CHEMISTRY` (without the 49 MB of HMDB tables), `CV`, `MAPPING`, `SCHEMAS`, the `TOOLS` registry: what ProSE reads (checked with strace) |
-| `share/OpenMS/models/` | `peptdeep_ms2_dynamic.onnx`, `peptdeep_rt_dynamic.onnx` (builds with ONNX), AlphaPeptDeep's models under the Apache License 2.0: `LICENSE-AlphaPeptDeep.txt` (`native/licenses/`) and `NOTICE.txt` |
+| `bin/OpenNuXL`, `bin/PercolatorAdapter` | stripped, `DT_RPATH` `$ORIGIN/../lib`; PercolatorAdapter beside OpenNuXL, where OpenNuXL looks for it |
+| `lib/` | the closure of both that `ldd` lists, each library once, under its sonames, stripped, `DT_RPATH` `$ORIGIN`: libOpenMS, Arrow/Parquet, Xerces, HiGHS, ..., libgomp (the one OpenMP runtime; the script fails on any other) and the GCC runtime (libstdc++, libgcc_s: OpenMS needs GCC 13, newer than Ubuntu 22.04's). Left out: glibc only. |
+| `share/OpenMS/` | `CHEMISTRY` (without the 49 MB of HMDB tables), `CV`, `MAPPING`, `SCHEMAS`, the `TOOLS` registry (the set ProSE desktop's bundle had, checked with strace there) and `NUXL` (`nuxl_presets.json`: the cross-linking protocols of `NuXL:presets`, read when OpenNuXL registers its options) |
 | `share/OpenMS/LICENSES/` | OpenMS, its vendored code, every vcpkg port, the bundled system packages (GCC runtime) |
-| `build.json` | the manifest: OpenMS commit, `withOnnx` (from `WITH_ONNX` in the CMakeCache), triplet, the models |
+| `build.json` | the manifest: the tools, the OpenMS commit, the triplet (macOS: the minimum macOS) |
 
 `DT_RPATH`, not `RUNPATH`: it is searched before `LD_LIBRARY_PATH`, so the AppImage's library path (its
 `usr/lib`, with WebKit's dependencies) cannot swap in a different libzstd or libssl. The script checks that
-every library resolves into the bundle, also with the build's library directories on `LD_LIBRARY_PATH`, and that
-the tool runs from an empty environment. It refuses a build whose source is not at `OPENMS_COMMIT`
-(`ALLOW_PIN_MISMATCH=1` overrides).
+every library of both tools resolves into the bundle, also with the build's library directories on
+`LD_LIBRARY_PATH`, that both tools run from an empty environment, and that OpenNuXL's help lists the presets (it
+read `share/OpenMS/NUXL`). It refuses a build whose source is not at `OPENMS_COMMIT` (`ALLOW_PIN_MISMATCH=1`
+overrides).
 
-**Where ProSE finds share/OpenMS.** OpenMS tries paths compiled into it first: the install prefix
-(`/usr/local/share/OpenMS`), then the source tree's `share/OpenMS` and, for the PeptDeep models, the build tree;
-only then `bin/../share/OpenMS` next to the executable, and the `OPENMS_DATA_PATH` variable last of all. So
-setting `OPENMS_DATA_PATH` cannot steer the bundled tool, and the app does not set it. The bundled tool must not
-pick up an OpenMS a user installed in `/usr/local`, so `bundle-prose.sh` overwrites that one string in the
-bundle's `libOpenMS.so` with a path of the same length that cannot exist (`/dev/null////...`), as conda does with
-the prefix (OpenMS reads it through a volatile pointer for this; `File.cpp`, `installPath_`). The source and build
-tree paths are the build machine's (in CI below `/home/runner/work`) and cannot be patched (GCC writes them into
-the code as immediates); they do not exist on a user's machine. On the build machine they do, so the smoke test
-hides them (`--hide-openms`, below).
+**Where the tools find share/OpenMS.** OpenMS tries paths compiled into it first: the install prefix
+(`/usr/local/share/OpenMS`), then the source tree's `share/OpenMS`; only then `bin/../share/OpenMS` next to the
+executable, and the `OPENMS_DATA_PATH` variable last of all. So setting `OPENMS_DATA_PATH` cannot steer the
+bundled tools, and the app does not set it. The bundled tools must not pick up an OpenMS a user installed in
+`/usr/local` (with presets and chemistry of another version), so `bundle-nuxl.sh` overwrites that one string in
+the bundle's `libOpenMS.so` with a path of the same length that cannot exist (`/dev/null////...`), as conda does
+with the prefix (OpenMS reads it through a volatile pointer for this; `File.cpp`, `installPath_`). The source and
+build tree paths are the build machine's (in CI below `/home/runner/work`) and cannot be patched (GCC writes them
+into the code as immediates); they do not exist on a user's machine. On the build machine they do, so the smoke
+test hides them (`--hide-openms`, below).
 
-**The `onnx` flag of `tool_info`** comes from `build.json`: `withOnnx` and every model it names present inside
-the bundle (`src-tauri/src/tool.rs`, `has_onnx`). A tool without a manifest (a build tree's, one on the PATH)
-counts as without ONNX, so `PROSE_BIN=src-tauri/resources/prose/bin/ProSE` is the tool for the e2e specs and
-`real_prose` tests with PeptDeep.
+**`tool_info`** is `{ version, path }` (`src-tauri/src/tool.rs`): the version from `OpenNuXL --help`. The app's
+`--smoke-test` also reports whether PercolatorAdapter is beside the tool. `NUXL_TOOL` names a tool to use
+instead of the bundled one (the e2e specs and the `real_nuxl` tests: `src-tauri/resources/nuxl/bin/OpenNuXL`, or
+`<build>/bin/OpenNuXL`, which has PercolatorAdapter beside it as well).
 
 ## macOS and Windows
 
@@ -204,9 +193,9 @@ them. The same scripts run there:
 | Step | macOS (macos-15, arm64) | Windows (windows-2025, x64) |
 | --- | --- | --- |
 | OpenMS | `build-openms.sh` with `VCPKG_TRIPLET=arm64-osx-dynamic-sysroot-vcrel` (OpenMS's own macOS triplet, release builds only), `OPENMS_CMAKE_ARGS="-DOpenMP_ROOT=$(brew --prefix libomp) -DMT_REQUIRE_OPENMP=ON"`, `MACOSX_DEPLOYMENT_TARGET=15.0` | `build-openms.sh` in Git Bash inside Visual Studio's developer environment, `CC=CXX=cl`, `VCPKG_TRIPLET=x64-windows-static-md-release` (OpenMS's own Windows triplet: the dependencies static, the C runtime dynamic), `-DMT_REQUIRE_OPENMP=ON` |
-| bundle | `bundle-prose.sh`: `bin/ProSE`, `lib/*.dylib` | `bundle-prose.sh`: `bin/ProSE.exe`, `bin/*.dll` |
-| package | `package-macos.sh`: `ProSE.app`, `.dmg` | `package-windows.sh`: the NSIS installer `*-setup.exe` |
-| test | `start-test.sh <dmg>`; `cargo test --test real_prose` with the bundled tool | `start-test.sh <setup.exe>`; the same |
+| bundle | `bundle-nuxl.sh`: `bin/OpenNuXL`, `bin/PercolatorAdapter`, `lib/*.dylib` | `bundle-nuxl.sh`: `bin/OpenNuXL.exe`, `bin/PercolatorAdapter.exe`, `bin/*.dll` |
+| package | `package-macos.sh`: `NuXL.app`, `.dmg` | `package-windows.sh`: the NSIS installer `*-setup.exe` |
+| test | `start-test.sh <dmg>`; `cargo test --test real_nuxl` with the bundled tool | `start-test.sh <setup.exe>`; the same |
 
 **Apple silicon only.** The macOS build is arm64, not universal: OpenMS's vcpkg setup and its own CI cover
 arm64-osx only, and the OpenMP runtime is Homebrew's libomp, which is arm64 on the arm64 runners. A universal
@@ -214,39 +203,38 @@ build would need a second OpenMS build on an Intel runner (`macos-15-intel`, x64
 with `lipo`, and an x86_64 libomp; that doubles the build and was left out. Intel Macs are not served.
 
 **macOS 15 or later.** `MACOSX_DEPLOYMENT_TARGET` is the runner's macOS, as in OpenMS's CI: Homebrew's
-libomp is built for it. `bundle-prose.sh` writes the newest minimum macOS of the bundled files into
+libomp is built for it. `bundle-nuxl.sh` writes the newest minimum macOS of the bundled files into
 `build.json` (`minimumMacos`), and `package-macos.sh` refuses an app whose `minimumSystemVersion`
 (`src-tauri/tauri.macos.conf.json`) is older, so an older Mac says so at once instead of failing to load a
 library.
 
 ### The closures (`bundle_closure.py`)
 
-**macOS.** The script follows the tool's load commands as dyld does: `@rpath` through the LC_RPATHs of the
+**macOS.** The script follows the tools' load commands as dyld does: `@rpath` through the LC_RPATHs of the
 loading image and of those that loaded it, `@loader_path`, `@executable_path`, absolute paths; the build's
 `lib` and vcpkg's `lib` by name last. `/usr/lib` and `/System` stay out. Everything else is copied to
-`lib/<name>` and rewritten with `install_name_tool`:
+`lib/<name>` (once, for both tools) and rewritten with `install_name_tool`:
 - every reference to a bundled dylib becomes `@rpath/<name>`, and each dylib's id `@rpath/<name>`;
 - the old LC_RPATHs (the build tree's) are deleted one by one (a duplicate LC_RPATH stops dyld on arm64);
-- one LC_RPATH is added: `@loader_path/../lib` for the tool, `@loader_path` for the dylibs;
+- one LC_RPATH is added: `@loader_path/../lib` for the tools, `@loader_path` for the dylibs;
 - then `strip -x` and an ad-hoc signature (`codesign -s -`): arm64 runs no unsigned code, and
   `install_name_tool` invalidates the linker's signature.
 
 Exactly one OpenMP runtime, `libomp.dylib`, has to be in the closure. FASTag's approach is the same (one
 libomp, rewritten install names, ad-hoc re-signing; okohlbacher/FASTag `doc/SIGNING-macos-gui.md`), without
-dylibbundler. `macho-verify` checks a bundle again, also the copy inside `ProSE.app`. The app passes no
+dylibbundler. `macho-verify` checks a bundle again, also the copy inside `NuXL.app`. The app passes no
 `DYLD_*` search variable to the tool (`tool.rs`): they are searched before `@rpath`.
 
-**Windows.** OpenMS links its vcpkg dependencies statically, so ProSE's closure is OpenMS's own DLLs
-(`OpenMS.dll`, `OpenMS_CLI.dll`, `OpenSwathAlgo.dll`) and the Visual C++ runtime: `msvcp140*.dll`,
-`vcruntime140*.dll` and `vcomp140.dll`, MSVC's OpenMP runtime, the one OpenMP runtime. The script reads the
-import and delay-import tables of each PE file itself, takes the DLLs from the build's `bin`, vcpkg's `bin` and,
-for the runtime, from the redistributable folders of the Visual Studio that built it (`VCToolsRedistDir`:
-Microsoft's app-local deployment), and leaves out API sets and the DLLs of Windows. Everything goes beside
-`ProSE.exe`: Windows has no RPATH, and the folder of the exe is searched first. `pe-verify` checks that every
-import is bundled or Windows' own. `ProSE.exe`'s manifest gets `activeCodePage` UTF-8 (`mt.exe`): OpenMS takes
-narrow strings, paths among them, for UTF-8, but a Windows process otherwise gets its arguments and narrow file
-APIs in the ANSI code page, and a search in a folder named `Größe ü` (or under a user `Jörg`) read its inputs
-wrongly and ended in Percolator's "median decoy score <= score at 1% FDR".
+**Windows.** OpenMS links its vcpkg dependencies statically, so the tools' closure is OpenMS's own DLLs
+(`OpenMS.dll`, `OpenMS_CLI.dll`, ...) and the Visual C++ runtime: `msvcp140*.dll`, `vcruntime140*.dll` and
+`vcomp140.dll`, MSVC's OpenMP runtime, the one OpenMP runtime. The script reads the import and delay-import
+tables of each PE file itself, takes the DLLs from the build's `bin`, vcpkg's `bin` and, for the runtime, from
+the redistributable folders of the Visual Studio that built it (`VCToolsRedistDir`: Microsoft's app-local
+deployment), and leaves out API sets and the DLLs of Windows. Everything goes beside the two exes: Windows has no
+RPATH, and the folder of the exe is searched first. `pe-verify` checks that every import is bundled or Windows'
+own. Each exe's manifest gets `activeCodePage` UTF-8 (`mt.exe`): OpenMS takes narrow strings, paths among them,
+for UTF-8, but a Windows process otherwise gets its arguments and narrow file APIs in the ANSI code page, and a
+search in a folder named `Größe ü` (or under a user `Jörg`) read its inputs wrongly (seen with ProSE).
 
 **The install prefix** is overwritten in the bundled `libOpenMS.dylib` as on Linux, with `/dev/null///...`. On
 Windows OpenMS does not probe its install prefix at all (`File.cpp`: CMake's default prefix is the wrong
@@ -255,51 +243,53 @@ Windows OpenMS does not probe its install prefix at all (`File.cpp`: CMake's def
 
 ### Packages
 
-- **macOS**: `ProSE.app` and the `.dmg`. Tauri copies `resources/prose` into
-  `ProSE.app/Contents/Resources/resources/prose` unchanged. The app is signed ad hoc
+- **macOS**: `NuXL.app` and the `.dmg`. Tauri copies `resources/nuxl` into
+  `NuXL.app/Contents/Resources/resources/nuxl` unchanged. The app is signed ad hoc
   (`signingIdentity: "-"`, no hardened runtime): no Developer ID and no notarization. An ad-hoc signed app can
   be opened after the user's consent (System Settings > Privacy & Security > Open Anyway, or
   `xattr -dr com.apple.quarantine`); an unsigned arm64 app counts as damaged.
 - **Windows**: the NSIS installer, per user (`installMode: currentUser`, no administrator rights), unsigned
-  (SmartScreen asks once). ProSE goes to `<install folder>/resources/prose/bin`.
+  (SmartScreen asks once). The tools go to `<install folder>/resources/nuxl/bin`.
 
 ### Start test (`start-test.sh <package> <example-dir>`)
 
-1. The package is opened as a user would: the `.dmg` is mounted and `ProSE.app` copied out; the installer is
+1. The package is opened as a user would: the `.dmg` is mounted and `NuXL.app` copied out; the installer is
    run silently (`/S /D=<folder>`). The bundle inside is verified (`macho-verify`, `pe-verify`).
-2. The bundled ProSE prints its version from an empty environment (Windows: only Windows' folders on `PATH`).
-3. It searches the example (`Ecoli_MS2_small.mzML`, `Ecoli_K12_proteome.fasta`) from the command line, in a folder
-   with a space in its name, with the example's settings, Percolator and PeptDeep: exit 0, the outputs the app
-   reads, the `[PeptDeepRescoring] Predicted features added` line, and more than 40 target PSMs at the example's 2 %
-   FDR (81 with these settings; the run is too small for 1 %, see the README's "The example"). The same in a folder named `Größe ü` has to give the same number.
+2. The bundled OpenNuXL and PercolatorAdapter print their version (the same) from an empty environment
+   (Windows: only Windows' folders on `PATH`).
+3. OpenNuXL searches the example (`OpenNuXL_1_input.mzML`, `OpenNuXL_1_input.fasta`) from the command line as
+   the app runs it, in a folder with a space in its name, with the preset `RNA-UV (U)` and Percolator: exit 0, the
+   outputs the app reads (the idXML of all PSMs, the cross-links and peptides, the protein report, the TSV report)
+   and PSMs. (The example has far fewer than the 1000 PSMs OpenNuXL rescores, so Percolator is skipped.) The same
+   in a folder named `Größe ü` has to give the same number of PSMs.
 4. The app starts with `--smoke-test` (`src-tauri/src/lib.rs`): when its page has loaded it prints
-   `{"page", "tool"}` (`tool_info`) and exits. The tool has to be the package's own, with ONNX, and of the
-   version of step 2.
+   `{"page", "tool", "percolatorAdapter"}` and exits. The tool has to be the package's own, with PercolatorAdapter
+   beside it, and of the version of step 2.
 
-CI removes the OpenMS build before these steps, so ProSE can only use the package's `share/OpenMS`.
+CI removes the OpenMS build before these steps, so the tools can only use the package's `share/OpenMS`.
 A WebDriver run of the screens (as the AppImage's smoke test) is not part of it: tauri-driver does not support
 macOS, and on Windows it needs msedgedriver of the runner's WebView2 version.
 
 ### What differs on Windows in the app
 
-- **Inputs** (ruling: no symbolic links without developer mode). ProSE gets the user's paths themselves when
-  the inputs' stems differ (ignoring case, as NTFS does; `.mzML` and `.mzML.gz` of one name clash). Inputs that
-  share a stem go in as hard links `<n>__<name>` in the search folder, which works on the volume of the app's
-  data only and is removed when the search ends; on another volume the search is refused with a message asking
-  to rename one of the files. An input of stem `quantms` goes in as such a link as well: ProSE refuses it, since
-  its merged QPX views are `quantms.*.parquet`. Nothing is ever copied (`args.rs`, `InputLinks`,
-  `input_placements`). The app's own example is a hard link, or a copy where the app is on another drive than its
-  data.
+- **Inputs** (ruling: no symbolic links without developer mode). OpenNuXL gets the user's paths themselves when
+  the inputs' stems do not clash (ignoring case, as NTFS does): the shim names each input's outputs after its
+  stem (`nuxl/<stem>.idXML`, and OpenNuXL derives `<stem>_perc_...`), so two inputs clash when they share a
+  stem, or when one stem is another's followed by `_` (`a` and `a_perc`). Inputs that clash go in as hard links
+  `<n>__<name>` in the search folder, which works on the volume of the app's data only and is removed when the
+  search ends; on another volume the search is refused with a message asking to rename one of the files. Nothing
+  is ever copied (`args.rs`, `InputLinks`, `input_placements`). Stems are shortened (as links) so that the longest
+  output path, `<folder>\nuxl\<stem>_perc_proteins0.0100_XLs.tsv`, stays within MAX_PATH.
 - **Cancel** ends a job object the tool runs in (`run.rs`): Windows has no SIGTERM for a console tool; the job
-  takes every process the tool starts, and it is closed with the app (`KILL_ON_JOB_CLOSE`), so ProSE ends with
-  the app however the app ends. The tool runs without a console window.
-- **If the app dies** while ProSE runs: on Linux ProSE gets SIGKILL (`PR_SET_PDEATHSIG`), on Windows the job
-  ends it. macOS has no death signal, so the app starts, for each search, its own executable once more as a
-  watchdog (`--watch-search <app pid> <ProSE's process group>`, `src-tauri/src/watchdog.rs`, std and two libc
-  calls): it looks once a second whether the app is still its parent (an orphan's parent becomes launchd) and
-  ends ProSE's group with SIGKILL when it is not; the app ends the watchdog with the search. Should the
-  watchdog not start, ProSE still ends at its next write to stdout or stderr, whose reading ends died with the
-  app (SIGPIPE is at its default in ProSE: Rust's `Command` resets the app's ignored SIGPIPE in the child, and
+  takes every process the tool starts (PercolatorAdapter), and it is closed with the app (`KILL_ON_JOB_CLOSE`), so
+  OpenNuXL ends with the app however the app ends. The tool runs without a console window.
+- **If the app dies** while OpenNuXL runs: on Linux OpenNuXL gets SIGKILL (`PR_SET_PDEATHSIG`), on Windows the job
+  ends it. macOS has no death signal, so the app starts, for each run of the tool, its own executable once more as
+  a watchdog (`--watch-search <app pid> <the tool's process group>`, `src-tauri/src/watchdog.rs`, std and two
+  libc calls): it looks once a second whether the app is still its parent (an orphan's parent becomes launchd)
+  and ends the tool's group with SIGKILL when it is not; the app ends the watchdog with the run. Should the
+  watchdog not start, OpenNuXL still ends at its next write to stdout or stderr, whose reading ends died with the
+  app (SIGPIPE is at its default in the tool: Rust's `Command` resets the app's ignored SIGPIPE in the child, and
   OpenMS sets no handler), at the end of its current step. The next start of the app sweeps the folder. The
   watchdog's code is the same on every Unix and is tested on Linux and in the macOS shim job
   (`tests/watchdog.rs`, and a watched search in `tests/shim.rs`).
@@ -307,8 +297,8 @@ macOS, and on Windows it needs msedgedriver of the runner's WebView2 version.
   deleted `.lock` open), and partial folders are removed lock file first, also with back-off (`history.rs`).
 - **File names** the app suggests never are device names (`CON`, `NUL.txt`, ...: a `_` in front), and their
   name part has at most 200 bytes in UTF-8 (`fileSafe`), so that a suffix still fits ext4's and NTFS's 255.
-- The shim's tests run on Windows with `examples/fake_prose.rs`, the shell fake as a program
-  (`PROSE_FAKE_EXE=1` uses it on Linux and macOS too).
+- The shim's tests run on Windows with `examples/fake_nuxl.rs`, the shell fake as a program
+  (`NUXL_FAKE_EXE=1` uses it on Linux and macOS too).
 
 ## Packages
 
@@ -317,31 +307,32 @@ native/scripts/package-linux.sh        # .deb and AppImage into src-tauri/target
 ```
 
 The same script runs in CI and here (it enters `in-env.sh` when the sysroot exists). The `.deb` is Tauri's
-(it depends on the system's WebKitGTK; ProSE goes to `/usr/lib/ProSE/resources/prose`). The AppImage is bundled
-by Tauri without `resources/prose` and the folder is added afterwards, and the AppDir packed again with
-linuxdeploy's AppImage plugin: linuxdeploy treats every ELF file in the AppDir as its own, and would copy ProSE's
-closure a second time into `usr/lib` and turn its `DT_RPATH` into a `RUNPATH`. With the sysroot, the script also
-answers the GTK plugin's `pkg-config --variable` queries with `/usr` paths and puts WebKit's helper processes
-into the AppDir with the relative helper path the GTK plugin writes on a normal system (details in the script).
+(package `nuxl`; it depends on the system's WebKitGTK; the tools go to `/usr/lib/NuXL/resources/nuxl`). The
+AppImage is bundled by Tauri without `resources/nuxl` and the folder is added afterwards, and the AppDir packed
+again with linuxdeploy's AppImage plugin: linuxdeploy treats every ELF file in the AppDir as its own, and would
+copy the tools' closure a second time into `usr/lib` and turn its `DT_RPATH` into a `RUNPATH`. With the sysroot,
+the script also answers the GTK plugin's `pkg-config --variable` queries with `/usr` paths and puts WebKit's
+helper processes into the AppDir with the relative helper path the GTK plugin writes on a normal system (details
+in the script).
 
 ## AppImage smoke test
 
 ```bash
-native/scripts/smoke-appimage.sh src-tauri/target/release/bundle/appimage/ProSE_0.1.4_amd64.AppImage \
-  --hide-openms /scratch/sachsenb/openms-desktop/build
+native/scripts/smoke-appimage.sh src-tauri/target/release/bundle/appimage/NuXL_0.1.0_amd64.AppImage \
+  --hide-openms <OpenMS checkout>/build
 ```
 
 The AppImage runs with `--appimage-extract-and-run` under `xvfb-run` and is driven through WebDriver
-(`e2e/appimage.smoke.ts`): the example with PeptDeep gives 154 PSMs and the PeptDeep mirror. tauri-driver and
-WebKitWebDriver are not in the AppImage; they run from the toolchain (here `in-env.sh`, in CI the runner's
-packages) and drive the AppImage's own webview over WebKit's automation protocol, which release builds allow when
+(`e2e/appimage.smoke.ts`): the example is searched and its results shown. tauri-driver and WebKitWebDriver are not
+in the AppImage; they run from the toolchain (here `in-env.sh`, in CI the runner's packages) and drive the
+AppImage's own webview over WebKit's automation protocol, which release builds allow when
 `TAURI_WEBVIEW_AUTOMATION=true` (tauri-driver sets it). The application tauri-driver starts is
 `e2e/appimage-app.sh`, which runs the AppImage from an empty environment (display, user basics, the automation
-variables, a plain PATH; nothing of the sysroot, no `PROSE_BIN`). The test then reads `/proc/<pid>/maps`: ProSE
-(polled while it searches) maps its whole closure from the bundle, one OpenMP runtime, and from the system only
-glibc; the app, WebKitWebProcess and WebKitNetworkProcess map libwebkit2gtk from the AppImage; no process maps a
-file of the sysroot or the OpenMS build (`SMOKE_FORBIDDEN`). `--hide-openms` renames the OpenMS build's
-`share/OpenMS`, models and tool registry for the duration of the test, so ProSE has to use the bundle's.
+variables, a plain PATH; nothing of the sysroot, no `NUXL_TOOL`). The test then reads `/proc/<pid>/maps`:
+OpenNuXL (polled while it searches) maps its whole closure from the bundle, one OpenMP runtime, and from the system
+only glibc; the app, WebKitWebProcess and WebKitNetworkProcess map libwebkit2gtk from the AppImage; no process maps
+a file of the sysroot or the OpenMS build (`SMOKE_FORBIDDEN`). `--hide-openms` renames the OpenMS build's
+`share/OpenMS` and tool registry for the duration of the test, so the tools have to use the bundle's.
 
 The one thing a host must have that the AppImage does not bring is the GL driver stack, as for every AppImage:
 libEGL, libGL and libGLESv2 (`libgles2` on Ubuntu/Debian, `libglvnd-gles` on Fedora; desktops have it). The
@@ -353,43 +344,38 @@ the script supplies the sysroot's `libGLESv2.so.2`, alone in a folder of its own
 
 ## CI
 
-Jobs: `linux` (x64 and arm64, below), `macos` and `windows` (see "macOS and Windows": each builds OpenMS when its bundle is not
-cached, with vcpkg's binary cache and ccache; the vcpkg dependencies are built by a configure step of their own
-and saved before OpenMS is built, so a first run that runs out of time keeps them), `shim` (`cargo test` on
-macOS and Windows, minutes after a push) and `release`. Concurrency is per job and platform: a push waits for
+Jobs: `linux` (x64 and arm64, below), `macos` and `windows` (see "macOS and Windows": each builds OpenMS when its
+bundle is not cached, with vcpkg's binary cache and ccache; the vcpkg dependencies are built by a configure step of
+their own and saved before OpenMS is built, so a first run that runs out of time keeps them), `shim` (`cargo test`
+on macOS and Windows, minutes after a push) and `release`. Concurrency is per job and platform: a push waits for
 the running build of its platform instead of cancelling it. GitHub keeps at most 10 GB of Actions caches per
 repository and evicts the least recently used beyond that; ccache's objects are saved under a key per run
 (`…-<run id>-<attempt>`) and vcpkg's binary cache under the hash of its content, so each failed or changed build
-adds an entry (Windows' vcpkg cache alone is about 2.6 GB): delete the superseded ones (`gh cache list`,
-`gh cache delete`) when the total nears the limit.
+adds an entry: delete the superseded ones (`gh cache list`, `gh cache delete`) when the total nears the limit.
 
-The `linux` job of `.github/workflows/desktop.yml` (branch `main` of timosachsenberg/prose-gui) is a
-matrix of two architectures with the same steps: x64 on `ubuntu-22.04` (vcpkg triplet `x64-linux-dynamic`,
-artifact `prose-desktop-linux`) and arm64 on `ubuntu-22.04-arm`, GitHub's arm64 runner for public repositories
-(`arm64-linux-dynamic`, OpenMS's own arm64 triplet, which builds OpenBLAS for any ARMv8 CPU; artifact
-`prose-desktop-linux-arm64`). Both are Ubuntu 22.04, so both packages need glibc 2.35. Each job
-checks out OpenMS at `OPENMS_COMMIT`, builds the vcpkg dependencies (a configure step of their own, saved before
-OpenMS is built, as on macOS and Windows) and libOpenMS and ProSE with GCC 13 (toolchain PPA) through
-`build-openms.sh`, on x64 with GNU as 2.42 built from source for it (ONNX Runtime's AVX-NE-CONVERT code needs
-as >= 2.40, Ubuntu 22.04 has 2.38; GCC gets it through `COMPILER_PATH`; MLAS's arm64 code needs nothing newer),
-bundles ProSE, runs svelte-check, vitest and `cargo test` (with the bundled ProSE, so the `real_prose` tests run
-too), builds the packages with `package-linux.sh`, runs the smoke test and uploads the AppImage and the `.deb`
-(kept 14 days). ONNX Runtime is vcpkg's port, built from source for each triplet; Tauri downloads linuxdeploy,
-its AppImage plugin and AppRun for the machine's architecture (none of them checksum-verified, on either
-architecture: Tauri's own downloads).
+The `linux` job of `.github/workflows/desktop.yml` (branch `main`) is a matrix of two architectures with the same
+steps: x64 on `ubuntu-22.04` (vcpkg triplet `x64-linux-dynamic`, artifact `nuxl-desktop-linux`) and arm64 on
+`ubuntu-22.04-arm`, GitHub's arm64 runner for public repositories (`arm64-linux-dynamic`, OpenMS's own arm64
+triplet, which builds OpenBLAS for any ARMv8 CPU; artifact `nuxl-desktop-linux-arm64`). Both are Ubuntu 22.04, so
+both packages need glibc 2.35. Each job checks out OpenMS at `OPENMS_COMMIT`, builds the vcpkg dependencies (a
+configure step of their own, saved before OpenMS is built, as on macOS and Windows) and libOpenMS, OpenNuXL and
+PercolatorAdapter with GCC 13 (toolchain PPA) through `build-openms.sh`, bundles them, runs svelte-check, vitest and
+`cargo test` (with the bundled OpenNuXL, so the `real_nuxl` tests run too), builds the packages with
+`package-linux.sh`, runs the smoke test and uploads the AppImage and the `.deb` (kept 14 days). Tauri downloads
+linuxdeploy, its AppImage plugin and AppRun for the machine's architecture (none of them checksum-verified, on
+either architecture: Tauri's own downloads).
 
 Caches (`actions/cache`) belong to the ref that saved them and are readable from that ref and the default branch
-(`main`) only. The runs of `main` share them, per runner and triplet: the bundled ProSE (key:
-the pin, the triplet and the two scripts), so OpenMS is only built when one of them changes, and vcpkg's binary cache (key: the pin and the
-triplet, plus the hash of its content, so the packages built before a failure are kept; restored from an earlier
-pin's when the pin moves). Pull requests read `main`'s caches; their own saves stay with the pull request.
+(`main`) only. The runs of `main` share them, per runner and triplet: the bundled OpenNuXL (key: the pin, the
+triplet and the scripts that make it), so OpenMS is only built when one of them changes, and vcpkg's binary cache
+(key: the pin and the triplet, plus the hash of its content, so the packages built before a failure are kept;
+restored from an earlier pin's when the pin moves). Pull requests read `main`'s caches; their own saves stay with
+the pull request.
 
 A tag `desktop-native-v*` builds nothing (it releases the packages that were built and tested on `main`): its
-release job looks up the successful `main` run of the tagged commit,
-downloads that run's packages, the ones its tests, smoke test and start tests passed on, and makes a draft release
-of them. All six packages are required (the AppImage and the `.deb` of Linux x64 and of arm64, the `.dmg`, the
-Windows installer), each from its platform's artifact; the release carries them under their versioned names only
-(`ProSE_0.1.2_x64-setup.exe`, `ProSE_0.1.2_aarch64.dmg`, ...), and the web app links to the page of the latest
-release (`https://github.com/timosachsenberg/prose-gui/releases/latest`). It fails with a message when there is no
-such run (tag a commit of `main` whose run passed), a package is missing or its artifact has expired (`gh run rerun <run>`, then
-re-run the release job).
+release job looks up the successful `main` run of the tagged commit, downloads that run's packages, the ones its
+tests, smoke test and start tests passed on, and makes a draft release of them. All six packages are required (the
+AppImage and the `.deb` of Linux x64 and of arm64, the `.dmg`, the Windows installer), each from its platform's
+artifact; the release carries them under their versioned names only (`NuXL_0.1.0_x64-setup.exe`,
+`NuXL_0.1.0_aarch64.dmg`, ...). It fails with a message when there is no such run (tag a commit of `main` whose run
+passed), a package is missing or its artifact has expired (`gh run rerun <run>`, then re-run the release job).

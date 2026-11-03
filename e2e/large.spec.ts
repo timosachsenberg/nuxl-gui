@@ -1,16 +1,18 @@
-// The largest result that opens in the app, in WebKit: synthetic saved searches of one input with 500,000 to
-// 4,000,000 PSMs (written by src/lib/results/read.test.ts, "large search folders", into PROSE_LARGE_DIR),
-// copied into the spec's History one at a time and opened, each in a fresh app. Logs per size the outcome,
-// the time, the files' size and the peak memory (VmHWM) of the app and of its web process. On demand:
+// The largest result that opens in the app, in WebKit: saved NuXL searches of one input with 500,000 to 4,000,000
+// PSMs, search folders as the app keeps them (inputs.json, nuxl/ with the outputs and their <stem>.outputs.json,
+// search.json; docs/design.md §2) named 9000-<PSMs>, in NUXL_LARGE_DIR, copied into the spec's History one at a
+// time and opened, each in a fresh app. Logs per size the outcome, the time, the files' size and the peak memory
+// (VmHWM) of the app and of its web process. On demand:
 //
-//   PROSE_LARGE_DIR=/scratch/sachsenb/prose-large NODE_OPTIONS=--max-old-space-size=60000 \
-//     npx vitest run src/lib/results/read.test.ts -t 'large search folders'
-//   PROSE_LARGE_DIR=/scratch/sachsenb/prose-large native/scripts/in-env.sh e2e/run.sh e2e/large.spec.ts
+//   NUXL_LARGE_DIR=/scratch/sachsenb/nuxl-large e2e/run.sh e2e/large.spec.ts
+//
+// (ProSE desktop wrote such folders from a test of its reader; NuXL desktop has no writer of large idXML yet, so the
+// folders come from real searches or from a script of one's own.)
 import { cpSync, existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { appProcesses, appReady, goTo, peakMemoryKb, searchesDir, textOf } from './lib.ts'
 
-const root = process.env.PROSE_LARGE_DIR ?? ''
+const root = process.env.NUXL_LARGE_DIR ?? ''
 const enabled = root !== '' && existsSync(root)
 const sizes = enabled
   ? readdirSync(root)
@@ -50,7 +52,7 @@ const gb = (kb: number) => (kb / 1024 / 1024).toFixed(2)
 describe('large results in the app', () => {
   before(function () {
     if (!enabled || sizes.length === 0) {
-      console.log('skipped: PROSE_LARGE_DIR (with the folders of read.test.ts "large search folders") runs it')
+      console.log('skipped: NUXL_LARGE_DIR (with the folders of read.test.ts "large search folders") runs it')
       this.skip()
     }
   })

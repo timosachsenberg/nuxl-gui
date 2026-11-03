@@ -139,14 +139,14 @@
     hover ? [range(hover.bin), ...series.map((s) => `${s.name} · ${formatCount(s.counts[hover!.bin] ?? 0)} PSMs`)] : [],
   )
 
-  // The marker's label sits beside the line (to its right, else to its left); a long label that fits on
-  // neither side stands at the top of the plot, within its edges
+  // The marker's label sits above the plot (where no bar reaches), beside the line's top (to its right, else to its
+  // left); a long label that fits on neither side is centred on the line, within the plot's edges
   const markerAt = $derived(marker ? x(marker.x) : 0)
   const markerLabel = $derived.by(() => {
-    if (!marker) return { x: 0, anchor: 'start' as const, y: M.top + 1 }
+    if (!marker) return { x: 0, anchor: 'start' as const, y: M.top - 8 }
     const w = textWidth(marker.label, 11)
-    if (markerAt + 4 + w <= width - M.right) return { x: markerAt + 4, anchor: 'start' as const, y: M.top + 1 }
-    if (markerAt - 4 - w >= M.left) return { x: markerAt - 4, anchor: 'end' as const, y: M.top + 1 }
+    if (markerAt + 4 + w <= width - M.right) return { x: markerAt + 4, anchor: 'start' as const, y: M.top - 8 }
+    if (markerAt - 4 - w >= M.left) return { x: markerAt - 4, anchor: 'end' as const, y: M.top - 8 }
     return { x: Math.min(Math.max(markerAt - w / 2, M.left), Math.max(M.left, width - M.right - w)), anchor: 'start' as const, y: M.top - 8 }
   })
 </script>
@@ -202,7 +202,7 @@
     {/each}
 
     {#if marker}
-      <line x1={px(markerAt)} x2={px(markerAt)} y1={M.top - 4} y2={plotBottom} stroke={ink} stroke-width="1.5" data-testid="marker-line" />
+      <line x1={px(markerAt)} x2={px(markerAt)} y1={M.top - 18} y2={plotBottom} stroke={ink} stroke-width="1.5" data-testid="marker-line" />
       <text
         x={px(markerLabel.x)}
         y={px(markerLabel.y)}

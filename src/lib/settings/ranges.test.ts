@@ -1,16 +1,16 @@
 import { describe, expect, test } from 'vitest'
-import { PROSE_PARAMETERS } from './prose'
+import { NUXL_PARAMETERS } from './nuxl'
 import { BUILTIN_PRESETS } from './presets'
 import { boundsMessage, invertedRanges, isInverted, outOfBounds, rangeMessage, rangeOf, RANGES } from './ranges'
 
 describe('parameter ranges', () => {
-  test('every range is a pair of ProSE parameters, and the defaults are not inverted', () => {
-    const names = new Set(PROSE_PARAMETERS.map((e) => e.name))
+  test('every range is a pair of OpenNuXL parameters, and the defaults are not inverted', () => {
+    const names = new Set(NUXL_PARAMETERS.map((e) => e.name))
     for (const r of RANGES) {
       expect(names.has(r.min), r.min).toBe(true)
       expect(names.has(r.max), r.max).toBe(true)
     }
-    const defaults = Object.fromEntries(PROSE_PARAMETERS.map((e) => [e.name, e.value]))
+    const defaults = Object.fromEntries(NUXL_PARAMETERS.map((e) => [e.name, e.value]))
     expect(invertedRanges(defaults)).toEqual([])
   })
 
@@ -21,28 +21,27 @@ describe('parameter ranges', () => {
     expect(rangeMessage(charges, { 'precursor:min_charge': 5, 'precursor:max_charge': 2 })).toBe(
       'Charges: the lowest (5) is above the highest (2).',
     )
-    const values = { 'peptide:min_size': 40, 'peptide:max_size': 7, 'fragment:min_mz': 2000, 'fragment:max_mz': 150 }
-    expect(invertedRanges(values).map((r) => r.label)).toEqual(['Peptide length', 'Fragment m/z'])
+    const values = { 'peptide:min_size': 40, 'peptide:max_size': 7 }
+    expect(invertedRanges(values).map((r) => r.label)).toEqual(['Peptide length'])
   })
 
-  test('a highest value of "no limit", or a value that is not a number, is no inverted range', () => {
-    expect(invertedRanges({ 'peptide:min_size': 7, 'peptide:max_size': 0 })).toEqual([])
+  test('a value that is not a number is no inverted range', () => {
     expect(invertedRanges({ 'precursor:min_charge': 5, 'precursor:max_charge': undefined })).toEqual([])
     expect(invertedRanges({ 'precursor:min_charge': Number.NaN, 'precursor:max_charge': 2 })).toEqual([])
   })
 
-  test("a value outside ProSE's bounds is reported; the defaults and the built-in presets are within them", () => {
-    const defaults = Object.fromEntries(PROSE_PARAMETERS.map((e) => [e.name, e.value]))
-    expect(outOfBounds(defaults, PROSE_PARAMETERS)).toEqual([])
-    for (const preset of BUILTIN_PRESETS) expect(outOfBounds({ ...defaults, ...preset.parameters }, PROSE_PARAMETERS), preset.id).toEqual([])
-    const values = { ...defaults, 'precursor:max_charge': 30, 'report:top_hits': 0, 'percolator:max_train_psms': 7 }
-    const outside = outOfBounds(values, PROSE_PARAMETERS)
-    expect(outside.map((e) => e.name)).toEqual(['precursor:max_charge', 'report:top_hits'])
-    expect(boundsMessage(outside[0], values)).toBe('precursor:max_charge is 30; ProSE takes 1 to 20.')
-    expect(boundsMessage(PROSE_PARAMETERS.find((e) => e.name === 'peptide:missed_cleavages')!, { 'peptide:missed_cleavages': -1 })).toBe(
-      'peptide:missed_cleavages is -1; ProSE takes at least 0.',
+  test('a value outside the bounds is reported; the defaults and the built-in presets are within them', () => {
+    const defaults = Object.fromEntries(NUXL_PARAMETERS.map((e) => [e.name, e.value]))
+    expect(outOfBounds(defaults, NUXL_PARAMETERS)).toEqual([])
+    for (const preset of BUILTIN_PRESETS) expect(outOfBounds({ ...defaults, ...preset.parameters }, NUXL_PARAMETERS), preset.id).toEqual([])
+    const values = { ...defaults, 'NuXL:length': 6, 'report:top_hits': 0, 'precursor:min_charge': 1 }
+    const outside = outOfBounds(values, NUXL_PARAMETERS)
+    expect(outside.map((e) => e.name)).toEqual(['report:top_hits', 'NuXL:length'])
+    expect(boundsMessage(outside[1], values)).toBe('NuXL:length is 6; the search takes 0 to 4.')
+    expect(boundsMessage(NUXL_PARAMETERS.find((e) => e.name === 'peptide:missed_cleavages')!, { 'peptide:missed_cleavages': -1 })).toBe(
+      'peptide:missed_cleavages is -1; the search takes at least 0.',
     )
     // not a number: left to its field
-    expect(outOfBounds({ 'precursor:max_charge': Number.NaN, 'report:top_hits': '7' }, PROSE_PARAMETERS)).toEqual([])
+    expect(outOfBounds({ 'precursor:max_charge': Number.NaN, 'report:top_hits': '7' }, NUXL_PARAMETERS)).toEqual([])
   })
 })

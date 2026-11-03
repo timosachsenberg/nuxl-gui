@@ -1,31 +1,31 @@
-// The New search form: files with their design fields, the database, the settings and the rescoring
-// switches. Kept outside the view so that it survives a visit to another view. Files are paths (the
+// The New search form: files with their design fields, the database, the settings (OpenNuXL's parameters and the
+// search's FDRs) and the rescoring switch. Kept outside the view so that it survives a visit to another view. Files are paths (the
 // system's dialog, drag and drop, the example), never read by the page: the shim's `inspect_files`
 // gives their sizes and counts.
 
 import { resolveDesign, type DesignInput } from '../design/model'
 import type { DesignFields, DesignUpdate } from '../design/paste'
 import { errorText, exampleFiles, inspectFiles, type FileFacts, type InputFile } from '../desktop'
-import { changedParameters, copyValue, copyValues, defaultsOf, sameValue, type ParamEntry } from '../settings/parameters'
+import { NUXL_PARAMETERS } from '../settings/nuxl'
+import { changedParameters, copyValue, copyValues, defaultsOf, sameValue, SEARCH_SETTINGS, type ParamEntry } from '../settings/parameters'
 import { BUILTIN_PRESETS, DEFAULT_PRESET_ID, deletePreset, loadPresets, renamePreset, savePreset, type Preset } from '../settings/presets'
-import { PROSE_PARAMETERS } from '../settings/prose'
+import { CUSTOM_PROTOCOL, PROTOCOL_PARAMETERS, protocolParameters } from '../settings/protocols'
 import { formatBytes } from '../format/bytes'
-import { formatPercent } from '../format/fdr'
-import { isFasta, isMzML } from './files'
+import { isFasta, isMzML, unsearchableReason } from './files'
 
 export type FileRow = DesignFields & {
   id: string
   file: InputFile
   /** From the mzML header; null if the header does not say. */
   spectra: number | null
-  /** Why ProSE cannot search the file (cut off, not mzML, no spectra: `FileFacts.problem`); the search cannot start. */
+  /** Why OpenNuXL cannot search the file (cut off, not mzML, no spectra: `FileFacts.problem`); the search cannot start. */
   problem: string | null
 }
 
 /**
  * The database: its proteins and residues once counted (null while counting), or why it could not be
- * read (`error`), or why ProSE cannot search it (`problem`: no entries, an accession twice, ...); the search
- * cannot start with either. `warnings`: what ProSE treats specially (a FASTA's entries listed twice, searched once).
+ * read (`error`), or why OpenNuXL cannot search it (`problem`: no entries, an accession twice, ...); the search
+ * cannot start with either. `warnings`: what the search treats specially (a FASTA's entries listed twice, searched once).
  */
 export type DatabaseChoice = {
   file: InputFile
@@ -44,46 +44,18 @@ export const CRAP_PROTEINS = 116
 export const CRAP_RESIDUES = 38459
 
 /**
- * The example: OpenMS' small E. coli run (Ecoli_MS2_small.mzML: LTQ Orbitrap XL, CID, 139 MS2 spectra) searched
- * twice as two replicates of condition "example", against the E. coli K-12 proteins (targets only: ProSE makes
- * the decoys). The shim gives the bundled run under the two names. Its own settings (`settings`), each group of
- * which goes back to the preset's on its own when the example is left (`#leaveExample`): its fragments are measured
- * in the ion trap, so the fragment tolerance is 0.5 Da; the run is too small for a PSM FDR of 1 %: Percolator's
- * q-values are (decoys + 1) / targets, so its ~80 PSMs reach 1.2 % at best (and none passes 1 %), and the PSM FDR is
- * 2 %; it is too small for a protein FDR as well (about 60 proteins: none would pass 1 %), so the protein FDR is off
- * (0) and its proteins are listed without one. Everything else is the preset's.
+ * The example: OpenMS' test run of OpenNuXL (OpenNuXL_1_input.mzML: 20 MS2 spectra of a UV cross-linked
+ * protein–RNA sample) against its five proteins (OpenNuXL_1_input.fasta; targets only: OpenNuXL makes the decoys), one
+ * run of condition "example". Its own settings (`settings`), which go back to the preset's when the example is left
+ * (`#leaveExample`): the precursor tolerance of OpenMS' test (10 ppm; OpenNuXL's default is 6 ppm). Everything else
+ * is the preset's.
  */
 export const EXAMPLE = {
-  names: ['Ecoli_1.mzML', 'Ecoli_2.mzML'],
-  fasta: 'Ecoli_K12_proteome.fasta',
+  names: ['OpenNuXL_1_input.mzML'],
+  fasta: 'OpenNuXL_1_input.fasta',
   condition: 'example',
-  settings: [
-    { label: 'fragment tolerance', parameters: { 'fragment:mass_tolerance': 0.5, 'fragment:mass_tolerance_unit': 'Da' } },
-    { label: 'PSM FDR', parameters: { 'FDR:PSM': 0.02 } },
-    { label: 'protein FDR', parameters: { 'FDR:protein': 0 } },
-  ],
+  settings: [{ label: 'precursor tolerance', parameters: { 'precursor:mass_tolerance': 10, 'precursor:mass_tolerance_unit': 'ppm' } }],
 } as const
-
-/**
- * The notice for a preset that searches without decoys (decoys 'ignore') but has an FDR: the FDR is off then (the form
- * shows it off and sends none, `searchPlan.fdrBlocked`); null for any other preset.
- */
-export function noFdrNotice(preset: Preset): string | null {
-  const p = preset.parameters
-  if (p.decoys !== 'ignore') return null
-  const fdrs = (
-    [
-      ['PSM FDR', p['FDR:PSM']],
-      ['protein FDR', p['FDR:protein']],
-    ] as const
-  ).filter(([, v]) => typeof v === 'number' && v > 0)
-  if (fdrs.length === 0) return null
-  const named = fdrs.map(([name, v]) => `${name} of ${formatPercent(v as number)}`).join(' and ')
-  return (
-    `The preset “${preset.name}” searches without decoys, so its ${named} ${fdrs.length === 1 ? 'is' : 'are'} off: ` +
-    'ProSE cannot estimate an FDR without decoys. Choose other decoys under Protein database to control the FDR.'
-  )
-}
 
 /** What "Remove all" or "Start over" removed: the rows, the database (Start over), the notices, the example's settings. */
 export type Removed = {
@@ -120,12 +92,12 @@ class SearchForm {
   contaminants = $state(true)
   presets = $state<Preset[]>(loadPresets())
   presetId = $state(DEFAULT_PRESET_ID)
-  /** The parameters set by the preset and the user, on top of ProSE's defaults. */
+  /** The parameters set by the preset and the user, on top of the defaults. */
   overrides = $state<Record<string, unknown>>(
     copyValues(BUILTIN_PRESETS.find((p) => p.id === DEFAULT_PRESET_ID)!.parameters),
   )
+  /** Percolator (`settings.rescore`). */
   rescore = $state(true)
-  peptdeep = $state(false)
   /** The design table shows Tech. replicate, Fraction group and Sample. */
   advanced = $state(false)
   /** What adding, pasting or loading could not use. */
@@ -144,8 +116,7 @@ class SearchForm {
   /** The example's settings (EXAMPLE.settings) are in force: set by loadExample (or an Undo), the example's files still there. */
   #exampleSettings = $state(false)
   /**
-   * The example's own settings that are in force and unchanged, by their labels ('fragment tolerance', 'PSM FDR', 'protein
-   * FDR'): leaving the example gives them back to the preset's (Start over's tooltip says so); one the user set since
+   * The example's own settings that are in force and unchanged, by their labels ('precursor tolerance'): leaving the example gives them back to the preset's (Start over's tooltip says so); one the user set since
    * stays (`#leaveExample`).
    */
   get exampleSettingsInForce(): string[] {
@@ -163,9 +134,10 @@ class SearchForm {
   /** The Advanced area of the settings is open. */
   advancedSettings = $state(false)
 
-  /** ProSE's parameters by name (generated from the pinned tool). */
-  entries = new Map(PROSE_PARAMETERS.map((e) => [e.name, e]))
-  defaults: Record<string, unknown> = defaultsOf(PROSE_PARAMETERS)
+  /** OpenNuXL's parameters by name (generated from the OpenMS pin). */
+  entries = new Map(NUXL_PARAMETERS.map((e) => [e.name, e]))
+  /** OpenNuXL's defaults, and those of the search's own settings (the FDRs). */
+  defaults: Record<string, unknown> = { ...defaultsOf(NUXL_PARAMETERS), ...SEARCH_SETTINGS }
   values = $derived<Record<string, unknown>>({ ...this.defaults, ...this.overrides })
   design = $derived(resolveDesign(this.files.map(toInput)))
   /** The files and the database are the bundled example's. */
@@ -220,11 +192,23 @@ class SearchForm {
     this.#exampleSettings = false
     this.presetId = id
     this.overrides = copyValues(preset.parameters)
-    const notice = noFdrNotice(preset)
-    if (notice) this.notices.push(notice)
   }
 
-  /** Saves the settings that differ from ProSE's defaults as a user preset and selects it. */
+  /**
+   * The cross-linking protocol (`NuXL:presets`). The custom one ("none") starts from the protocol chosen before: its
+   * nucleotides and adducts go into the NuXL fields, unless the user has set those fields already.
+   */
+  setProtocol(name: string) {
+    const before = String(this.values['NuXL:presets'])
+    this.setParam('NuXL:presets', name)
+    if (name !== CUSTOM_PROTOCOL) return
+    const from = protocolParameters(before)
+    if (!from) return
+    const untouched = PROTOCOL_PARAMETERS.every((p) => sameValue(this.values[p], this.defaults[p]))
+    if (untouched) for (const [p, v] of Object.entries(from)) this.setParam(p, v)
+  }
+
+  /** Saves the settings that differ from the defaults (OpenNuXL's, and the FDRs') as a user preset and selects it. */
   saveAsPreset(name: string): Preset {
     // (the settings become the user's own: the example's no longer go back when its files go)
     this.#exampleSettings = false
@@ -263,14 +247,15 @@ class SearchForm {
 
 
   /**
-   * Adds mzML files (by path) to the table; a FASTA becomes the database; anything else is reported. A path
-   * that is in the table already (or twice in `paths`) is added once: the same file would be searched twice, as
-   * two samples. Files ProSE cannot search (cut off, not mzML) join the table marked, and the search cannot
-   * start with them. Resolves when the rows are there.
+   * Adds mzML files (by path) to the table; a FASTA becomes the database; anything else is reported (compressed
+   * mzML and Thermo .raw files with what to do instead). A path that is in the table already (or twice in `paths`) is
+   * added once: the same file would be searched twice, as two samples. Files OpenNuXL cannot search (cut off, not
+   * mzML) join the table marked, and the search cannot start with them. Resolves when the rows are there.
    */
   async addFiles(paths: Iterable<string>) {
     const list = [...paths]
     const skipped = list.filter((p) => !isMzML(fileName(p)) && !isFasta(fileName(p))).map(fileName)
+    const notices = unsearchableReason(skipped)
     const database = list.filter((p) => isFasta(fileName(p))).pop()
     const listed = new Set([...this.files.map((r) => r.file.path), ...this.#pending])
     const spectra: string[] = []
@@ -282,11 +267,7 @@ class SearchForm {
         spectra.push(p)
       }
     }
-    if (skipped.length > 0) {
-      this.notices.push(
-        `Not an mzML file: ${skipped.join(', ')}. Convert vendor files to mzML first, e.g. with ProteoWizard msconvert.`,
-      )
-    }
+    this.notices.push(...notices)
     if (again.length > 0) {
       const names = [...new Set(again)]
       this.notices.push(
@@ -336,7 +317,7 @@ class SearchForm {
 
   /**
    * "Start over": no files and no database; the settings (preset, parameters, rescoring) as they are, but for the
-   * example's own (its fragment tolerance, its PSM and protein FDR), which go back to the preset's. Undo brings everything back.
+   * example's own (its precursor tolerance), which go back to the preset's. Undo brings everything back.
    */
   startOver() {
     if (this.busy) return
@@ -393,9 +374,9 @@ class SearchForm {
   }
 
   /**
-   * The example's files are gone or joined by others: its own settings go back to the preset's (or ProSE's
+   * The example's files are gone or joined by others: its own settings go back to the preset's (or OpenNuXL's
    * defaults), each group unless the user changed it since (then it is the user's: a tolerance and its unit go
-   * together, each FDR on its own). Returns the example's values it replaced.
+   * together). Returns the example's values it replaced.
    */
   #leaveExample(): Record<string, unknown> {
     if (!this.#exampleSettings) return {}
@@ -459,7 +440,7 @@ class SearchForm {
       }
   }
 
-  /** Loads the example (two replicates of one file and its FASTA, its own settings) in place of the current files. */
+  /** Loads the example (its run and FASTA, its own settings) in place of the current files. */
   async loadExample() {
     if (this.exampleLoading) return
     this.exampleLoading = true
@@ -473,7 +454,7 @@ class SearchForm {
       this.removed = null
       for (const f of facts) this.#addRow(f, { condition: EXAMPLE.condition })
       void this.setDatabase(example.database, { example: true })
-      // the example's own settings (its fragment tolerance, the protein FDR off), whatever they were
+      // the example's own settings (its precursor tolerance), whatever they were
       for (const group of EXAMPLE.settings) for (const [name, value] of Object.entries(group.parameters)) this.setParam(name, value)
       this.#exampleSettings = true
     } catch (e) {

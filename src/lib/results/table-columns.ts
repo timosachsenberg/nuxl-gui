@@ -46,15 +46,13 @@ function sampleSpecs(m: ResultModel): ColumnSpec[] {
   )
 }
 
-/**
- * The columns of a level's table. `openSearch` (from the search's summary) shows the PSMs' mass
- * shift column by default.
- */
-export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: boolean }): ColumnSpec[] {
+/** The columns of a level's table. */
+export function columnSpecs(m: ResultModel, level: Level): ColumnSpec[] {
   const nSamples = new Set(m.columnSample).size
   const foundTitle = `Biological samples with a PSM, out of ${nSamples}. Each condition and replicate is one sample.`
   if (level === 'proteins') {
     const atSearch = `Counted at the search's PSM FDR (${formatPercent(m.psmFdr)}, ${formatQ(m.psmFdr)})`
+    const atXl = `at the search's cross-link FDR (${formatPercent(m.xlFdr)}, ${formatQ(m.xlFdr)})`
     return [
       col('accession', 'Accession', 160, 'left'),
       col('gene', 'Gene', 84, 'left', { optional: 'shown' }),
@@ -62,17 +60,18 @@ export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: 
       col('coverage', 'Coverage', 112, 'left', { title: `Residues covered by peptides with PSMs at the search's PSM FDR` }),
       col('peptides', 'Peptides', 90, 'right', { title: atSearch }),
       col('psms', 'PSMs', 84, 'right', { title: atSearch }),
+      col('xlSites', 'XL sites', 84, 'right', { optional: 'shown', title: `Cross-linked residues of the protein: where its localized cross-link PSMs put the nucleic acid, ${atXl}` }),
+      col('xlPsms', 'XL PSMs', 84, 'right', { optional: 'shown', title: `Cross-link PSMs ${atXl}` }),
       ...sampleSpecs(m).map((s) => ({ ...s, title: `${s.title}. ${atSearch}` })),
       col('foundIn', 'Found in', 84, 'left', { title: foundTitle }),
-      col('qValue', 'q-value', 90, 'right', { optional: 'hidden', title: 'Protein q-value' }),
       col('score', columnDef(m, 'proteins', 'score')!.header, 170, 'right', { optional: 'hidden' }),
       col('length', 'Length', 70, 'right', { optional: 'hidden', title: 'Residues' }),
-      col('group', 'Group', 70, 'right', { optional: 'hidden', title: 'Protein group' }),
     ]
   }
   if (level === 'peptides') {
     return [
       col('peptide', 'Peptide', 'auto', 'left', { sortKey: 'sequence' }),
+      col('adduct', 'Adduct', 150, 'left', { csv: ['adduct', 'crossLink'], optional: 'shown', title: 'Nucleic acid adduct of the precursor (OpenNuXL)' }),
       col('proteins', 'Proteins', 190, 'left'),
       col('psms', 'PSMs', 84, 'right', { title: 'PSMs that pass the Best PSM q-value filter' }),
       ...sampleSpecs(m),
@@ -83,6 +82,8 @@ export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: 
   }
   return [
     col('peptide', 'Peptide', 'auto', 'left', { sortKey: 'sequence' }),
+    col('adduct', 'Adduct', 150, 'left', { csv: ['crossLink', 'adduct', 'adductMass', 'nucleotide'], optional: 'shown', title: 'Nucleic acid adduct of the precursor (OpenNuXL)' }),
+    col('site', 'Site', 64, 'left', { csv: ['site', 'siteScore'], optional: 'shown', title: 'Cross-linked residue (OpenNuXL’s best localization)' }),
     col('proteins', 'Proteins', 150, 'left'),
     col('sample', 'Sample', 96, 'left'),
     col('scan', 'Spectrum', 90, 'left', { sortKey: 'nativeId', csv: ['nativeId'], title: spectrumTitle }),
@@ -93,15 +94,15 @@ export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: 
     col('score', columnDef(m, 'psms', 'score')!.header, 130, 'right'),
     col('qValue', 'q-value', 90, 'right'),
     col('pep', 'PEP', 70, 'right', { optional: 'hidden', title: 'Posterior error probability (Percolator)' }),
-    col('deltaMass', 'Δ mass (Da)', 104, 'right', { optional: search.openSearch ? 'shown' : 'hidden', title: 'Unassigned mass shift of an open search' }),
+    col('fdrGroup', 'FDR group', 96, 'left', { optional: 'hidden', title: 'The target-decoy group of the PSM’s q-value: peptides, cross-links (short cross-links can be their own)' }),
     col('file', 'File', 160, 'left', { optional: 'hidden' }),
     col('isotopeError', 'Isotope error', 110, 'right', { optional: 'hidden' }),
   ]
 }
 
 /**
- * The columns hidden at first: the optional ones marked 'hidden', and the gene column when no
- * description names a gene (GN=).
+ * The columns hidden at first: the optional ones marked 'hidden', the gene column when no
+ * description names a gene (GN=), and the description column when the FASTA has no descriptions (bare headers).
  */
 export function defaultHidden(specs: ColumnSpec[], m: ResultModel): string[] {
   const hidden: string[] = []
@@ -109,6 +110,8 @@ export function defaultHidden(specs: ColumnSpec[], m: ResultModel): string[] {
     if (s.id === 'gene') {
       const named = m.tables.proteins.description.some((d) => parseDescription(d).gene !== null)
       if (!named) hidden.push(s.id)
+    } else if (s.id === 'description') {
+      if (m.tables.proteins.description.every((d) => parseDescription(d).name === '')) hidden.push(s.id)
     } else if (s.optional === 'hidden') {
       hidden.push(s.id)
     }

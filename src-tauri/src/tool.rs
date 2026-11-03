@@ -1,8 +1,14 @@
-//! Finding the ProSE tool, asking it for its version, and building the command that runs it.
+//! Finding OpenNuXL, asking it for its version, and building the command that runs it.
+//!
+//! OpenNuXL rescores with Percolator through another OpenMS tool, `PercolatorAdapter`, which it looks for
+//! beside its own executable (`File::findSiblingTOPPExecutable`), then on the PATH. The bundle has both in
+//! one `bin/` (`native/scripts/bundle-nuxl.sh`); a tool of a build tree has its sibling there too. OpenMS finds
+//! its data (`share/OpenMS`: CHEMISTRY, the NUXL presets) next to the executable, `bin/../share/OpenMS`,
+//! which the bundle provides (and whose compiled-in alternatives it rules out), so the app sets no data path.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::ffi::{OsStr, OsString};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// What the front end learns of the tool (`tool_info`).
@@ -11,15 +17,27 @@ use std::process::{Command, Stdio};
 pub struct ToolInfo {
     pub version: String,
     pub path: String,
-    /// Whether the tool was built with ONNX Runtime and has the PeptDeep models (see `has_onnx`).
-    pub onnx: bool,
 }
 
-pub const EXE: &str = if cfg!(windows) { "ProSE.exe" } else { "ProSE" };
+pub const EXE: &str = if cfg!(windows) {
+    "OpenNuXL.exe"
+} else {
+    "OpenNuXL"
+};
+
+/// The tool OpenNuXL rescores with, which it expects beside itself.
+pub const PERCOLATOR_ADAPTER: &str = if cfg!(windows) {
+    "PercolatorAdapter.exe"
+} else {
+    "PercolatorAdapter"
+};
+
+/// The variable that names the tool to use instead of the bundled one (a development build, a test).
+pub const TOOL_VARIABLE: &str = "NUXL_TOOL";
 
 /// Where the bundled tool is, below the app's resource directory.
 pub fn bundled_tool(resource_dir: &Path) -> PathBuf {
-    resource_dir.join("resources/prose/bin").join(EXE)
+    resource_dir.join("resources/nuxl/bin").join(EXE)
 }
 
 /// The Resources folder of the macOS app bundle that `exe` (`<App>.app/Contents/MacOS/<exe>`) really is
@@ -44,20 +62,20 @@ fn is_file(path: &Path) -> bool {
     path.is_file()
 }
 
-/// The tool, by the first of: `prose_bin` (the `PROSE_BIN` variable; if set it has to exist),
-/// the bundled tool in `resource_dir`, a `ProSE` on `path_var`.
+/// The tool, by the first of: `tool_variable` (the `NUXL_TOOL` variable; if set it has to exist), the
+/// bundled tool in `resource_dir`, an `OpenNuXL` on `path_var`.
 pub fn resolve_with(
-    prose_bin: Option<&OsStr>,
+    tool_variable: Option<&OsStr>,
     resource_dir: Option<&Path>,
     path_var: Option<&OsStr>,
 ) -> Result<PathBuf, String> {
-    if let Some(bin) = prose_bin.filter(|b| !b.is_empty()) {
+    if let Some(bin) = tool_variable.filter(|b| !b.is_empty()) {
         let path = PathBuf::from(bin);
         return if is_file(&path) {
             Ok(path)
         } else {
             Err(format!(
-                "PROSE_BIN is set to {}, which is not a file.",
+                "{TOOL_VARIABLE} is set to {}, which is not a file.",
                 path.display()
             ))
         };
@@ -73,15 +91,25 @@ pub fn resolve_with(
     {
         return Ok(found);
     }
-    Err("The ProSE tool was not found: it is not bundled with this app, PROSE_BIN is not set and there is no ProSE on the PATH.".to_string())
+    Err(format!(
+        "OpenNuXL was not found: it is not bundled with this app, {TOOL_VARIABLE} is not set and there is no \
+         OpenNuXL on the PATH."
+    ))
 }
 
 pub fn resolve(resource_dir: Option<&Path>) -> Result<PathBuf, String> {
     resolve_with(
-        std::env::var_os("PROSE_BIN").as_deref(),
+        std::env::var_os(TOOL_VARIABLE).as_deref(),
         resource_dir,
         std::env::var_os("PATH").as_deref(),
     )
+}
+
+/// Whether `PercolatorAdapter` is beside the tool at `path` (where OpenNuXL looks first; else it tries the
+/// PATH, and without one a rescoring fails with OpenNuXL's warning "Score recalibration failed.").
+pub fn has_percolator_adapter(path: &Path) -> bool {
+    path.parent()
+        .is_some_and(|bin| bin.join(PERCOLATOR_ADAPTER).is_file())
 }
 
 /// Variables of the dynamic loader that would make the bundled tool load other libraries than its own
@@ -96,12 +124,13 @@ pub const LOADER_VARIABLES: &[&str] = &[
 /// The variable that turns off the update check of OpenMS tools, and its value: a tool of a build with
 /// the check (CMake's `ENABLE_UPDATE_CHECK`, on by default) otherwise contacts openms-update.cs.uni-tuebingen.de
 /// once a day, waits up to 5 s for it when offline, and writes `<tool>.ver` beside the user's OpenMS
-/// settings. The bundled tool is built without the check (`native/scripts/build-openms.sh`); the variable
-/// covers a tool from `PROSE_BIN` or the PATH. Any value but `OFF` turns the check off.
+/// settings. The bundled tools are built without the check (`native/scripts/build-openms.sh`); the variable
+/// covers a tool from `NUXL_TOOL` or the PATH, and the `PercolatorAdapter` OpenNuXL starts (which inherits
+/// it). Any value but `OFF` turns the check off.
 pub const NO_UPDATE_CHECK: (&str, &str) = ("OPENMS_DISABLE_UPDATE_CHECK", "ON");
 
 /// The command that runs the tool: `OPENBLAS_NUM_THREADS=1` unless the user has set it (Percolator's
-/// linear algebra would otherwise start a thread per core inside ProSE's own threads), as the
+/// linear algebra would otherwise start a thread per core inside the tool's own threads), as the
 /// FASTag shim does. `openblas` is the variable's current value. Always with [`NO_UPDATE_CHECK`] (a
 /// user's `OFF` included: the app makes no network contact). On macOS without the
 /// [`LOADER_VARIABLES`]; on Windows without a console window (the app has none to share).
@@ -129,52 +158,33 @@ pub fn command(path: &Path) -> Command {
     command_with(path, std::env::var_os("OPENBLAS_NUM_THREADS"))
 }
 
-/// The version in the tool's `--help` ("Version: 3.7.0-pre-exported-20261020 Oct 20 2026, 22:16:02").
+/// `text` without the ANSI escape sequences (`ESC [ ... <letter>`) that OpenMS' help may carry (its
+/// `Colorizer` makes "Version:" bold when it writes to a terminal).
+fn without_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The version in the tool's `--help` (TOPPBase: "Version: 3.7.0-pre-exported-20261020 Oct 20 2026, 22:16:02",
+/// with ", Revision: ..." for a build of a git checkout).
 pub fn parse_version(help: &str) -> Option<String> {
-    help.lines()
-        .find_map(|l| l.trim().strip_prefix("Version:"))
-        .and_then(|v| v.split_whitespace().next())
-        .map(str::to_string)
-}
-
-/// The build manifest that `native/scripts/bundle-prose.sh` writes into the bundle, beside `bin/`.
-pub const MANIFEST: &str = "build.json";
-
-/// The part of the manifest the app reads.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Manifest {
-    /// `WITH_ONNX` of the OpenMS build (its CMakeCache), read at packaging time.
-    with_onnx: bool,
-    /// The PeptDeep models ProSE uses, relative to the manifest's folder.
-    #[serde(default)]
-    models: Vec<String>,
-}
-
-/// Whether the tool can run PeptDeep: its bundle's manifest (`<tool>/../../build.json`) says the build
-/// has ONNX Runtime, and the models it names are there (inside the bundle). ProSE reports neither, so a
-/// tool without a manifest (a build tree's, one on the PATH) counts as without ONNX.
-pub fn has_onnx(path: &Path) -> bool {
-    let Some(root) = path.parent().and_then(Path::parent) else {
-        return false;
-    };
-    let Some(manifest) = std::fs::read(root.join(MANIFEST))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Manifest>(&bytes).ok())
-    else {
-        return false;
-    };
-    let inside = |model: &str| {
-        Path::new(model)
-            .components()
-            .all(|c| matches!(c, Component::Normal(_)))
-    };
-    manifest.with_onnx
-        && !manifest.models.is_empty()
-        && manifest
-            .models
-            .iter()
-            .all(|m| inside(m) && root.join(m).is_file())
+    without_escapes(help)
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("Version:").map(str::to_string))
+        .and_then(|v| v.split_whitespace().next().map(str::to_string))
 }
 
 /// Runs `path --help` and reads the version; fails if the tool does not run or does not say.
@@ -183,7 +193,7 @@ pub fn probe(path: &Path) -> Result<ToolInfo, String> {
         .arg("--help")
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| format!("The ProSE tool {} cannot be run ({e}).", path.display()))?;
+        .map_err(|e| format!("OpenNuXL ({}) cannot be run ({e}).", path.display()))?;
     // OpenMS tools print their help to stderr
     let help = format!(
         "{}\n{}",
@@ -192,13 +202,12 @@ pub fn probe(path: &Path) -> Result<ToolInfo, String> {
     );
     let version = parse_version(&help).ok_or_else(|| {
         format!(
-            "{} did not report a version; is it the ProSE tool?",
+            "{} did not report a version; is it OpenNuXL of OpenMS?",
             path.display()
         )
     })?;
     Ok(ToolInfo {
         version,
         path: path.to_string_lossy().into_owned(),
-        onnx: has_onnx(path),
     })
 }

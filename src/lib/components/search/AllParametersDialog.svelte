@@ -1,9 +1,9 @@
 <script lang="ts">
-  // "All N parameters" (the web app's dialog): every ProSE parameter the app may set, from the pinned tool's
-  // list made at build time (`PROSE_PARAMETERS`, src/lib/settings/prose.ts), by section, with ProSE's own
-  // descriptions. The parameters of the Rescoring card (rescore, PeptDeep's switch, models and instrument) have
-  // their controls there and are not repeated here. Changes apply at once to the same settings as the page's
-  // fields, so presets save them.
+  // "All N parameters": every OpenNuXL option the app may set (the shim's allowlist), from OpenNuXL's option list of
+  // the OpenMS pin made at build time (`NUXL_PARAMETERS`, src/lib/settings/nuxl.ts), by section, with OpenNuXL's own
+  // descriptions. The FDRs, Percolator and the threads are the search's own settings, on the page only. Changes apply
+  // at once to the same settings as the page's fields, so presets save them. The adducts' NuXL fields count only with
+  // the custom protocol (`searchPlan.blockedReason`).
   import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw'
   import { Button } from '$lib/components/ui/button'
   import * as Dialog from '$lib/components/ui/dialog'
@@ -11,14 +11,20 @@
   import { Label } from '$lib/components/ui/label'
   import { Switch } from '$lib/components/ui/switch'
   import { searchForm as form } from '$lib/search/form.svelte'
-  import { FDR_PARAMETERS, NO_FDR_HINT, searchPlan } from '$lib/search/plan.svelte'
+  import { searchPlan } from '$lib/search/plan.svelte'
   import { rangeMessage } from '$lib/settings/ranges'
   import { dialogEntries, parameterSections, sameValue } from '$lib/settings/parameters'
   import ParameterField from './ParameterField.svelte'
 
-  let { open = $bindable(false) }: { open?: boolean } = $props()
+  let { open = $bindable(false), initialFilter = '' }: { open?: boolean; initialFilter?: string } = $props()
 
   let filter = $state('')
+  // each opening starts from the filter it is opened with ("NuXL:" for the adducts of the custom protocol)
+  let wasOpen = false
+  $effect.pre(() => {
+    if (open && !wasOpen) filter = initialFilter
+    wasOpen = open
+  })
   let showAdvanced = $state(false)
   /** Parameters whose long description is shown in full. */
   let expanded = $state<string[]>([])
@@ -44,13 +50,6 @@
   }
 
   const fieldId = (name: string) => `param-${name.replace(/[^A-Za-z0-9_-]/g, '-')}`
-  /** Why a parameter cannot be used with the other settings, as on the page (the request leaves it out then). */
-  const blockedReason = (name: string) =>
-    name === 'chimeric:enabled' && searchPlan.chimericBlocked
-      ? 'ProSE looks for co-isolated precursors only without database chunks. Set database:chunk_size to 0 to use it.'
-      : (FDR_PARAMETERS as readonly string[]).includes(name) && searchPlan.fdrBlocked
-        ? NO_FDR_HINT
-        : null
   const isChanged = (name: string) => !sameValue(form.values[name], form.defaults[name])
   /** The inverted range (lowest above highest) the parameter is part of. */
   const invertedRange = (name: string) => searchPlan.inverted.find((r) => r.min === name || r.max === name)
@@ -61,9 +60,9 @@
     <Dialog.Header class="gap-1 border-b px-5 pt-5 pb-3">
       <Dialog.Title class="text-[15px] font-semibold">All {entries.length} parameters</Dialog.Title>
       <Dialog.Description class="text-xs">
-        ProSE's parameters with their defaults and descriptions. Changes apply to this search right away. The common
-        ones are also on the page. The switches for Percolator and PeptDeep, and PeptDeep's instrument, are in the
-        Rescoring card.
+        OpenNuXL's parameters with their defaults and descriptions. Changes apply to this search right away. The common
+        ones are also on the page, with the FDRs, Percolator and the threads. The nucleotides and adducts of the NuXL
+        section count only with the protocol “none (custom adducts)”.
       </Dialog.Description>
       <div class="mt-2 flex flex-wrap items-center gap-3">
         <Input
@@ -112,8 +111,8 @@
                     {id}
                     labelId="{id}-label"
                     value={form.values[entry.name]}
-                    blocked={blockedReason(entry.name)}
-                    onChange={(v) => form.setParam(entry.name, v)} />
+                    blocked={searchPlan.blockedReason(entry.name)}
+                    onChange={(v) => (entry.name === 'NuXL:presets' ? form.setProtocol(String(v)) : form.setParam(entry.name, v))} />
                   {#if invertedRange(entry.name)}
                     {@const inverted = invertedRange(entry.name)!}
                     <p class="text-xs text-destructive" data-testid="range-inverted">{rangeMessage(inverted, form.values)}</p>

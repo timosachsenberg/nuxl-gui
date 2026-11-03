@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import type { FileFacts, SearchRequest } from '../desktop'
+import { NUXL_PARAMETERS } from '../settings/nuxl'
 
 // What the New search form amounts to and what startSearch() sends to the shim (the shim's commands,
 // the session and the router are replaced): the request, the footer line, the problems.
@@ -15,17 +15,17 @@ vi.mock('./session.svelte', () => ({
 }))
 vi.mock('../route.svelte', () => ({ navigate: vi.fn() }))
 
-/** The shim's file facts: an mzML of 139 spectra, a FASTA of 4,136 proteins, by name. */
+/** The shim's file facts: an mzML of 20 spectra, a FASTA of 5 proteins, by name. */
 const facts = (path: string): FileFacts => {
   const name = path.split('/').pop()!
   const fasta = name.endsWith('.fasta')
   return {
     path,
     name,
-    size: fasta ? 1686907 : 1152596,
-    spectra: fasta ? null : 139,
-    proteins: fasta ? 4136 : null,
-    residues: fasta ? 1306000 : null,
+    size: fasta ? 1484 : 153450,
+    spectra: fasta ? null : 20,
+    proteins: fasta ? 5 : null,
+    residues: fasta ? 1300 : null,
     error: null,
     problem: null,
     warnings: [],
@@ -34,8 +34,8 @@ const facts = (path: string): FileFacts => {
 vi.mock('../desktop', () => ({
   inspectFiles: vi.fn(async (paths: string[]) => paths.map(facts)),
   exampleFiles: vi.fn(async () => ({
-    spectra: ['/data/example/Ecoli_1.mzML', '/data/example/Ecoli_2.mzML'],
-    database: '/app/resources/example/Ecoli_K12_proteome.fasta',
+    spectra: ['/app/resources/example/OpenNuXL_1_input.mzML'],
+    database: '/app/resources/example/OpenNuXL_1_input.fasta',
   })),
   errorText: (e: unknown) => String(e),
 }))
@@ -45,14 +45,8 @@ const { searchPlan, searchRequest, startSearch } = await import('./plan.svelte')
 const { runSearch } = await import('./session.svelte')
 const { toolState } = await import('./tool.svelte')
 
-/** The names the shim lets through (src-tauri/src/args.rs `PARAMETERS`). */
-const allowlist = new Set(
-  [
-    ...(/pub const PARAMETERS: &\[\(&str, Kind\)\] = &\[([\s\S]*?)\];/.exec(
-      readFileSync(new URL('../../../src-tauri/src/args.rs', import.meta.url), 'utf8'),
-    )?.[1] ?? '').matchAll(/\("([^"]+)",\s*\w+\)/g),
-  ].map((m) => m[1]),
-)
+/** The names the shim lets through: OpenNuXL's parameters of the app (settings/parameters.test.ts checks them against args.rs). */
+const allowlist = new Set(NUXL_PARAMETERS.map((e) => e.name))
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
 
@@ -68,61 +62,60 @@ describe('the search request', () => {
     form.files = []
     form.database = null
     form.notices = []
-    form.choosePreset('orbitrap-hcd-tryptic')
+    form.choosePreset('nuxl-defaults')
     form.contaminants = true
     form.rescore = true
-    form.peptdeep = false
     form.threads = null
-    Object.assign(toolState, { status: 'ready', info: { version: '3.7.0', path: '/x/ProSE', onnx: true }, error: null })
+    Object.assign(toolState, { status: 'ready', info: { version: '3.7.0', path: '/x/OpenNuXL' }, error: null })
   })
 
-  test('the form builds the arguments of the example preset', async () => {
+  test("the default settings: OpenNuXL's defaults with the protocol RNA-UV (U), FDRs of 1 % apart from the parameters", async () => {
+    await form.addFiles(['/runs/run.mzML', '/db/proteins.fasta'])
+    await settle()
+    expect(searchPlan.problem).toBeNull()
+    const r = await request()
+    expect(r).toEqual({
+      files: [{ id: form.files[0].id, path: '/runs/run.mzML' }],
+      database: '/db/proteins.fasta',
+      contaminants: true,
+      settings: { parameters: { 'NuXL:presets': 'RNA-UV (U)' }, rescore: true, threads: 0, peptideFdr: 0.01, xlFdr: 0.01 },
+    })
+    // the result's cutoffs: the peptide PSMs' FDR, no protein FDR; the record keeps both FDRs
+    expect(vi.mocked(runSearch).mock.calls.at(-1)![1]).toMatchObject({
+      psmFdr: 0.01,
+      proteinFdr: 1,
+      settings: { parameters: { 'NuXL:presets': 'RNA-UV (U)' }, rescore: true, contaminants: true, presetId: 'nuxl-defaults', peptideFdr: 0.01, xlFdr: 0.01 },
+    })
+  })
+
+  test("the example: OpenMS' test run with its 10 ppm precursor tolerance", async () => {
     await form.loadExample()
     await settle()
     expect(form.isExample).toBe(true)
-    // the example's protein FDR is off (0), and shown so
-    expect(form.value('FDR:protein')).toBe(0)
+    expect(form.files.map((r) => [r.file.name, r.condition])).toEqual([['OpenNuXL_1_input.mzML', 'example']])
     expect(searchPlan.problem).toBeNull()
     const r = await request()
-    // the Orbitrap HCD preset, on ProSE's defaults: what differs is sent, by the shim's names (the protein FDR off is
-    // ProSE's default, 0, so it is not sent)
-    expect(r.settings.parameters).toEqual({
-      enzyme: 'Trypsin/P',
-      'modifications:variable': ['Oxidation (M)', 'Acetyl (Protein N-term)'],
-      // the example's PSM FDR (the run is too small for 1 %)
-      'FDR:PSM': 0.02,
-      'peptide:missed_cleavages': 2,
-      // the example's ion-trap fragments
-      'fragment:mass_tolerance': 0.5,
-      'fragment:mass_tolerance_unit': 'Da',
+    expect(r.settings).toEqual({
+      parameters: { 'NuXL:presets': 'RNA-UV (U)', 'precursor:mass_tolerance': 10 },
+      rescore: true,
+      threads: 0,
+      peptideFdr: 0.01,
+      xlFdr: 0.01,
     })
-    // the result's protein cutoff: none (every protein counts)
-    expect(vi.mocked(runSearch).mock.calls.at(-1)![1]).toMatchObject({ psmFdr: 0.02, proteinFdr: 1 })
-    for (const name of Object.keys(r.settings.parameters)) expect(allowlist.has(name), name).toBe(true)
-    expect(r.settings).toMatchObject({ rescore: true, peptdeep: false, threads: 0 })
-    expect(r.contaminants).toBe(true)
-    expect(searchPlan.line).toBe(
-      '2 files in 2 samples · 4,136 proteins + 116 cRAP + decoys',
-    )
+    expect(r.database).toBe('/app/resources/example/OpenNuXL_1_input.fasta')
+    expect(searchPlan.line).toBe('1 file · 5 proteins + 116 cRAP + decoys')
     expect(searchPlan.note).toBe(
-      "Ion-trap example with a 0.5 Da fragment tolerance, a 2 % PSM FDR and no protein FDR: the run is too small for 1 % and for a protein FDR. It has too few PSMs for Percolator's full model.",
+      "OpenMS' test run of OpenNuXL (20 spectra, 5 proteins) with its 10 ppm precursor tolerance. It has too few PSMs for Percolator, which OpenNuXL skips below 1,000 PSMs.",
     )
-    // a protein FDR the user sets on the example is sent, and the note no longer says there is none
-    form.setParam('FDR:protein', 0.05)
-    expect(searchPlan.note).toBe(
-      "Ion-trap example with a 0.5 Da fragment tolerance and a 2 % PSM FDR. The run is too small for 1 %, for a protein FDR and for Percolator's full model.",
-    )
-    expect((await request()).settings.parameters['FDR:protein']).toBe(0.05)
-    expect(vi.mocked(runSearch).mock.calls.at(-1)![1]).toMatchObject({ proteinFdr: 0.05 })
   })
 
   test('a search request carries paths, not file contents', async () => {
-    await form.addFiles(['/runs/a/sample.mzML', '/runs/b/sample.mzML.gz', '/db/human.fasta'])
+    await form.addFiles(['/runs/a/sample.mzML', '/runs/b/sample.mzML', '/db/human.fasta'])
     await settle()
     const r = await request()
     expect(r.files).toEqual([
       { id: form.files[0].id, path: '/runs/a/sample.mzML' },
-      { id: form.files[1].id, path: '/runs/b/sample.mzML.gz' },
+      { id: form.files[1].id, path: '/runs/b/sample.mzML' },
     ])
     expect(r.database).toBe('/db/human.fasta')
     // plain JSON: strings, numbers, booleans, lists (no File, Blob or bytes)
@@ -130,6 +123,36 @@ describe('the search request', () => {
     expect(JSON.parse(json)).toEqual(r)
     const leaves = (v: unknown): unknown[] => (v !== null && typeof v === 'object' ? Object.values(v).flatMap(leaves) : [v])
     for (const leaf of leaves(r)) expect(['string', 'number', 'boolean']).toContain(typeof leaf)
+  })
+
+  test('sends what differs from OpenNuXL\'s defaults, by the names the shim lets through; the FDRs only as settings', async () => {
+    await form.addFiles(['/r/run.mzML', '/db/db.fasta'])
+    await settle()
+    form.setParam('peptide:enzyme', 'Lys-C')
+    form.setParam('NuXL:length', 3)
+    form.setParam('NuXL:scoring', 'fast')
+    form.setParam('NuXL:only_xl', true)
+    form.setParam('precursor:isotopes', [0, 1])
+    form.setParam('peptide:clip_nterm_methionine', 'false')
+    form.setParam('peptideFdr', 0.05)
+    form.setParam('xlFdr', 0.1)
+    // back to a default: not sent
+    form.setParam('fragment:mass_tolerance', 20)
+    const r = searchRequest()!
+    expect(r.settings.parameters).toEqual({
+      'peptide:enzyme': 'Lys-C',
+      'NuXL:presets': 'RNA-UV (U)',
+      'NuXL:length': 3,
+      'NuXL:scoring': 'fast',
+      'NuXL:only_xl': true,
+      'precursor:isotopes': [0, 1],
+      'peptide:clip_nterm_methionine': 'false',
+    })
+    expect(r.settings).toMatchObject({ peptideFdr: 0.05, xlFdr: 0.1 })
+    for (const name of Object.keys(r.settings.parameters)) expect(allowlist.has(name), name).toBe(true)
+    // a name OpenNuXL does not have (a preset of another version) is not sent
+    form.setParam('FDR:PSM', 0.02)
+    expect('FDR:PSM' in searchRequest()!.settings.parameters).toBe(false)
   })
 
   test('every preset sends only names the shim lets through', async () => {
@@ -142,92 +165,48 @@ describe('the search request', () => {
     }
   })
 
-  test('Advanced: the threads (all cores by default) and the database chunks', async () => {
+  test('the adducts of the NuXL fields go only with the custom protocol, which starts from the protocol before', async () => {
+    await form.addFiles(['/r/run.mzML', '/db/db.fasta'])
+    await settle()
+    form.setParam('NuXL:modifications', ['U:', 'U:-H2O'])
+    expect(searchPlan.customProtocol).toBe(false)
+    expect(searchPlan.blockedReason('NuXL:modifications')).toMatch(/^The protocol sets this/)
+    expect(searchPlan.blockedReason('NuXL:length')).toBeNull()
+    expect('NuXL:modifications' in searchRequest()!.settings.parameters).toBe(false)
+    // the custom protocol: the fields count (the user's own stay as they are)
+    form.setProtocol('none')
+    expect(searchPlan.customProtocol).toBe(true)
+    expect(searchPlan.blockedReason('NuXL:modifications')).toBeNull()
+    // ("none" is OpenNuXL's default: not sent)
+    expect(searchRequest()!.settings.parameters).toEqual({ 'NuXL:modifications': ['U:', 'U:-H2O'] })
+    // with untouched fields, the custom protocol starts from the protocol chosen before
+    form.choosePreset('nuxl-defaults')
+    form.setProtocol('RNA-UV (UCGA)')
+    form.setProtocol('none')
+    expect(form.value('NuXL:can_cross_link')).toBe('UCGA')
+    expect(form.value<string[]>('NuXL:modifications')).toHaveLength(10)
+    const r = searchRequest()!
+    expect(r.settings.parameters['NuXL:can_cross_link']).toBe('UCGA')
+    for (const name of Object.keys(r.settings.parameters)) expect(allowlist.has(name), name).toBe(true)
+  })
+
+  test('Advanced: the threads (all cores by default), never a parameter', async () => {
     await form.addFiles(['/r/run.mzML', '/db/db.fasta'])
     await settle()
     expect(searchRequest()!.settings.threads).toBe(0)
     form.threads = 4
-    form.setParam('database:chunk_size', 2000)
     const r = searchRequest()!
     expect(r.settings.threads).toBe(4)
-    expect(r.settings.parameters['database:chunk_size']).toBe(2000)
     expect('threads' in r.settings.parameters).toBe(false)
   })
 
-  test('co-isolated precursors: sent when on, not with database chunks (ProSE would ignore them)', async () => {
+  test('Percolator off', async () => {
     await form.addFiles(['/r/run.mzML', '/db/db.fasta'])
     await settle()
-    expect('chimeric:enabled' in searchRequest()!.settings.parameters).toBe(false)
-    form.setParam('chimeric:enabled', true)
-    expect(searchPlan.chimericBlocked).toBe(false)
-    expect(searchRequest()!.settings.parameters['chimeric:enabled']).toBe(true)
-    form.setParam('database:chunk_size', 2000)
-    expect(searchPlan.chimericBlocked).toBe(true)
-    expect('chimeric:enabled' in searchRequest()!.settings.parameters).toBe(false)
-    // the switch stays on: without chunks it is sent again
-    form.setParam('database:chunk_size', 0)
-    expect(searchRequest()!.settings.parameters['chimeric:enabled']).toBe(true)
-    for (const name of Object.keys(searchRequest()!.settings.parameters)) expect(allowlist.has(name), name).toBe(true)
-  })
-
-  test('without decoys there is no FDR: none is sent, nothing waits for one, and the values come back with decoys', async () => {
-    await form.addFiles(['/r/run.mzML', '/db/db.fasta'])
-    await settle()
-    form.setParam('FDR:protein', 0.05)
-    form.setParam('FDR:protein_inference_PSM', 0.2)
-    expect(searchPlan.fdrBlocked).toBe(false)
-    form.setParam('decoys', 'ignore')
-    expect(searchPlan.fdrBlocked).toBe(true)
-    // a PSM FDR of 0 does not keep the search from starting then
-    form.setParam('FDR:PSM', 0)
-    expect(searchPlan.problem).toBeNull()
-    const r = await request()
-    expect(r.settings.parameters.decoys).toBe('ignore')
-    for (const name of ['FDR:PSM', 'FDR:protein', 'FDR:protein_inference_PSM']) expect(name in r.settings.parameters, name).toBe(false)
-    // the result has no cutoffs: every PSM and protein counts
-    expect(vi.mocked(runSearch).mock.calls.at(-1)![1]).toMatchObject({ psmFdr: 1, proteinFdr: 1 })
-    // decoys again: the FDR the user had (the PSM FDR of 0 waits again)
-    form.setParam('decoys', 'generate')
-    expect(searchPlan.problem).toBe('Set a PSM FDR above 0 %.')
-    form.setParam('FDR:PSM', 0.01)
-    const again = await request()
-    expect(again.settings.parameters).toMatchObject({ decoys: 'generate', 'FDR:PSM': 0.01, 'FDR:protein': 0.05, 'FDR:protein_inference_PSM': 0.2 })
-    expect(vi.mocked(runSearch).mock.calls.at(-1)![1]).toMatchObject({ psmFdr: 0.01, proteinFdr: 0.05 })
-  })
-
-  test('a preset without decoys but with an FDR loads with the FDR off, and says so', async () => {
-    form.presets = [
-      ...form.presets,
-      { id: 'nodecoys', name: 'No decoys', builtin: false, parameters: { decoys: 'ignore', 'FDR:PSM': 0.01, 'FDR:protein': 0.05 } },
-      { id: 'nodecoys-nofdr', name: 'Plain', builtin: false, parameters: { decoys: 'ignore' } },
-    ]
-    form.choosePreset('nodecoys')
-    expect(searchPlan.fdrBlocked).toBe(true)
-    expect(form.notices).toEqual([
-      'The preset “No decoys” searches without decoys, so its PSM FDR of 1 % and protein FDR of 5 % are off: ProSE cannot ' +
-        'estimate an FDR without decoys. Choose other decoys under Protein database to control the FDR.',
-    ])
-    await form.addFiles(['/r/run.mzML', '/db/db.fasta'])
-    await settle()
-    expect('FDR:PSM' in searchRequest()!.settings.parameters).toBe(false)
-    form.notices = []
-    form.choosePreset('nodecoys-nofdr')
-    expect(form.notices).toEqual([])
-    form.choosePreset('orbitrap-hcd-tryptic')
-    expect(form.notices).toEqual([])
-    form.presets = form.presets.filter((p) => !p.id.startsWith('nodecoys'))
-  })
-
-  test('PeptDeep needs Percolator and a ProSE with ONNX Runtime', async () => {
-    await form.addFiles(['/r/run.mzML', '/db/db.fasta'])
-    await settle()
-    form.peptdeep = true
-    expect(searchRequest()!.settings.peptdeep).toBe(true)
     form.rescore = false
-    expect(searchRequest()!.settings).toMatchObject({ peptdeep: false, rescore: false })
-    form.rescore = true
-    Object.assign(toolState, { info: { version: '3.7.0', path: '/x/ProSE', onnx: false } })
-    expect(searchRequest()!.settings.peptdeep).toBe(false)
+    expect(searchRequest()!.settings.rescore).toBe(false)
+    expect((await request()).settings.rescore).toBe(false)
+    expect(vi.mocked(runSearch).mock.calls.at(-1)![1]).toMatchObject({ settings: { rescore: false } })
   })
 })
 
@@ -236,8 +215,8 @@ describe('the footer', () => {
     form.files = []
     form.database = null
     form.notices = []
-    form.choosePreset('orbitrap-hcd-tryptic')
-    Object.assign(toolState, { status: 'ready', info: { version: '3.7.0', path: '/x/ProSE', onnx: true }, error: null })
+    form.choosePreset('nuxl-defaults')
+    Object.assign(toolState, { status: 'ready', info: { version: '3.7.0', path: '/x/OpenNuXL' }, error: null })
   })
 
   test('says what is missing, and why the search cannot start', async () => {
@@ -248,33 +227,39 @@ describe('the footer', () => {
     expect(searchPlan.problem).toBe('Choose a FASTA database to start.')
     await form.addFiles(['/db/db.fasta'])
     await settle()
-    expect(searchPlan.line).toBe('1 file · 4,136 proteins + 116 cRAP + decoys')
+    expect(searchPlan.line).toBe('1 file · 5 proteins + 116 cRAP + decoys')
     expect(searchPlan.canStart).toBe(true)
+    form.contaminants = false
+    expect(searchPlan.line).toBe('1 file · 5 proteins + decoys')
+    form.contaminants = true
     form.setParam('modifications:variable', ['Oxidation (M)', 'Nonsense (Q)'])
-    expect(searchPlan.problem).toMatch(/^Unknown modification: Nonsense \(Q\)\. ProSE does not know this name/)
+    expect(searchPlan.problem).toMatch(/^Unknown modification: Nonsense \(Q\)\. OpenMS does not know this name/)
     form.setParam('modifications:variable', ['Phospho (S)'])
     expect(searchPlan.problem).toBeNull()
-    // the protein FDR off (0) is a setting, not a problem; the PSM FDR cannot be off
-    form.setParam('FDR:protein', 0)
+    // the FDRs cannot be off
+    form.setParam('peptideFdr', 0)
+    expect(searchPlan.problem).toBe('Set a peptide FDR above 0 %.')
+    form.setParam('peptideFdr', 0.01)
+    form.setParam('xlFdr', 0)
+    expect(searchPlan.problem).toBe('Set a cross-link FDR above 0 %.')
+    form.setParam('xlFdr', 0.01)
+    // a value outside the form's bounds (a preset may hold one)
+    form.setParam('NuXL:length', 6)
+    expect(searchPlan.problem).toBe('NuXL:length is 6; the search takes 0 to 4.')
+    form.setParam('NuXL:length', 2)
+    form.setParam('precursor:min_charge', 6)
+    expect(searchPlan.problem).toBe('Charges: the lowest (6) is above the highest (5).')
+    form.setParam('precursor:min_charge', 2)
     expect(searchPlan.problem).toBeNull()
-    form.setParam('FDR:PSM', 0)
-    expect(searchPlan.problem).toBe('Set a PSM FDR above 0 %.')
-    form.setParam('FDR:PSM', 0.01)
-    // a value ProSE refuses (a preset may hold one)
-    form.setParam('precursor:max_charge', 30)
-    expect(searchPlan.problem).toBe('precursor:max_charge is 30; ProSE takes 1 to 20.')
-    form.setParam('precursor:max_charge', 5)
-    expect(searchPlan.problem).toBeNull()
-    Object.assign(toolState, { status: 'failed', info: null, error: 'PROSE_BIN is set to /x, which is not a file.' })
-    expect(searchPlan.problem).toBe('ProSE cannot be run: PROSE_BIN is set to /x, which is not a file.')
+    Object.assign(toolState, { status: 'failed', info: null, error: 'NUXL_BIN is set to /x, which is not a file.' })
+    expect(searchPlan.problem).toBe('OpenNuXL cannot be run: NUXL_BIN is set to /x, which is not a file.')
   })
 
   test('Remove all and Start over: no files (Start over: no database either), the settings as they were', async () => {
     await form.addFiles(['/r/a.mzML', '/r/b.mzML', '/db/db.fasta'])
     await settle()
-    form.choosePreset('open-search')
     form.setParam('fragment:mass_tolerance', 0.5)
-    form.peptdeep = true
+    form.rescore = false
     form.notices.push('a notice about the files')
     form.removeAllFiles()
     expect(form.files).toEqual([])
@@ -285,81 +270,60 @@ describe('the footer', () => {
     expect(form.files).toEqual([])
     expect(form.database).toBeNull()
     expect(searchPlan.line).toBe('No spectra yet')
-    expect(form.presetId).toBe('open-search')
+    expect(form.presetId).toBe('nuxl-defaults')
     expect(form.value('fragment:mass_tolerance')).toBe(0.5)
-    expect(form.peptdeep).toBe(true)
-    form.peptdeep = false
+    expect(form.rescore).toBe(false)
+    form.rescore = true
   })
 
-  test("the example's fragment tolerance, PSM FDR and protein FDR go back to the preset's when its files go", async () => {
-    const own = () => [form.value('fragment:mass_tolerance'), form.value('fragment:mass_tolerance_unit'), form.value('FDR:protein')]
-    const psmFdr = () => form.value('FDR:PSM')
-    // the example's protein FDR is off, whatever it was
-    form.setParam('FDR:protein', 0.05)
+  test("the example's precursor tolerance goes back to the preset's when its files go", async () => {
+    const tolerance = () => [form.value('precursor:mass_tolerance'), form.value('precursor:mass_tolerance_unit')]
+    form.setParam('precursor:mass_tolerance', 4)
     await form.loadExample()
     await settle()
-    expect(own()).toEqual([0.5, 'Da', 0])
-    expect(psmFdr()).toBe(0.02)
-    // Start over: the preset's 20 ppm and 1 % again (the other settings stay)
-    form.peptdeep = true
+    expect(tolerance()).toEqual([10, 'ppm'])
+    expect(form.exampleSettingsInForce).toEqual(['precursor tolerance'])
+    // the example's settings are not the user's changes (another preset would not discard them)
+    expect(form.edited).toBe(false)
+    // Start over: OpenNuXL's 6 ppm again (the other settings stay)
+    form.setParam('xlFdr', 0.05)
     form.startOver()
-    expect(own()).toEqual([20, 'ppm', 0.01])
-    expect(psmFdr()).toBe(0.01)
-    expect(form.peptdeep).toBe(true)
-    form.peptdeep = false
-    // Undo brings back the files, the database and the example's tolerance and protein FDR
-    expect(form.removed?.files).toHaveLength(2)
+    expect(tolerance()).toEqual([6, 'ppm'])
+    expect(form.value('xlFdr')).toBe(0.05)
+    // Undo brings back the files, the database and the example's tolerance
+    expect(form.removed?.files).toHaveLength(1)
     form.undoRemove()
     await settle()
     expect(form.isExample).toBe(true)
-    expect(own()).toEqual([0.5, 'Da', 0])
-    expect(psmFdr()).toBe(0.02)
+    expect(tolerance()).toEqual([10, 'ppm'])
     expect(form.removed).toBeNull()
     // own files added to the example's: the example's settings end
     await form.addFiles(['/runs/mine.mzML'])
-    expect(own()).toEqual([20, 'ppm', 0.01])
-    // a tolerance the user set after loading the example stays, the protein FDR still goes back (and Start over's
-    // tooltip names only what goes back)
+    expect(tolerance()).toEqual([6, 'ppm'])
+    // a tolerance the user set after loading the example stays
+    form.removeAllFiles()
     await form.loadExample()
     await settle()
-    expect(form.exampleSettingsInForce).toEqual(['fragment tolerance', 'PSM FDR', 'protein FDR'])
-    form.setParam('fragment:mass_tolerance', 0.3)
-    expect(form.exampleSettingsInForce).toEqual(['PSM FDR', 'protein FDR'])
-    form.removeAllFiles()
-    expect(own()).toEqual([0.3, 'Da', 0.01])
+    form.setParam('precursor:mass_tolerance', 8)
     expect(form.exampleSettingsInForce).toEqual([])
-    // a PSM FDR the user set stays
-    await form.loadExample()
-    await settle()
-    form.setParam('FDR:PSM', 0.05)
-    expect(form.exampleSettingsInForce).toEqual(['fragment tolerance', 'protein FDR'])
     form.removeAllFiles()
-    expect(psmFdr()).toBe(0.05)
-    form.setParam('FDR:PSM', 0.01)
-    // a protein FDR the user set stays, the tolerance goes back
-    await form.loadExample()
-    await settle()
-    form.setParam('FDR:protein', 0.05)
-    expect(form.exampleSettingsInForce).toEqual(['fragment tolerance', 'PSM FDR'])
-    form.removeAllFiles()
-    expect(own()).toEqual([20, 'ppm', 0.05])
+    expect(tolerance()).toEqual([8, 'ppm'])
     // another database ends them too
     await form.loadExample()
     await settle()
     await form.setDatabase('/db/human.fasta')
-    expect(own()).toEqual([20, 'ppm', 0.01])
+    expect(tolerance()).toEqual([6, 'ppm'])
+    form.setParam('xlFdr', 0.01)
   })
 
-  test("leaving the example gives back the preset's protein FDR, or ProSE's default when the preset has none", async () => {
-    // a preset without a protein FDR (a user preset saved from the defaults): ProSE's 0, off
-    form.presets = [...form.presets, { id: 'mine', name: 'Mine', builtin: false, parameters: { 'FDR:PSM': 0.01 } }]
+  test("leaving the example gives back the preset's tolerance", async () => {
+    form.presets = [...form.presets, { id: 'mine', name: 'Mine', builtin: false, parameters: { 'precursor:mass_tolerance': 0.02, 'precursor:mass_tolerance_unit': 'Da' } }]
     form.choosePreset('mine')
     await form.loadExample()
     await settle()
-    expect(form.value('FDR:protein')).toBe(0)
+    expect(form.value('precursor:mass_tolerance_unit')).toBe('ppm')
     form.startOver()
-    expect(form.value('FDR:protein')).toBe(0)
-    expect('FDR:protein' in form.overrides).toBe(false)
+    expect([form.value('precursor:mass_tolerance'), form.value('precursor:mass_tolerance_unit')]).toEqual([0.02, 'Da'])
     form.presets = form.presets.filter((p) => p.id !== 'mine')
   })
 
@@ -368,35 +332,23 @@ describe('the footer', () => {
     await settle()
     // a vendor file only, or an mzML that cannot be read: no row joins, the example's settings stay
     await form.addFiles(['/r/run.raw'])
-    expect(form.value('fragment:mass_tolerance')).toBe(0.5)
+    expect(form.value('precursor:mass_tolerance')).toBe(10)
     const facts = vi.mocked((await import('../desktop')).inspectFiles)
     facts.mockImplementationOnce(async (paths: string[]) =>
       paths.map((p) => ({ path: p, name: p.split('/').pop()!, size: 0, spectra: null, proteins: null, residues: null, error: 'not an mzML', problem: null, warnings: [] })),
     )
     await form.addFiles(['/r/broken.mzML'])
     expect(form.isExample).toBe(true)
-    expect(form.value('fragment:mass_tolerance')).toBe(0.5)
-    expect(form.exampleSettingsInForce).toEqual(['fragment tolerance', 'PSM FDR', 'protein FDR'])
-    // Start over, then the user sets 10 ppm, then Undo: the files come back, the user's 10 ppm stays, the example's
-    // protein FDR (off) comes back
+    expect(form.exampleSettingsInForce).toEqual(['precursor tolerance'])
+    // Start over, then the user sets 5 ppm, then Undo: the files come back, the user's 5 ppm stays
     form.startOver()
     expect(form.exampleSettingsInForce).toEqual([])
-    expect(form.value('FDR:protein')).toBe(0.01)
-    form.setParam('fragment:mass_tolerance', 10)
+    form.setParam('precursor:mass_tolerance', 5)
     form.undoRemove()
     await settle()
     expect(form.isExample).toBe(true)
-    expect([form.value('fragment:mass_tolerance'), form.value('fragment:mass_tolerance_unit')]).toEqual([10, 'ppm'])
-    expect(form.value('FDR:protein')).toBe(0)
-    expect(form.exampleSettingsInForce).toEqual(['PSM FDR', 'protein FDR'])
-    // and the other way round: a protein FDR set after the removal stays, the example's tolerance comes back
-    await form.loadExample()
-    await settle()
-    form.startOver()
-    form.setParam('FDR:protein', 0.001)
-    form.undoRemove()
-    await settle()
-    expect([form.value('fragment:mass_tolerance'), form.value('fragment:mass_tolerance_unit'), form.value('FDR:protein')]).toEqual([0.5, 'Da', 0.001])
+    expect(form.value('precursor:mass_tolerance')).toBe(5)
+    expect(form.exampleSettingsInForce).toEqual([])
   })
 
   test('Undo counts a database again whose count the removal cut short', async () => {
@@ -413,7 +365,7 @@ describe('the footer', () => {
     form.undoRemove()
     await settle()
     expect(form.database?.file.name).toBe('slow.fasta')
-    expect(form.database?.proteins).toBe(4136)
+    expect(form.database?.proteins).toBe(5)
   })
 
   test('Remove all and Start over wait while files or the example are loading', async () => {
@@ -429,9 +381,12 @@ describe('the footer', () => {
     expect(form.removed).toBeNull()
   })
 
-  test('files that are neither mzML nor FASTA are reported, not added', async () => {
-    await form.addFiles(['/r/run.raw', '/r/run.mzML'])
+  test('files that are not plain mzML or FASTA are reported, not added: compressed mzML and raw files say what to do', async () => {
+    await form.addFiles(['/r/run.raw', '/r/run.mzML', '/r/other.mzML.gz', '/r/notes.txt'])
     expect(form.files.map((r) => r.file.name)).toEqual(['run.mzML'])
-    expect(form.notices[0]).toMatch(/^Not an mzML file: run\.raw\./)
+    expect(form.notices).toHaveLength(3)
+    expect(form.notices[0]).toMatch(/^other\.mzML\.gz is compressed\. OpenNuXL reads plain mzML only/)
+    expect(form.notices[1]).toMatch(/^run\.raw: Thermo raw files cannot be searched directly\./)
+    expect(form.notices[2]).toMatch(/^Not an mzML file: notes\.txt\./)
   })
 })

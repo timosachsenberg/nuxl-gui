@@ -1,16 +1,16 @@
 <script lang="ts">
-  // The PSMs of the open result (the best hit of each spectrum). An open search's mass shift above
-  // 0.05 Da goes before the sequence as an unlocalized ProForma mass ("[+15.9949]?"). A row opens the
-  // PSM view (`onOpen`); while it is open, the table is the list beside it (`compact`): peptide,
-  // charge, sample, q-value and precursor error, as in the mockup. A decoy PSM and that of a co-isolated
-  // precursor (a search with chimeric:enabled) are marked after the peptide.
+  // The PSMs of the open result (the best hit of each spectrum), cross-links and peptides. A cross-link has the
+  // "XL" badge in its Adduct column (after the peptide when that column is not there, as in the list beside the
+  // PSM view), its adduct in monospace (its mass in the tooltip) and its cross-linked residue ("K9"). A row opens
+  // the PSM view (`onOpen`); while it is open, the table is the list beside it (`compact`): peptide, charge,
+  // sample, q-value and precursor error, as in the mockup. A decoy PSM is marked after the peptide.
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
-  import { massShift, peptideView } from '$lib/format/peptide'
-  import { COISOLATED_TITLE, isCoisolated } from '$lib/results/coisolated'
+  import { adductLabel, peptideView } from '$lib/format/peptide'
+  import { siteName } from '$lib/results/columns'
   import { baseName } from '$lib/results/model'
   import { formatQCompact, formatQValue, formatScore, spectrumLabel } from '$lib/results/display'
   import type { LevelState, ResultsView } from '$lib/results/view.svelte'
-  import { fixed, signed, tableColumns, type CellDef } from './cells'
+  import { adductTitle, fdrGroupLabel, fixed, signed, siteScoreText, tableColumns, type CellDef } from './cells'
   import DataTable from './DataTable.svelte'
   import Marker from './Marker.svelte'
   import ProteinRefs from './ProteinRefs.svelte'
@@ -24,12 +24,28 @@
 
   const m = $derived(view.model)
   const ps = $derived(m.tables.psms)
+  const xl = $derived(ps.xl)
   const fixedMods = $derived(view.result.settings.fixedMods)
+  /** The Adduct column is there: the "XL" badge goes in it, else after the peptide. */
+  const adductShown = $derived(!compact && level.visible.some((s) => s.id === 'adduct'))
 
   /** The peptide's tooltip, with what its markers say (they may be cut off in a narrow column). */
   function withMarks(text: string, i: number): string {
-    const marks = [ps.decoy[i] ? 'decoy' : null, isCoisolated(ps, i) ? 'co-isolated precursor' : null].filter((x) => x !== null)
+    const marks = [xl.isXL[i] ? `cross-link${xl.adduct[i] ? ` with ${adductLabel(xl.adduct[i])}` : ''}` : null, ps.decoy[i] ? 'decoy' : null].filter(
+      (x) => x !== null,
+    )
     return marks.length > 0 ? `${text} (${marks.join(', ')})` : text
+  }
+
+  const XL_TITLE = 'Cross-link: the peptide is linked to a nucleotide'
+
+  /** The tooltip of the site: the residue, the score and the residues it may be on (lower case in OpenNuXL's sequence). */
+  function siteTitle(i: number): string {
+    const site = siteName(m, i)
+    const score = xl.siteScore[i]
+    const where = xl.siteSequence[i] ? ` · possible residues in lower case: ${xl.siteSequence[i]}` : ''
+    if (site === '') return xl.isXL[i] ? `Not localized${where}` : ''
+    return `Cross-linked residue ${site}${score === score ? ` (localization score ${siteScoreText(score)})` : ''}${where}`
   }
 
   function cells(id: string): CellDef {
@@ -60,12 +76,33 @@
         return { cell: (i) => formatQValue(ps.qValue[i]) }
       case 'pep':
         return { cell: (i) => formatQValue(ps.pep[i]) }
-      case 'deltaMass':
-        return { cell: (i) => signed(ps.deltaMass[i], 4), secondary: (i) => massShift(ps.deltaMass[i]) === null && ps.deltaMass[i] === ps.deltaMass[i], placeholder: (i) => ps.deltaMass[i] !== ps.deltaMass[i] }
       case 'file':
         return { cell: (i) => baseName(m.tables.files[ps.file[i]]) }
       case 'isotopeError':
         return { cell: (i) => String(ps.isotopeError[i]) }
+      case 'crossLink':
+        return { cell: (i) => (xl.isXL[i] ? xlCell : ''), cellTitle: (i) => (xl.isXL[i] ? XL_TITLE : undefined) }
+      case 'adduct':
+        return {
+          cell: (i) => (xl.adduct[i] === '' && !xl.isXL[i] ? '–' : adductCell),
+          cellTitle: (i) => adductTitle(xl.adduct[i], xl.adductMass[i], xl.nucleotide[i], xl.isXL[i] === 1) || (xl.isXL[i] ? XL_TITLE : undefined),
+          placeholder: (i) => xl.adduct[i] === '' && !xl.isXL[i],
+        }
+      case 'adductMass':
+        return { cell: (i) => (xl.adduct[i] === '' ? '–' : signed(xl.adductMass[i], 4)), placeholder: (i) => xl.adduct[i] === '' }
+      case 'nucleotide':
+        return { cell: (i) => xl.nucleotide[i] || '–', placeholder: (i) => xl.nucleotide[i] === '', class: 'font-mono' }
+      case 'site':
+        return {
+          cell: (i) => siteName(m, i) || '–',
+          cellTitle: (i) => siteTitle(i) || undefined,
+          placeholder: (i) => xl.site[i] < 0,
+          class: 'font-mono text-[12.5px]',
+        }
+      case 'siteScore':
+        return { cell: (i) => siteScoreText(xl.siteScore[i]), placeholder: (i) => xl.siteScore[i] !== xl.siteScore[i] }
+      case 'fdrGroup':
+        return { cell: (i) => fdrGroupLabel(xl.fdrGroup[i]), cellTitle: (i) => xl.fdrGroup[i] }
       default:
         return { cell: () => '' }
     }
@@ -105,11 +142,19 @@
 </script>
 
 {#snippet peptideCell(i: number)}
-  {@const shift = massShift(ps.deltaMass[i])}
-  {#if shift !== null}<span class="font-mono text-[12.5px] text-muted-foreground" title="Unassigned mass shift in Da. Its position on the peptide is not known."
-      >[{shift}]?</span
-    >{/if}<PeptideSequence view={peptideView(m.tables.peptides, ps.peptide[i], fixedMods)} />{#if ps.decoy[i]}<Marker
-      text="decoy" />{/if}{#if isCoisolated(ps, i)}<Marker text="co-isolated" title={COISOLATED_TITLE} />{/if}
+  <PeptideSequence view={peptideView(m.tables.peptides, ps.peptide[i], fixedMods)} />{#if xl.isXL[i] && !adductShown}<Marker
+      text="XL"
+      strong
+      title={XL_TITLE} />{/if}{#if ps.decoy[i]}<Marker text="decoy" />{/if}
+{/snippet}
+
+{#snippet xlCell(_: number)}
+  <Marker text="XL" strong class="ml-0" />
+{/snippet}
+
+{#snippet adductCell(i: number)}
+  {#if xl.isXL[i]}<Marker text="XL" strong class="mr-1.5 ml-0" />{/if}<span class="font-mono text-[12.5px]"
+    >{adductLabel(xl.adduct[i]) || '–'}</span>
 {/snippet}
 
 {#snippet proteinsCell(i: number)}

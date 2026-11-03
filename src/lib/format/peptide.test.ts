@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ResultTables } from '../results/types'
-import { massShift, modTitle, peptideView, psmProforma, shortModLabel } from './peptide'
+import { adductLabel, modTitle, peptideView, shortModLabel } from './peptide'
 
 type Mod = { position: number; name: string; unimod: number; mass: number }
 type PeptideSpec = { openms: string; proforma: string; sequence: string; mods: Mod[] }
@@ -16,6 +16,8 @@ function table(...specs: PeptideSpec[]): ResultTables['peptides'] {
     proforma: specs.map((s) => s.proforma),
     sequence: specs.map((s) => s.sequence),
     decoy: new Uint8Array(specs.length),
+    adduct: specs.map((s) => s.mods.find((m) => m.unimod < 0)?.name ?? ''),
+    isXL: Uint8Array.from(specs, (s) => (s.mods.some((m) => m.unimod < 0) ? 1 : 0)),
     modOffsets: Uint32Array.from(modOffsets),
     modPosition: Int16Array.from(mods.map((m) => m.position)),
     modName: mods.map((m) => m.name),
@@ -193,6 +195,19 @@ describe('peptideView', () => {
   })
 })
 
+describe('adductLabel', () => {
+  it('writes an adduct as chemists do: no counts of one, subscripts, phosphates as H₃PO₄', () => {
+    expect(adductLabel('U-H2O1')).toBe('U-H₂O')
+    expect(adductLabel('GU-H2O1')).toBe('GU-H₂O')
+    expect(adductLabel('U-H3O4P1')).toBe('U-H₃PO₄')
+    expect(adductLabel('U-H1O3P1')).toBe('U-HPO₃')
+    expect(adductLabel('U+C2H3')).toBe('U+C₂H₃')
+    expect(adductLabel('U')).toBe('U')
+    expect(adductLabel('AU')).toBe('AU')
+    expect(adductLabel('')).toBe('')
+  })
+})
+
 describe('modTitle', () => {
   it('reads name, Unimod accession and delta mass', () => {
     expect(modTitle({ label: 'ox', name: 'Oxidation', unimod: 35, mass: 15.9949 })).toBe('Oxidation (Unimod:35) +15.9949')
@@ -204,15 +219,16 @@ describe('modTitle', () => {
   })
 })
 
-describe('massShift', () => {
-  it('shows a signed shift with four decimals only above 0.05 Da', () => {
-    expect(massShift(15.994915)).toBe('+15.9949')
-    expect(massShift(-57.021464)).toBe('-57.0215')
-    expect(massShift(0.0501)).toBe('+0.0501')
-    expect(massShift(0.05)).toBeNull()
-    expect(massShift(-0.03)).toBeNull()
-    expect(massShift(NaN)).toBeNull()
-    expect(psmProforma('PEPM[Oxidation]K', 79.96633)).toBe('[+79.9663]?PEPM[Oxidation]K')
-    expect(psmProforma('PEPK', NaN)).toBe('PEPK')
+describe('NuXL adducts', () => {
+  it('a nucleic acid adduct is marked by its nucleotides', () => {
+    expect(shortModLabel('U-H3O4P1')).toBe('U')
+    expect(shortModLabel('UU-H2O1')).toBe('UU')
+    expect(shortModLabel('AU')).toBe('AU')
+    expect(shortModLabel('Acetyl')).toBe('ac')
+    expect(shortModLabel('Unknown')).toBe('unk')
+    const adduct: Mod = { position: 8, name: 'U-H3O4P1', unimod: -1, mass: 226.059 }
+    const t = table({ openms: 'AEADNLDDK(NuXL:U-H3O4P1)K', proforma: 'AEADNLDDK[+226.0590]K', sequence: 'AEADNLDDKK', mods: [adduct] })
+    expect(peptideView(t, 0, []).residues[8].mod).toEqual({ label: 'U', name: 'U-H3O4P1', unimod: -1, mass: 226.059 })
+    expect(modTitle(peptideView(t, 0, []).residues[8].mod!)).toBe('U-H3O4P1 +226.0590')
   })
 })

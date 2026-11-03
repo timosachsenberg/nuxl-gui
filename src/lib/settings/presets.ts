@@ -1,82 +1,33 @@
-// Presets of the search settings: the built-in ones and those the user saved ("Save as preset", kept
-// in localStorage). A preset holds only the parameters it sets; everything else is ProSE's default.
+// Presets of the search settings: the built-in one and those the user saved ("Save as preset", kept in
+// localStorage). A preset holds only the settings it sets (OpenNuXL's parameters by name, and the search's own
+// FDRs: parameters.ts `SEARCH_SETTINGS`); everything else is OpenNuXL's default. Not to be confused with OpenNuXL's
+// own presets, the cross-linking protocols (`NuXL:presets`, protocols.ts), which a preset sets like any parameter.
 
-import { copyValues, SWITCH_PARAMETERS } from './parameters'
+import { copyValues, SEARCH_SETTINGS } from './parameters'
+import { DEFAULT_PROTOCOL } from './protocols'
 
 export type Preset = { id: string; name: string; parameters: Record<string, unknown>; builtin: boolean }
 
 /** Where the user presets are kept. */
-export const PRESETS_KEY = 'prose.presets'
+export const PRESETS_KEY = 'nuxl.presets'
 
 /** What the presets need of localStorage (an in-memory one in the tests). */
 export type PresetStorage = Pick<Storage, 'getItem' | 'setItem'>
 
-/** The settings every built-in preset defines, so that switching presets leaves nothing behind. */
-const tryptic = {
-  enzyme: 'Trypsin/P',
-  'peptide:enzyme_specificity': 'full',
-  'peptide:missed_cleavages': 2,
-  'modifications:fixed': ['Carbamidomethyl (C)'],
-  'modifications:variable': ['Oxidation (M)', 'Acetyl (Protein N-term)'],
-  'FDR:PSM': 0.01,
-  'FDR:protein': 0.01,
-  'precursor:min_charge': 2,
-  'precursor:max_charge': 5,
-  'peptide:min_size': 7,
-  'peptide:max_size': 40,
-}
-
+/**
+ * The built-in preset: OpenNuXL's defaults (precursor 6 ppm, fragments 20 ppm, Trypsin/P, Oxidation (M), ...) with
+ * the protocol of UV cross-linked RNA at U (OpenNuXL's own default is no protocol), and FDRs of 1 %.
+ */
 export const BUILTIN_PRESETS: Preset[] = [
   {
-    id: 'orbitrap-hcd-tryptic',
-    name: 'Orbitrap HCD · tryptic',
+    id: 'nuxl-defaults',
+    name: `OpenNuXL defaults · ${DEFAULT_PROTOCOL}`,
     builtin: true,
-    parameters: {
-      ...tryptic,
-      'precursor:mass_tolerance_lower': 10,
-      'precursor:mass_tolerance_upper': 10,
-      'precursor:mass_tolerance_unit': 'ppm',
-      'fragment:mass_tolerance': 20,
-      'fragment:mass_tolerance_unit': 'ppm',
-      'peptdeep:instrument': 'QE',
-    },
-  },
-  {
-    id: 'timstof-tryptic',
-    name: 'timsTOF · tryptic',
-    builtin: true,
-    parameters: {
-      ...tryptic,
-      'precursor:mass_tolerance_lower': 20,
-      'precursor:mass_tolerance_upper': 20,
-      'precursor:mass_tolerance_unit': 'ppm',
-      'fragment:mass_tolerance': 40,
-      'fragment:mass_tolerance_unit': 'ppm',
-      'precursor:max_charge': 4,
-      'peptdeep:instrument': 'timsTOF',
-    },
-  },
-  {
-    // a wide precursor window: unknown modifications show up as delta masses (README: ±500 Da)
-    id: 'open-search',
-    name: 'Open search · ±500 Da',
-    builtin: true,
-    parameters: {
-      ...tryptic,
-      'modifications:variable': [],
-      'precursor:mass_tolerance_lower': 500,
-      'precursor:mass_tolerance_upper': 500,
-      'precursor:mass_tolerance_unit': 'Da',
-      'precursor:isotope_error_min': 0,
-      'precursor:isotope_error_max': 0,
-      'fragment:mass_tolerance': 20,
-      'fragment:mass_tolerance_unit': 'ppm',
-      'peptdeep:instrument': 'QE',
-    },
+    parameters: { 'NuXL:presets': DEFAULT_PROTOCOL, ...SEARCH_SETTINGS },
   },
 ]
 
-export const DEFAULT_PRESET_ID = 'orbitrap-hcd-tryptic'
+export const DEFAULT_PRESET_ID = 'nuxl-defaults'
 
 /** The webview's localStorage: kept by the app on this computer (its data folder), across restarts. */
 function appStorage(): PresetStorage | null {
@@ -117,8 +68,8 @@ export function loadPresets(storage: PresetStorage | null = appStorage()): Prese
 }
 
 /**
- * Saves `parameters` (the values that differ from ProSE's defaults) as a user preset. A user preset of
- * the same name is replaced. The switch parameters are left out: they are not preset settings.
+ * Saves `parameters` (the values that differ from OpenNuXL's defaults, and the FDRs) as a user preset. A user
+ * preset of the same name is replaced.
  */
 export function savePreset(
   name: string,
@@ -126,7 +77,6 @@ export function savePreset(
   storage: PresetStorage | null = appStorage(),
 ): Preset {
   const values = copyValues(parameters)
-  for (const s of SWITCH_PARAMETERS) delete values[s]
   const users = readUserPresets(storage)
   const existing = users.find((p) => p.name === name.trim())
   const preset: Preset = {
@@ -170,7 +120,7 @@ export function deletePreset(id: string, storage: PresetStorage | null = appStor
   return true
 }
 
-/** The values of a preset: ProSE's defaults with the preset's parameters on top (copies). */
+/** The values of a preset: the defaults (OpenNuXL's, and the search's own) with the preset's parameters on top (copies). */
 export function applyPreset(preset: Preset, defaults: Record<string, unknown>): Record<string, unknown> {
   return copyValues({ ...defaults, ...preset.parameters })
 }

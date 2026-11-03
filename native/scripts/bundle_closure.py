@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""The shared-library closure of the ProSE tool on macOS and Windows, for bundle-prose.sh.
+"""The shared-library closure of OpenNuXL and PercolatorAdapter on macOS and Windows, for bundle-nuxl.sh.
 
-    bundle_closure.py macho <exe> <out> [--search DIR]... [--install-path PATH]
+    bundle_closure.py macho <exe>... <out> [--search DIR]... [--install-path PATH]
     bundle_closure.py macho-verify <out>
-    bundle_closure.py pe <exe> <out> [--search DIR]... [--redist DIR]... [--install-path PATH]
+    bundle_closure.py pe <exe>... <out> [--search DIR]... [--redist DIR]... [--install-path PATH]
     bundle_closure.py pe-verify <out> [--system DIR]
 
-macho (macOS): copies <exe> to <out>/bin/ProSE and every dylib it loads, directly or not, to
+macho (macOS): copies each <exe> to <out>/bin/<its name> and every dylib they load, directly or not, to
 <out>/lib/<name> (the system's, /usr/lib and /System, are left out), then rewrites them: every
 reference to a bundled dylib becomes @rpath/<name>, each dylib's id @rpath/<name>, the old LC_RPATHs
 are dropped and one is added, @loader_path/../lib for the tool and @loader_path for the dylibs. Then
@@ -16,8 +16,8 @@ the loading image and those that loaded it, @loader_path, @executable_path, abso
 --search folders by name come last (the build tree's own libraries). Exactly one OpenMP runtime
 (libomp) has to be among them.
 
-pe (Windows): copies <exe> to <out>/bin and every DLL it imports, directly or not, beside it: those
-found in the exe's folder or the --search folders, and the Visual C++ runtime (msvcp140, vcruntime140,
+pe (Windows): copies each <exe> to <out>/bin and every DLL they import, directly or not, beside them: those
+found in the exes' folders or the --search folders, and the Visual C++ runtime (msvcp140, vcruntime140,
 vcomp140, ...) from the --redist folders (Microsoft's app-local deployment of the redistributable).
 API sets (api-ms-*, ext-ms-*) and the DLLs of Windows (System32) are left out. Exactly one OpenMP
 runtime (vcomp140.dll) has to be among them. Windows has no RPATH: the folder of the exe is the first
@@ -25,7 +25,7 @@ place it looks.
 
 --install-path: OpenMS looks for share/OpenMS at its compiled-in install prefix before it looks next to
 the tool; that string is overwritten in the bundled OpenMS library, at the same length, with a path that
-cannot exist (see bundle-prose.sh).
+cannot exist (see bundle-nuxl.sh).
 
 The verify commands check a bundle (also one inside a package): macho-verify that every reference is
 the system's or @rpath/<a bundled dylib>, the LC_RPATHs are the two above, the signatures are valid,
@@ -129,17 +129,19 @@ def macho_resolve(dep, loader, chain_rpaths, exe, search):
 
 
 def macho_bundle(args):
-    exe = Path(args.exe).resolve()
+    exes = [Path(e).resolve() for e in args.exe]
     out = Path(args.out)
     (out / "bin").mkdir(parents=True, exist_ok=True)
     (out / "lib").mkdir(parents=True, exist_ok=True)
-    exe_rpaths, _ = macho_load_commands(exe)
     # realpath -> bundled name; per image: its original references -> bundled name
     names, refs = {}, {}
-    todo = [(exe, [(r, exe) for r in exe_rpaths])]
+    todo = []
+    for exe in exes:
+        exe_rpaths, _ = macho_load_commands(exe)
+        todo.append((exe, exe, [(r, exe) for r in exe_rpaths]))
     seen = set()
     while todo:
-        image, chain = todo.pop()
+        exe, image, chain = todo.pop()
         if image in seen:
             continue
         seen.add(image)
@@ -154,7 +156,7 @@ def macho_bundle(args):
             name = names.setdefault(real, Path(dep).name)
             refs[image][dep] = name
             own_rpaths, _ = macho_load_commands(real)
-            todo.append((real, [(r, real) for r in own_rpaths] + chain))
+            todo.append((exe, real, [(r, real) for r in own_rpaths] + chain))
 
     if len(set(names.values())) != len(names):
         die(f"two libraries of one name: {sorted(names.values())}")
@@ -162,7 +164,7 @@ def macho_bundle(args):
     if omp != ["libomp.dylib"]:
         die(f"expected exactly one OpenMP runtime, libomp.dylib; the closure has: {omp or 'none'}")
 
-    targets = {exe: out / "bin" / "ProSE"}
+    targets = {exe: out / "bin" / exe.name for exe in exes}
     for real, name in names.items():
         targets[real] = out / "lib" / name
     for source, target in targets.items():
@@ -204,7 +206,7 @@ def macho_check(out):
     out = Path(out)
     lib = out / "lib"
     bundled = {p.name for p in lib.iterdir() if p.is_file()}
-    files = [out / "bin" / "ProSE"] + sorted(lib.iterdir())
+    files = sorted((out / "bin").iterdir()) + sorted(lib.iterdir())
     newest = (0,)
     for f in files:
         for dep in macho_deps(f):
@@ -304,13 +306,13 @@ def system_dirs(extra):
 
 
 def pe_bundle(args):
-    exe = Path(args.exe).resolve()
+    exes = [Path(e).resolve() for e in args.exe]
     out = Path(args.out) / "bin"
     out.mkdir(parents=True, exist_ok=True)
-    own = [exe.parent] + [Path(d) for d in args.search]
+    own = list(dict.fromkeys(e.parent for e in exes)) + [Path(d) for d in args.search]
     system = system_dirs([])
-    bundled = {exe.name.lower(): exe}
-    todo = [exe]
+    bundled = {exe.name.lower(): exe for exe in exes}
+    todo = list(exes)
     while todo:
         image = todo.pop()
         for name in pe_imports(image):
@@ -344,8 +346,10 @@ def pe_bundle(args):
             patch_install_path(openms, args.install_path, "<no-install-path>")
         else:
             print(f"  the install path {args.install_path} is not in OpenMS.dll (not probed on Windows)")
-    utf8_code_page(out / exe.name)
-    print(f"  {len(bundled) - 1} DLLs: {', '.join(sorted(f.name for k, f in bundled.items() if k != exe.name.lower()))}")
+    for exe in exes:
+        utf8_code_page(out / exe.name)
+    own_names = {exe.name.lower() for exe in exes}
+    print(f"  {len(bundled) - len(exes)} DLLs: {', '.join(sorted(f.name for k, f in bundled.items() if k not in own_names))}")
     print(f"  OpenMP runtime: {omp[0]}")
     pe_check(Path(args.out), [])
 
@@ -410,7 +414,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("macho", "pe"):
         p = sub.add_parser(name)
-        p.add_argument("exe")
+        p.add_argument("exe", nargs="+")
         p.add_argument("out")
         p.add_argument("--search", action="append", default=[])
         p.add_argument("--install-path")

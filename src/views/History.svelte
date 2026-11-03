@@ -1,7 +1,7 @@
 <script lang="ts">
   // History: the searches kept on this computer, each a folder of the app's data (the tool's outputs and a
   // record of the settings and the design; the mzML files stay where they are). Open, rename and delete;
-  // "Open project…" unpacks a .prose file into History. It stays usable while a search runs, and reads the
+  // "Open project…" unpacks a .nuxl file into History. It stays usable while a search runs, and reads the
   // list again when it is shown. Beside each name: the search's database and, for searches of the same name,
   // what tells them apart (history/details.ts). A folder that is no search (no record, or a name that is not one
   // of a search) is listed with what is wrong, and can be deleted.
@@ -118,8 +118,8 @@
     <div>
       <h1 class="mb-1 text-xl font-semibold tracking-tight">History</h1>
       <p class="text-muted-foreground">
-        Finished searches are saved on this computer with their results and the spectra of their PSMs. Your mzML files
-        stay where they are.
+        Finished searches are saved on this computer with their results. Your mzML files stay where they are: the PSM
+        view reads the spectra from them.
       </p>
     </div>
     <div>
@@ -169,7 +169,7 @@
             <Table.Head scope="col" class="{head} text-left">Name</Table.Head>
             <Table.Head scope="col" class="{head} w-[8.75rem] text-left">Finished</Table.Head>
             <Table.Head scope="col" class="{head} text-left max-lg:hidden">Files</Table.Head>
-            <Table.Head scope="col" class="{head} w-[4.5rem] text-right" title="Target PSMs that pass the search's PSM FDR">PSMs</Table.Head>
+            <Table.Head scope="col" class="{head} w-[4.5rem] text-right" title="Target PSMs that pass the search's FDRs: peptide PSMs the peptide FDR, cross-link PSMs the cross-link FDR">PSMs</Table.Head>
             <Table.Head scope="col" class="{head} w-[4.5rem] text-right" title="Disk space the search takes on this computer">Size</Table.Head>
             <Table.Head scope="col" class="{head} w-[13rem] text-right"><span class="sr-only">Actions</span></Table.Head>
           </Table.Row>

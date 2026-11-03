@@ -1,17 +1,21 @@
-//! ProSE desktop: the Tauri shell around the ProSE tool of OpenMS.
+//! NuXL desktop: the Tauri shell around OpenNuXL of OpenMS (protein–nucleic acid cross-links).
 //!
-//! The shim (`tool`, `args`, `progress`, `run`) runs the tool for a search request and reports its
-//! progress; the commands and events below are what the front end sees:
+//! The shim (`tool`, `args`, `progress`, `run`) runs the tool for a search request, once per input file and
+//! one after the other (`docs/design.md`), and reports its progress; the commands and events below are what the
+//! front end sees:
 //!
-//! - `tool_info` -> `{ version, path, onnx }`
+//! - `tool_info` -> `{ version, path }`
 //! - `start_search(request)` -> `{ searchId }`; `cancel_search(searchId)`
 //! - events `search://progress` `{ searchId, label, file, fraction }`, `search://done`
 //!   `{ searchId, folder }` and `search://failed` `{ searchId, message, stage, file?, ended?, detail?, log? }`
+//!   (`file`: the input whose run failed)
 //! - `read_search_file(searchId, name, tail?, offset?, length?)` -> the bytes of a file of the search's folder
-//!   (with `tail`: its last `tail` bytes; with `offset` and `length`: those bytes), or of the database its database.json records (`files`; rejects `{ notFound, message }`)
+//!   (with `tail`: its last `tail` bytes; with `offset` and `length`: those bytes), of the database its
+//!   database.json records, or, by `tail` or `offset` and `length` only, of an input's mzML, named by its link
+//!   (`<n>__<name>`) or its path in inputs.json (`files`; rejects `{ notFound, message }`)
 //! - `inspect_files(paths)` -> `[{ path, name, size, spectra?, proteins?, residues?, error?, problem?, warnings }]`
 //! - `cpu_count()` -> the cores the search's threads may use
-//! - `example_files()` -> `{ spectra: [path, path], database }`
+//! - `example_files()` -> `{ spectra: [path], database }`
 //! - `save_text(name, contents)` and `save_search_file(searchId, name, suggested)`: a save dialog of
 //!   the system, then the file written where the user chose (-> the path, or null if cancelled)
 //! - History (`history`): `history_list()` -> entries (a folder with a broken record, or none, has
@@ -207,7 +211,7 @@ async fn read_search_file(
     Ok(Response::new(bytes))
 }
 
-/// What New search shows of the files it was given (sizes, counts and what ProSE cannot search; never
+/// What New search shows of the files it was given (sizes, counts and what OpenNuXL cannot search; never
 /// contents).
 #[tauri::command]
 async fn inspect_files(paths: Vec<String>) -> Result<Vec<files::FileFacts>, String> {
@@ -216,7 +220,7 @@ async fn inspect_files(paths: Vec<String>) -> Result<Vec<files::FileFacts>, Stri
         .map_err(|e| e.to_string())
 }
 
-/// The cores ProSE's threads may use: the threads' default ("all"). The webview's own count is capped
+/// The cores OpenNuXL's threads may use: the threads' default ("all"). The webview's own count is capped
 /// (WebKit reports at most 8).
 #[tauri::command]
 fn cpu_count() -> usize {
@@ -227,18 +231,17 @@ fn cpu_count() -> usize {
 async fn example_files(app: AppHandle) -> Result<files::ExampleFiles, String> {
     let source = files::bundled_example(resource_dir(&app).as_deref())
         .ok_or("The example is not part of this installation.")?;
-    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn_blocking(move || files::example_files(&source, &data))
+    tauri::async_runtime::spawn_blocking(move || files::example_files(&source))
         .await
         .map_err(|e| e.to_string())?
 }
 
-/// The file that the end-to-end specs choose in place of the system's dialogs (`PROSE_TEST_DIALOG_PATH`):
+/// The file that the end-to-end specs choose in place of the system's dialogs (`NUXL_TEST_DIALOG_PATH`):
 /// WebDriver cannot reach a dialog of the system. Debug builds only; a release build has no such way
 /// (this is `None` there), and the page never names a path in either.
 #[cfg(debug_assertions)]
 fn test_dialog_path() -> Option<PathBuf> {
-    std::env::var_os("PROSE_TEST_DIALOG_PATH")
+    std::env::var_os("NUXL_TEST_DIALOG_PATH")
         .filter(|p| !p.is_empty())
         .map(PathBuf::from)
 }
@@ -298,7 +301,7 @@ async fn save_text(
     .map_err(|e| e.to_string())?
 }
 
-/// A file of a search (e.g. the merged idXML) copied to where the user chooses.
+/// A file of a search (e.g. an input's idXML) copied to where the user chooses.
 #[tauri::command]
 async fn save_search_file(
     app: AppHandle,
@@ -393,7 +396,7 @@ async fn history_import(
 
 /// A project file: the open dialog (in Rust: the page never names a path) and the bytes of the file the
 /// user chose, as raw bytes. Cancelled: an empty body (a project file is never empty; it is refused). The
-/// dialog offers `.prose` files first and any file second (the page checks what the file holds).
+/// dialog offers `.nuxl` files first and any file second (the page checks what the file holds).
 #[tauri::command]
 async fn open_project_file(app: AppHandle) -> Result<Response, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -403,7 +406,7 @@ async fn open_project_file(app: AppHandle) -> Result<Response, String> {
         let chosen = app
             .dialog()
             .file()
-            .add_filter("ProSE project", &["prose"])
+            .add_filter("NuXL project", &[history::PROJECT_EXTENSION])
             .add_filter("All files", &["*"])
             .set_title("Open a project file")
             .blocking_pick_file();
@@ -446,7 +449,7 @@ async fn save_project_file(
     let name = Path::new(&name)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "prose.prose".to_string());
+        .unwrap_or_else(|| format!("nuxl.{}", history::PROJECT_EXTENSION));
     let dir = searches_dir(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         project::project_files(&dir, &search_id)?;
@@ -506,17 +509,24 @@ fn answer_close(
 /// The flag of the packaged app's start test (CI: `native/scripts/start-test.sh`). The app starts as
 /// usual; once its page has loaded it prints one line of JSON, `{"page": <url>, "resources": <the
 /// resource folder the app uses>, "tauriResources": <Tauri's, or why there is none>, "tool":
-/// <tool_info>}` (or `"error"` in place of `"tool"`), and exits: 0, or 1 when the tool cannot be used. A page that has not loaded after [`SMOKE_TIMEOUT`]
-/// ends the app with 2. It reads nothing and writes nothing else.
+/// <tool_info>, "percolatorAdapter": <whether PercolatorAdapter is beside the tool>}` (or `"error"` in place of
+/// `"tool"`), and exits: 0, or 1 when the tool cannot be used (or has no PercolatorAdapter beside it). A page that
+/// has not loaded after [`SMOKE_TIMEOUT`] ends the app with 2. It reads nothing and writes nothing else.
 pub const SMOKE_TEST: &str = "--smoke-test";
 const SMOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// What `--smoke-test` reports, and the exit code.
 fn smoke_report(app: &AppHandle, page: &str) -> (i32, String) {
-    let tool = tool::resolve(resource_dir(app).as_deref()).and_then(|path| tool::probe(&path));
-    let (code, key, value) = match tool {
-        Ok(info) => (0, "tool", serde_json::to_value(info).unwrap_or_default()),
-        Err(e) => (1, "error", serde_json::Value::String(e)),
+    let tool = tool::resolve(resource_dir(app).as_deref())
+        .and_then(|path| Ok((tool::probe(&path)?, tool::has_percolator_adapter(&path))));
+    let (code, key, value, adapter) = match tool {
+        Ok((info, adapter)) => (
+            if adapter { 0 } else { 1 },
+            "tool",
+            serde_json::to_value(info).unwrap_or_default(),
+            adapter,
+        ),
+        Err(e) => (1, "error", serde_json::Value::String(e), false),
     };
     let resources = resource_dir(app).map(|dir| dir.to_string_lossy().into_owned());
     let tauri_resources = match app.path().resource_dir() {
@@ -528,6 +538,7 @@ fn smoke_report(app: &AppHandle, page: &str) -> (i32, String) {
         "resources": resources,
         "tauriResources": tauri_resources,
         key: value,
+        "percolatorAdapter": adapter,
     })
     .to_string();
     (code, line)
@@ -612,9 +623,9 @@ pub fn run() {
             answer_close
         ])
         .build(tauri::generate_context!())
-        .expect("error while building the ProSE desktop app");
+        .expect("error while building the NuXL desktop app");
     app.run(|handle, event| {
-        // no ProSE outlives the app
+        // no OpenNuXL outlives the app
         if let RunEvent::Exit = event {
             handle.state::<AppState>().searches.cancel_all();
         }

@@ -1,6 +1,6 @@
 <script lang="ts">
   // Fixed or variable modifications: badges (the residues of one modification together, "Phospho (STY)")
-  // and a searchable list of ProSE's modification names to add from. Typing "Phospho (STY)" offers the
+  // and a searchable list of OpenMS' modification names to add from. Typing "Phospho (STY)" offers the
   // three single-residue modifications at once.
   import PlusIcon from '@lucide/svelte/icons/plus'
   import XIcon from '@lucide/svelte/icons/x'
@@ -20,7 +20,7 @@
     /** "fixed" or "variable", for the labels of the buttons. */
     kind: string
     value: string[]
-    /** ProSE's modification names (`validStrings`, generated from the pinned tool). */
+    /** OpenMS' modification names (`validStrings`, generated from the OpenMS pin). */
     options: string[] | undefined
     onChange: (value: string[]) => void
   } = $props()
@@ -33,7 +33,7 @@
   const known = $derived(options ? new Map(options.map((o) => [o.toLowerCase(), o])) : null)
   const validNames = $derived(options ? new Set(options) : null)
 
-  /** Each badge with its state: `unknown` if the name is not among ProSE's names. */
+  /** Each badge with its state: `unknown` if the name is not among OpenMS' names. */
   const groups = $derived(
     groupModifications(value).map((g) => {
       const state: 'ok' | 'unknown' = validNames && g.specs.some((s) => !validNames.has(s)) ? 'unknown' : 'ok'
@@ -42,10 +42,10 @@
   )
   const titles = {
     ok: undefined,
-    unknown: 'ProSE does not know this modification. Remove it and choose one from the list.',
+    unknown: 'OpenMS does not know this modification. Remove it and choose one from the list.',
   }
 
-  /** The typed name expanded to ProSE's names, if they all exist (or anything without the list). */
+  /** The typed name expanded to OpenMS' names, if they all exist (or anything without the list). */
   const expansion = $derived.by(() => {
     if (query.trim() === '') return null
     // the residues in capitals: "phospho (sty)" is "phospho (STY)"
@@ -92,7 +92,7 @@
       title={titles[g.state]}
       data-state={g.state}>
       {g.label}
-      {#if g.state !== 'ok'}<span class="sr-only">(unknown to ProSE)</span>{/if}
+      {#if g.state !== 'ok'}<span class="sr-only">(unknown to OpenMS)</span>{/if}
       <button
         type="button"
         class="rounded-sm p-px text-muted-foreground hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
