@@ -25,6 +25,7 @@ import { parseFragmentAnnotation, type NuxlPeak } from '../psm/nuxl-annotation'
 import { C13C12_MASSDIFF_U, parseOpenmsSequence, proformaString, tableModifications, type Modification } from './derive'
 import { numberColumn, readIdXML, textColumn, type IdXML, type IdXMLSearchParameters } from './idxml'
 import { readSpectrum, spectrumIndex, SpectrumError, type MzmlSpectrum, type ReadRange, type SpectrumIndex } from './mzml'
+import { passesPeptideQ } from './model'
 import { parseOutputs, toSummary, type InputCounts, type NuxlSummary, type RunOutputs } from './summary'
 import type { CrossLinkColumns, PredictedSpectra, ProSEMultiSummary, ResultTables, StoredSpectra } from './types'
 
@@ -339,6 +340,8 @@ const P = {
   siteScore: 'NuXL:best_localization_score',
   siteSequence: 'NuXL:best_localization',
   fdrGroup: 'NuXL:fdr_group',
+  // FalseDiscoveryRate's peptide-level q-value (Constants::UserParam::PEPTIDE_Q_VALUE), which NuXLFDR also filters on
+  peptideQValue: 'peptide q-value',
   annotation: 'fragment_annotation',
 } as const
 
@@ -458,6 +461,7 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     siteScore: new Float64Array(count),
     siteSequence: new Array<string>(count),
     fdrGroup: new Array<string>(count),
+    peptideQValue: new Float64Array(count),
     annotation: new Array<string>(count),
   }
 
@@ -507,6 +511,7 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     const siteScore = num(P.siteScore)
     const siteSequence = txt(P.siteSequence)
     const fdrGroup = txt(P.fdrGroup)
+    const peptideQValue = num(P.peptideQValue)
     const annotation = txt(P.annotation)
     const featureColumns = featureNames.map((f) => (hits.params.has(f) ? num(f) : null))
     // the custom modifications of the run: OpenNuXL's precursor adducts by id, with their masses
@@ -562,6 +567,7 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
       xl.siteScore[i] = at >= 0 ? siteScore[h] : NaN
       xl.siteSequence[i] = crossLink && /[a-z]/.test(siteSequence[h]) ? siteSequence[h] : ''
       xl.fdrGroup[i] = part.kind === 'peptides' ? PEPTIDE_GROUP : fdrGroup[h] || 'XL'
+      xl.peptideQValue[i] = peptideQValue[h]
       xl.annotation[i] = annotation[h]
 
       // its peptide, unique by the OpenMS string and the adduct
@@ -706,8 +712,10 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
   const xlFdr = first?.fdr.xl ?? 1
   const counts: InputCounts[] = inputs.map((input, k) => ({ path: input.path, outputs: runs[k], targetPsms: 0 }))
   for (let r = 0; r < count; r++) {
-    const cutoff = xl.isXL[r] ? (runs[psmFile[r]]?.fdr.xl ?? xlFdr) : (runs[psmFile[r]]?.fdr.peptide ?? peptideFdr)
-    if (!(qValue[r] > cutoff)) counts[psmFile[r]].targetPsms++
+    const fdr = runs[psmFile[r]]?.fdr
+    const cutoff = xl.isXL[r] ? (fdr?.xl ?? xlFdr) : (fdr?.peptide ?? peptideFdr)
+    // (a peptide PSM also by its peptide-level q-value, as NuXLFDR filters it: model.ts passesPeptideQ)
+    if (!(qValue[r] > cutoff) && (xl.isXL[r] === 1 || passesPeptideQ(xl.peptideQValue[r], cutoff))) counts[psmFile[r]].targetPsms++
   }
   const summary = toSummary(counts, {
     databaseFile: params?.db ?? '',
@@ -753,7 +761,13 @@ export async function countTargetPsms(files: SearchFiles): Promise<number> {
     const cutoff = part.kind === 'xls' ? run.fdr.xl : run.fdr.peptide
     const { identifications: ids, hits } = part.id
     const qValues = ids.scoreType.some(isQValueType)
-    for (const { hit } of targetHits(part)) if (!(qValues && hits.score[hit] > cutoff)) n++
+    const peptideQ = part.kind === 'xls' ? null : numberColumn(hits.params, P.peptideQValue, hits.count)
+    for (const { hit } of targetHits(part)) {
+      if (qValues && hits.score[hit] > cutoff) continue
+      // (a peptide PSM also by its peptide-level q-value, as NuXLFDR filters it)
+      if (peptideQ && !passesPeptideQ(peptideQ[hit], cutoff)) continue
+      n++
+    }
   }
   return n
 }

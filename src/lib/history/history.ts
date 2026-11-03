@@ -23,6 +23,7 @@ import { strToU8, unzipSync } from 'fflate'
 import type { DesignResolution } from '../design/model'
 import { countTargetPsms, readSearch, type ByteRange, type SearchFiles } from '../results/read'
 import type { ResultTables } from '../results/types'
+import { withinCutoffs } from '../results/model'
 import { formatBytes } from '../format/bytes'
 import { errorText } from '../format/error'
 import { fileSafe, resultName } from '../results/display'
@@ -154,12 +155,13 @@ export interface HistoryBackend {
 
 /**
  * Target PSMs within the search's FDRs (a PSM without q-value counts): the "PSMs" key figure. The cross-links
- * (psms.xl.isXL) count at `xlFdr`, the others at `psmFdr` (the peptides'); without `xlFdr`, all at `psmFdr`.
+ * (psms.xl.isXL) count at `xlFdr`, the others at `psmFdr` (the peptides', also by their peptide-level q-value:
+ * model.ts `withinCutoffs`); without `xlFdr`, all at `psmFdr`.
  */
 export function countPsms(tables: ResultTables, psmFdr: number, xlFdr = psmFdr): number {
-  const { count, decoy, qValue, xl } = tables.psms
+  const ps = tables.psms
   let n = 0
-  for (let i = 0; i < count; i++) if (!decoy[i] && !(qValue[i] > (xl.isXL[i] ? xlFdr : psmFdr))) n++
+  for (let i = 0; i < ps.count; i++) if (!ps.decoy[i] && withinCutoffs(ps, i, psmFdr, xlFdr)) n++
   return n
 }
 

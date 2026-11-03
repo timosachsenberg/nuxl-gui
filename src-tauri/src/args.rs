@@ -300,7 +300,8 @@ pub enum Placement {
     Symlink,
     /// A hard link `<n>__<name>` in the search folder, removed again when the search ends.
     HardLink,
-    /// The user's path itself.
+    /// The user's path itself. OpenNuXL then writes its debug table `<path>.ambiguous_masses.csv` beside the
+    /// user's file, which the shim removes after the run (`run.rs` `ambiguous_masses_csv`).
     OwnPath,
 }
 

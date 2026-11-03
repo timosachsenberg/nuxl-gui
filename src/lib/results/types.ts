@@ -55,6 +55,13 @@ export type CrossLinkColumns = {
   siteSequence: string[]
   /** the FDR group of the PSM: 'peptide', 'XL' or 'short_XL' (NuXL:fdr_group; cross-links without it: 'XL') */
   fdrGroup: string[]
+  /**
+   * OpenNuXL's peptide-level q-value of the hit (the 'peptide q-value' UserParam that NuXLFDR's FalseDiscoveryRate
+   * gives each hit, by the best PSM of its unmodified sequence in its FDR group); NaN: none. NuXLFDR keeps a peptide
+   * PSM (isXL 0) at a peptide FDR t only if this is below t as well (model.ts `passesPeptideQ`); a cross-link's is no
+   * filter (report:xl_peptidelevel_FDR 1.0).
+   */
+  peptideQValue: Float64Array
   /** NuXL's annotated peaks of the hit (the fragment_annotation UserParam, as written: 'mz,intensity,charge,"label"|...'); '' none */
   annotation: string[]
 }

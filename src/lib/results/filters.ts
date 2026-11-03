@@ -4,7 +4,7 @@
 
 import { columnDef } from './columns'
 import { naturalKey, parseAccession, scanNumber } from './display'
-import { passesQ, peptideCounts, psmPasses, qLimit, qLimits, type Level, type ResultModel } from './model'
+import { passesPeptideQ, passesQ, peptideCounts, psmPasses, qLimit, qLimits, type Level, type ResultModel } from './model'
 
 /** Which PSMs (peptides, proteins) a table shows: all, the cross-links (cross-linked proteins), the peptides without. */
 export type Kind = 'all' | 'xl' | 'peptide'
@@ -244,7 +244,12 @@ export function applyFilters(m: ResultModel, level: Level, f: FilterState): Uint
       if (!mask[k] || (!f.showDecoys && pt.decoy[k])) continue
       const xl = pt.isXL[k] === 1
       if (!kindPasses(f.kind, xl)) continue
-      if (!(xl ? passesQ(m.peptide.bestQ[k], limits.xl, m.xlFdr) : passesQ(m.peptide.bestQ[k], limits.peptide, m.psmFdr))) continue
+      if (
+        !(xl
+          ? passesQ(m.peptide.bestQ[k], limits.xl, m.xlFdr)
+          : passesQ(m.peptide.bestQ[k], limits.peptide, m.psmFdr) && passesPeptideQ(m.peptide.bestPeptideQ[k], limits.peptide))
+      )
+        continue
       if (nucleotide && !m.peptide.nucleotides[k].split(',').includes(nucleotide)) continue
       out[kept++] = k
     }

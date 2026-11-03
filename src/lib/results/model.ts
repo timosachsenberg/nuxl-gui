@@ -75,6 +75,11 @@ export type ResultModel = {
   peptide: PeptideCounts & {
     /** Per peptide: the lowest q-value of any of its PSMs (NaN: none has one). The peptide level's FDR. */
     bestQ: Float64Array
+    /**
+     * Per peptide: the lowest peptide-level q-value of its peptide PSMs (`psms.xl.peptideQValue`; NaN: none has one).
+     * A peptide without cross-link passes a peptide FDR only with this below it as well (`passesPeptideQ`).
+     */
+    bestPeptideQ: Float64Array
     /** Per peptide: the proteins it maps to (views of `tables.peptides.protein`). */
     proteins: Uint32Array[]
     /** Per peptide: 1 if it maps only to contaminants (`CON__` accessions). */
@@ -136,10 +141,35 @@ export function qLimits(m: Pick<ResultModel, 'psmFdr' | 'xlFdr'>, maxQ: number, 
   return { peptide: qLimit(maxQ, m.psmFdr), xl: qLimit(maxXlQ, m.xlFdr) }
 }
 
-/** Whether PSM `i` passes the limits of its kind (`passesQ` at its search cutoff). */
+/**
+ * Whether PSM `i` passes the limits of its kind (`passesQ` at its search cutoff); a peptide PSM also by its
+ * peptide-level q-value (`passesPeptideQ`), as OpenNuXL filters it.
+ */
 export function psmPasses(m: Pick<ResultModel, 'tables' | 'psmFdr' | 'xlFdr'>, i: number, limits: QLimits): boolean {
   const ps = m.tables.psms
-  return ps.xl.isXL[i] ? passesQ(ps.qValue[i], limits.xl, m.xlFdr) : passesQ(ps.qValue[i], limits.peptide, m.psmFdr)
+  return ps.xl.isXL[i]
+    ? passesQ(ps.qValue[i], limits.xl, m.xlFdr)
+    : passesQ(ps.qValue[i], limits.peptide, m.psmFdr) && passesPeptideQ(ps.xl.peptideQValue[i], limits.peptide)
+}
+
+/**
+ * Whether a peptide PSM's peptide-level q-value (`psms.xl.peptideQValue`) passes the peptide FDR `limit`.
+ * NuXLFDR::calculatePeptideAndXLQValueAndFilterAtPSMLevel filters the non-cross-linked PSMs at report:peptideFDR t
+ * twice: it drops those whose 'peptide q-value' is t or more, then keeps those of PSM q-value at most t; it filters
+ * only for 0 < t < 1. The shim runs it with report:peptideFDR 0 (no filter), so the app applies both. NaN (none)
+ * passes.
+ */
+export function passesPeptideQ(peptideQ: number, limit: number): boolean {
+  return !(limit > 0 && limit < 1 && peptideQ >= limit)
+}
+
+/**
+ * Whether target PSM `i` is within the search's cutoffs, as OpenNuXL would have reported it: a cross-link at q ≤
+ * `xlFdr`, a peptide at q ≤ `peptideFdr` and peptide q-value < `peptideFdr` (`passesPeptideQ`). A PSM without
+ * q-value counts.
+ */
+export function withinCutoffs(ps: ResultTables['psms'], i: number, peptideFdr: number, xlFdr: number): boolean {
+  return ps.xl.isXL[i] ? !(ps.qValue[i] > xlFdr) : !(ps.qValue[i] > peptideFdr) && passesPeptideQ(ps.xl.peptideQValue[i], peptideFdr)
 }
 
 /**
@@ -302,6 +332,13 @@ export function buildModel(
     const q = ps.qValue[i]
     if (q === q && !(q >= bestQ[k])) bestQ[k] = q // the first q-value replaces NaN
   }
+  const bestPeptideQ = new Float64Array(nPep).fill(NaN)
+  for (let i = 0; i < ps.count; i++) {
+    if (ps.xl.isXL[i]) continue
+    const k = ps.peptide[i]
+    const q = ps.xl.peptideQValue[i]
+    if (q === q && !(q >= bestPeptideQ[k])) bestPeptideQ[k] = q
+  }
   // a PSM above the search's cutoff of its kind is no evidence
   const atSearch = { tables: t, psmFdr, xlFdr, psmSample, columnSample }
   const limits = { peptide: psmFdr, xl: xlFdr }
@@ -416,6 +453,7 @@ export function buildModel(
     xlPsms,
     peptide: {
       bestQ,
+      bestPeptideQ,
       psms: pepPsms,
       perSample: pepPer,
       foundIn: pepFoundIn,

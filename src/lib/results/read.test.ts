@@ -358,6 +358,23 @@ describe('readSearch: broken folders name the file', () => {
     )
   })
 
+  test("a peptide PSM counts at the peptide FDR only with its 'peptide q-value' below it too, as NuXLFDR filters", async () => {
+    const peptides = text(`example/${PEPTIDES}`)
+    // the filtered files carry FalseDiscoveryRate's peptide-level q-value on every hit
+    const { tables } = await readExample()
+    const p = tables.psms.xl.isXL.indexOf(0)
+    expect(tables.psms.xl.peptideQValue[p]).toBe(tables.psms.qValue[p])
+    // MATSGMMTELGK at PSM q-value 0, its peptide-level one 0.01: OpenNuXL at report:peptideFDR 0.01 drops it
+    const at = peptides.indexOf('sequence="MATSGMMTELGK"')
+    const changed = peptides.slice(0, at) + peptides.slice(at).replace('name="peptide q-value" value="0.0"', 'name="peptide q-value" value="0.01"')
+    const r = await broken({ [PEPTIDES]: changed })
+    expect(r.summary.files[0].targetPSMs).toBe(16)
+    expect(await countTargetPsms(folder('example', { override: { [PEPTIDES]: changed } }).files)).toBe(16)
+    // the cross-links' is no filter (report:xl_peptidelevel_FDR 1.0)
+    const xls = text(`example/${XLS}`).replaceAll(/name="peptide q-value" value="[^"]*"/g, 'name="peptide q-value" value="0.5"')
+    expect((await broken({ [XLS]: xls })).summary.files[0].targetPSMs).toBe(17)
+  })
+
   test('a file that outputs.json names but is missing: its PSMs are left out, with a warning', async () => {
     const r = await broken({ [PEPTIDES]: null })
     expect(r.tables.psms.count).toBe(14)

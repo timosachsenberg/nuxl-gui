@@ -61,7 +61,9 @@ libGLESv2.so.2"). Install it with `sudo apt install libgles2` (Ubuntu, Debian) o
   - Windows: `%APPDATA%\org.openms.nuxl.desktop\`
 - The log of the last search that failed: `logs/last-failure.log` there (the error names it).
 - Presets of the settings: the app's webview keeps them, on this computer.
-- The mzML and FASTA files are read where they are: never copied, and nothing is written beside them. Deleting a
+- The mzML and FASTA files are read where they are: never copied, and nothing is left beside them. (On Windows,
+  OpenNuXL writes a debug table `<name>.mzML.ambiguous_masses.csv` beside an mzML while it searches it; the app
+  removes it when the run ends, but leaves, and OpenNuXL overwrites, a file of that name that was there before.) Deleting a
   search in History removes its folder; uninstalling leaves the data folder, which can be deleted by hand.
 
 ## Project files

@@ -930,8 +930,12 @@ fn clean_line(line: &str) -> String {
 /// The warnings of OpenNuXL worth showing with a run's results (its `outputs.json`'s `notes`): that Percolator
 /// was skipped or failed (the results then carry NuXL's own scores), that a rescoring option could not work with
 /// the other settings, that the autotune kept the tolerances. As OpenNuXL writes them (stdout or stderr).
+/// OpenNuXL's warning that a run has fewer than 1000 PSMs, which it gives whether or not Percolator was asked for
+/// (OpenNuXL.cpp: the `else` of `recalibrate && sufficient_PSMs_for_score_recalibration`).
+const TOO_FEW_PSMS: &str = "Too few PSMs for score recalibration.";
+
 const NOTES: &[&str] = &[
-    "Too few PSMs for score recalibration.",
+    TOO_FEW_PSMS,
     "Score recalibration failed.",
     "NuXL:rescoring:",
     "autotune: too few non-cross-linked peptides found.",
@@ -1095,6 +1099,8 @@ struct Job {
     records: Vec<InputRecord>,
     placements: Vec<Placement>,
     cutoffs: Cutoffs,
+    /// The request's `rescore` (`-percolator_backend builtin`, else `none`).
+    rescore: bool,
     /// The shim's notes of the search, for every input's `outputs.json` (the database's decoys left out).
     notes: Vec<String>,
     sink: Sink,
@@ -1210,6 +1216,7 @@ impl Searches {
                 peptide: request.settings.peptide_fdr,
                 xl: request.settings.xl_fdr,
             },
+            rescore: request.settings.rescore,
             notes,
             sink,
             handle,
@@ -1438,18 +1445,24 @@ fn find_outputs(names: &[String], stem: &str) -> (bool, [Option<String>; 5]) {
     let perc = format!("{stem}_perc_");
     let percolator = !with_threshold(names, &perc, "_XLs.idXML").is_empty();
     let base = if percolator { &perc } else { &plain };
-    let highest = |files: Vec<(f64, &str)>| {
+    // the file of the highest threshold, `rank` ordering them
+    let highest = |files: Vec<(f64, &str)>, rank: fn(f64) -> f64| {
         files
             .into_iter()
-            // (0 is no filter, as 1: the most of all)
-            .max_by(|a, b| {
-                let rank = |q: f64| if q == 0.0 { 1.0 } else { q };
-                rank(a.0).total_cmp(&rank(b.0))
-            })
+            .max_by(|a, b| rank(a.0).total_cmp(&rank(b.0)))
             .map(|(_, n)| path(n))
     };
-    let xls = highest(with_threshold(names, base, "_XLs.idXML"));
-    let peptides = highest(with_threshold(names, base, "_peptides.idXML"));
+    // A cross-link threshold of 0 is never "no filter": NuXLFDR turns 0 into 1 before it names any file, so
+    // `_0.0000_XLs` is a positive threshold below 0.00005 (`%.4f`), filtered next to the `_1.0000_` one.
+    let xls = highest(with_threshold(names, base, "_XLs.idXML"), |q| q);
+    // (the peptides' threshold 0 is no filter, as 1: the most of all)
+    let peptides = highest(with_threshold(names, base, "_peptides.idXML"), |q| {
+        if q == 0.0 {
+            1.0
+        } else {
+            q
+        }
+    });
     let proteins = with_threshold(names, &format!("{base}proteins"), "_XLs.tsv")
         .into_iter()
         .filter(|(q, _)| *q <= crate::args::MAX_PROTEIN_REPORT_FDR)
@@ -1707,6 +1720,22 @@ fn run_one(
     }
 }
 
+/// The debug table OpenNuXL writes in every run beside its `-in`, `<-in>.ambiguous_masses.csv`
+/// (`calculateNucleotideTags_`: `File::path(in) + '/' + File::basename(in) + ".ambiguous_masses.csv"`), for the
+/// input of `record` placed as `placement` in the search folder `partial`.
+fn ambiguous_masses_csv(partial: &Path, record: &InputRecord, placement: Placement) -> PathBuf {
+    let input = match placement {
+        Placement::OwnPath => PathBuf::from(&record.path),
+        Placement::Symlink | Placement::HardLink => partial.join(&record.link),
+    };
+    let mut name = input.file_name().map(OsString::from).unwrap_or_default();
+    name.push(AMBIGUOUS_MASSES_SUFFIX);
+    input.with_file_name(name)
+}
+
+/// The end of the name of OpenNuXL's debug table beside its input ([`ambiguous_masses_csv`]).
+const AMBIGUOUS_MASSES_SUFFIX: &str = ".ambiguous_masses.csv";
+
 /// Runs the inputs one after the other, passes on their progress, records each one's outputs, and settles the
 /// folder. Runs on the thread that starts the tool, which is what ties the tool to the app on Linux
 /// (`PR_SET_PDEATHSIG`).
@@ -1720,6 +1749,7 @@ fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(),
         records,
         placements,
         cutoffs,
+        rescore,
         notes: search_notes,
         sink,
         handle,
@@ -1740,13 +1770,25 @@ fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(),
     };
     let mut tracker = ProgressTracker::new(records.iter().map(|r| r.name.clone()).collect());
     let mut end = None;
-    for (k, (args, record)) in runs.iter().zip(&records).enumerate() {
+    for (k, ((args, record), placement)) in runs.iter().zip(&records).zip(&placements).enumerate() {
         let started_run = Instant::now();
         let first = (k == 0).then_some(&started);
-        match run_one(&context, k, args, &mut tracker, first) {
+        let debris = ambiguous_masses_csv(&partial, record, *placement);
+        let debris_existed = debris.exists();
+        let ended = run_one(&context, k, args, &mut tracker, first);
+        // OpenNuXL's debug table beside `-in`: in the search folder (a link), or beside the user's file (Windows,
+        // the file's own path), where only the one this run created is removed
+        if !debris_existed {
+            let _ = with_backoff(|| fs::remove_file(&debris));
+        }
+        match ended {
             // `start` heard why, and removes the folder
             RunEnd::NotStarted => return,
             RunEnd::Done(mut notes) => {
+                // (OpenNuXL warns of too few PSMs for Percolator also when the rescoring is off)
+                if !rescore {
+                    notes.retain(|n| !n.starts_with(TOO_FEW_PSMS));
+                }
                 notes.extend(search_notes.iter().cloned());
                 let seconds = started_run.elapsed().as_secs_f64();
                 if let Err(message) = record_outputs(&partial, record, cutoffs, notes, seconds) {
@@ -1919,5 +1961,32 @@ mod output_tests {
         assert_eq!(found[3], None);
         let (percolator, found) = find_outputs(&[], "c");
         assert!(!percolator && found.iter().all(Option::is_none));
+    }
+
+    /// `-report:xlFDR 1.0 1e-05` (a cross-link FDR of 0.001 %): NuXLFDR names the second file with `%.4f`, so
+    /// it is `_0.0000_XLs`, filtered at 1e-5 (a 0 threshold is 1 by then, never "no filter"). `xls` is the
+    /// `_1.0000_` file whatever the order of the folder's listing.
+    #[test]
+    fn a_cross_link_threshold_that_rounds_to_zero_is_not_the_unfiltered_file() {
+        let files = [
+            "1__a.idXML",
+            "1__a_0.0000_peptides.idXML",
+            "1__a_1.0000_XLs.idXML",
+            "1__a_0.0000_XLs.idXML",
+            "1__a_proteins0.0000_XLs.tsv",
+        ];
+        for order in [files.to_vec(), files.iter().rev().copied().collect()] {
+            let (_, [_, xls, peptides, proteins, _]) = find_outputs(&names(&order), "1__a");
+            assert_eq!(
+                xls.as_deref(),
+                Some("nuxl/1__a_1.0000_XLs.idXML"),
+                "{order:?}"
+            );
+            assert_eq!(peptides.as_deref(), Some("nuxl/1__a_0.0000_peptides.idXML"));
+            assert_eq!(
+                proteins.as_deref(),
+                Some("nuxl/1__a_proteins0.0000_XLs.tsv")
+            );
+        }
     }
 }

@@ -113,6 +113,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="435.229429923771022"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="290.488712104771025"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="218.118353195271027"/>
+				<UserParam type="float" name="peptide q-value" value="0.2"/>
 				<UserParam type="float" name="NuXLScore_score" value="15.438701629638672"/>
 			</PeptideHit>
 			<UserParam type="int" name="scan_index" value="2"/>
@@ -194,6 +195,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="628.787812481320884"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="419.527633809804229"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="314.897544474045901"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="28.14954948425293"/>
 			</PeptideHit>
 			<UserParam type="int" name="scan_index" value="10"/>
@@ -275,6 +277,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="486.23808331327092"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="324.494481031104272"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="243.622679890020976"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="21.468671798706055"/>
 			</PeptideHit>
 			<UserParam type="int" name="scan_index" value="11"/>
@@ -356,6 +359,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="780.92760733292107"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="520.954163710871058"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="390.967441899845994"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="24.814916610717773"/>
 			</PeptideHit>
 			<UserParam type="int" name="scan_index" value="13"/>
@@ -433,6 +437,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="897.517257635971191"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="598.680597246237767"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="449.262267051371055"/>
+				<UserParam type="float" name="peptide q-value" value="0.2"/>
 				<UserParam type="float" name="NuXLScore_score" value="17.291851043701172"/>
 			</PeptideHit>
 			<UserParam type="int" name="scan_index" value="17"/>

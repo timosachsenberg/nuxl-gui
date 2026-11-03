@@ -18,8 +18,11 @@
 // - NuXL:fdr_group 'XL' on the cross-links (NuXLFDR labels the groups when the short cross-links have their own; here
 //   it is set always, so that the reader's column is tested; the reader takes a cross-link without it as 'XL').
 //
-// The peptide-level q-values (`q-value_peptide`) are left out: the reader does not read them. `all` of outputs.json
-// names OpenNuXL's -out, which is not kept (the reader never reads it).
+// - on every hit its peptide-level q-value 'peptide q-value' (Constants::UserParam::PEPTIDE_Q_VALUE), as
+//   FalseDiscoveryRate::apply(ids, true) gives it in each group: the q-values of the best target and the best decoy
+//   score of each unmodified sequence, the hit getting its sequence's of its own kind (before the tie-break).
+//
+// `all` of outputs.json names OpenNuXL's -out, which is not kept (the reader never reads it).
 //
 // The cases:
 //   example  one input (OpenNuXL_6: several hits per spectrum, a decoy among them), no Percolator (too few PSMs). The
@@ -70,8 +73,8 @@ function parse(text) {
   return { head, proteins, runParams, ids }
 }
 
-/** FalseDiscoveryRate's q-values (conservative, higher score better) of the hits { score, decoy }: set as hit.q. */
-function qValues(hits) {
+/** The q-values (conservative, higher score better) of the hits { score, decoy }: set as hit[key]. */
+function qValues(hits, key = 'q') {
   const sorted = [...hits].sort((a, b) => b.score - a.score)
   const decoys = sorted.filter((h) => h.decoy).length
   let d = 0
@@ -93,7 +96,27 @@ function qValues(hits) {
     min = Math.min(min, fdr.get(score))
     fdr.set(score, min)
   }
-  for (const h of hits) h.q = fdr.get(h.score)
+  for (const h of hits) h[key] = fdr.get(h.score)
+}
+
+/** AASequence::toUnmodifiedString of an idXML sequence ('.(Acetyl)DAHK(Oxidation)R' -> 'DAHKR'). */
+const unmodified = (sequence) => sequence.replace(/\([^()]*(\([^()]*\)[^()]*)*\)|\[[^\]]*\]|\./g, '')
+
+/**
+ * FalseDiscoveryRate's peptide-level q-values of the hits { hit, score, decoy } (apply with annotate_peptide_fdr): the
+ * best score per unmodified sequence among the targets and among the decoys, their q-values together; set as hit.pq.
+ */
+function peptideQValues(hits) {
+  const best = new Map()
+  for (const h of hits) {
+    const key = `${h.decoy ? 'd' : 't'}\u0000${unmodified(attribute(h.hit, 'sequence') ?? '')}`
+    const b = best.get(key)
+    if (!b || h.score > b.score) best.set(key, { score: h.score, decoy: h.decoy, key })
+  }
+  const peptides = [...best.values()]
+  qValues(peptides)
+  const q = new Map(peptides.map((p) => [p.key, p.q]))
+  for (const h of hits) h.pq = q.get(`${h.decoy ? 'd' : 't'}\u0000${unmodified(attribute(h.hit, 'sequence') ?? '')}`)
 }
 
 const number = (x) => (Number.isInteger(x) ? `${x}.0` : String(x))
@@ -120,6 +143,8 @@ function filtered(text, linear = new Set()) {
   const xls = top.filter((h) => h.xl)
   qValues(peptides)
   qValues(xls)
+  peptideQValues(peptides)
+  peptideQValues(xls)
   if (xls.length > 0) {
     const scores = xls.map((h) => h.score)
     const [min, max] = [Math.min(...scores), Math.max(...scores)]
@@ -134,12 +159,15 @@ function filtered(text, linear = new Set()) {
     proteins.forEach((p, k) => renumber.set(attribute(p, 'id'), `PH_${k}`))
     const proteinText = proteins.map((p) => p.replace(/ id="PH_\d+"/, ` id="${renumber.get(attribute(p, 'id'))}"`)).join('')
     const idText = kept
-      .map(({ pi, hit, score, q }) => {
+      .map(({ pi, hit, score, q, pq }) => {
         const open = pi.open.replace(/score_type="[^"]*" higher_score_better="[^"]*"/, 'score_type="q-value" higher_score_better="false"')
         let h = hit
           .replace(/<PeptideHit score="[^"]*"/, `<PeptideHit score="${number(q)}"`)
           .replace(/ protein_refs="([^"]*)"/, (_, refs) => ` protein_refs="${refs.split(' ').map((r) => renumber.get(r)).join(' ')}"`)
-        const extra = [`\t\t\t\t<UserParam type="float" name="NuXLScore_score" value="${number(score)}"/>\n`]
+        const extra = [
+          `\t\t\t\t<UserParam type="float" name="peptide q-value" value="${number(pq)}"/>\n`,
+          `\t\t\t\t<UserParam type="float" name="NuXLScore_score" value="${number(score)}"/>\n`,
+        ]
         if (isXL) extra.push(`\t\t\t\t<UserParam type="string" name="NuXL:fdr_group" value="XL"/>\n`)
         h = h.replace('\t\t\t</PeptideHit>\n', `${extra.join('')}\t\t\t</PeptideHit>\n`)
         return `${open}${h}${pi.params}\t\t</PeptideIdentification>\n`

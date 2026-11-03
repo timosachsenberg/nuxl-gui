@@ -116,6 +116,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="712.782498583471011"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="475.524091211237646"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="356.894887525120964"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="65.48087310791016"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -197,6 +198,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="590.765921955871022"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="394.179706792837635"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="295.88659921132097"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="31.744165420532227"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -278,6 +280,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="761.773625812521118"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="508.184842697271051"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="381.390451139646018"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="29.668048858642578"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -359,6 +362,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="678.285010535621154"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="452.52576584600439"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="339.646143501196036"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="62.221839904785156"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -440,6 +444,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="791.859071870571029"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="528.241806735970954"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="396.433174168670973"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="57.150360107421875"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -521,6 +526,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="1242.539390684021328"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="828.695352611604562"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="621.773333575396237"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="56.21337127685547"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -602,6 +608,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="656.794679583471066"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="438.198878544571016"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="328.900978025120992"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="36.182926177978516"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -683,6 +690,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="957.396027442921081"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="638.599777117537656"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="479.201651954846"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="64.58236694335938"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -764,6 +772,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="510.28047847182097"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="340.522744470137639"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="255.643877469296001"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="33.54619216918945"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -845,6 +854,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="717.355435822721006"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="478.572716037404291"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="359.181356144745962"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="30.48528289794922"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -926,6 +936,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="790.805747433670945"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="527.539590444704231"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="395.906511950220931"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="62.19000244140625"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -1007,6 +1018,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="648.256018265621037"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="432.506437666004331"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="324.631647366195978"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="31.9771671295166"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -1088,6 +1100,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="938.368089776020838"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="625.914485339604198"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="469.687683121395878"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="52.827178955078125"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -1169,6 +1182,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="933.940259753371151"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="622.962598657837702"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="467.473768110071035"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="39.71467971801758"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -1250,6 +1264,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="735.813069679171008"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="490.877805275037645"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="368.410173072970963"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="69.85002899169922"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -1331,6 +1346,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="833.866699370571155"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="556.246891735971076"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="417.436987918671036"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="37.99295425415039"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -1412,6 +1428,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="698.296729528220908"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="465.86691184107093"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="349.652002997495913"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="50.089317321777344"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -1493,6 +1510,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="623.254135304921078"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="415.838515692204339"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="312.130705885845998"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="36.48870849609375"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -1574,6 +1592,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="1291.578326708521217"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="861.38797662793786"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="646.292801587646181"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="35.55780029296875"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>
@@ -1655,6 +1674,7 @@
 				<UserParam type="float" name="NuXL:z2 mass" value="1564.684788582971351"/>
 				<UserParam type="float" name="NuXL:z3 mass" value="1043.458951210904615"/>
 				<UserParam type="float" name="NuXL:z4 mass" value="782.846032524871248"/>
+				<UserParam type="float" name="peptide q-value" value="0.0"/>
 				<UserParam type="float" name="NuXLScore_score" value="13.722031593322754"/>
 				<UserParam type="string" name="NuXL:fdr_group" value="XL"/>
 			</PeptideHit>

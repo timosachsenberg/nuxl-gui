@@ -15,6 +15,7 @@
 //! | ----------------------------------------------------------------------- | ------------------------------------------- | ------------ |
 //! | (the run starts: `run.rs`, [`ProgressTracker::start_run`])              | `Searching <name> (k of n)...`              | 0            |
 //! | `Running autotune...` (filters `autotune`, `idfilter`)                  | `Autotune: <name> (k of n)...`              | 0.02         |
+//! | `IDFilter excludes <n> spectra.` (always; the autotune is over)         | (none)                                      |              |
 //! | `Progress of 'loading mzML':` (before the spectra are prepared)         | `Reading the spectra of <name> (k of n)...` | 0.12         |
 //! | `Progress of 'Filtering spectra...'`, `'Calculate Nucleotide Tags...'`, `'Calculate intensity ranks...'`, `'Calculate AA Tags...'`, `'Mapping precursors to scan...'`, `'Indexing spectra...'` | `Preparing the spectra of <name> (k of n)...` | 0.13 to 0.18 |
 //! | `Progress of 'Load database from FASTA file...'`                        | `Reading the database (k of n)...`          | 0.19         |
@@ -30,6 +31,9 @@
 //! minutes there, seconds in the rest), so it gets most of the bar, with its percentages; the positions of the
 //! other steps are estimates of where in a run they sit, not measurements. The autotune is a whole search of
 //! the run without cross-links (SimpleSearchEngine, which prints nothing), hence its tenth.
+//!
+//! The autotune's filter step `spectrumclusterfilter` loads the mzML too (`Progress of 'loading mzML':`, between
+//! `Running autotune...` and `IDFilter excludes`): that load is the autotune's, and moves nothing.
 //!
 //! A line that is not in the table gives no event; the fraction never goes back, so a step that comes again
 //! later in a run (OpenNuXL loads the mzML a second time for the post-processing) or a step of a run's stage
@@ -97,6 +101,8 @@ pub struct ProgressTracker {
     last: Option<(String, i32, f64)>,
     /// The highest percentage of the current run's scoring (a lower one is another step's, or late).
     scored: f64,
+    /// The current run's autotune has started and not ended (`IDFilter excludes`): a `loading mzML` is its own.
+    autotuning: bool,
 }
 
 /// The label of `Progress of '<label>':` (indented by its depth), if the line is one.
@@ -126,6 +132,7 @@ impl ProgressTracker {
             file: -1,
             last: None,
             scored: 0.0,
+            autotuning: false,
         }
     }
 
@@ -197,6 +204,7 @@ impl ProgressTracker {
         self.current = Some(file);
         self.stage = Stage::Starting;
         self.scored = 0.0;
+        self.autotuning = false;
         let label = self.label_of("Searching", true);
         let at = self.run_at(0.0);
         // (a new label: never a repeat)
@@ -229,7 +237,12 @@ impl ProgressTracker {
         }
         let line = line.trim();
         if line.starts_with("Running autotune...") {
+            self.autotuning = true;
             return self.step(Stage::Autotune, AUTOTUNE, self.label_of("Autotune:", true));
+        }
+        if line.starts_with("IDFilter excludes") {
+            self.autotuning = false;
+            return None;
         }
         if line.starts_with("Calculating peptide and XL q-values for percolator results") {
             return self.step(
@@ -254,8 +267,9 @@ impl ProgressTracker {
     /// A step with a progress of its own (`Progress of '<label>':`).
     fn progress_started(&mut self, label: &str) -> Option<ProgressUpdate> {
         if label.starts_with("loading mzML") {
-            // the spectra are read before they are prepared, and again for the post-processing (moves nothing)
-            if self.stage > Stage::Spectra {
+            // the spectra are read before they are prepared, and again for the post-processing (moves nothing);
+            // the autotune's spectrumclusterfilter reads them too (its own step)
+            if self.stage > Stage::Spectra || self.autotuning {
                 return None;
             }
             return self.step(
@@ -453,6 +467,54 @@ mod tests {
             1
         );
         assert_monotone(&steps);
+    }
+
+    /// With the filter `spectrumclusterfilter` the autotune loads the mzML itself (OpenNuXL.cpp, `f.setLogType` in
+    /// the autotune's block): the bar stays at the autotune until it is over (`IDFilter excludes`), then the main
+    /// load reads the spectra.
+    #[test]
+    fn the_autotunes_own_loading_of_the_spectra_is_part_of_the_autotune() {
+        let mut lines = run_lines(false);
+        let at = lines
+            .iter()
+            .position(|l| l.starts_with("Calculating FDR..."))
+            .unwrap();
+        lines.splice(
+            at..at,
+            [
+                "Progress of 'loading mzML':",
+                "50.00 %               ",
+                "-- done [took 0.05 s (CPU), 0.05 s (Wall)] -- ",
+                "Excluded coelution precursors with high spectral similarity: 3",
+            ]
+            .map(String::from),
+        );
+        let tuned = steps(&["RNA_UV.mzML"], &[lines]);
+        let autotune = tuned
+            .iter()
+            .position(|s| s.0.starts_with("Autotune"))
+            .unwrap();
+        let reading = tuned
+            .iter()
+            .position(|s| s.0.starts_with("Reading the spectra"))
+            .unwrap();
+        assert_eq!(reading, autotune + 1, "{tuned:?}");
+        assert!((tuned[autotune].2 - AUTOTUNE).abs() < 1e-9);
+        assert!((tuned[reading].2 - READING).abs() < 1e-9);
+        // a run without the autotune (no filter `autotune`, `idfilter`): its one load reads the spectra
+        let plain: Vec<String> = run_lines(false)
+            .into_iter()
+            .filter(|l| !l.starts_with("Running autotune"))
+            .collect();
+        let untuned = steps(&["RNA_UV.mzML"], &[plain]);
+        assert!(
+            untuned
+                .iter()
+                .any(|s| s.0.starts_with("Reading the spectra")),
+            "{untuned:?}"
+        );
+        assert_monotone(&tuned);
+        assert_monotone(&untuned);
     }
 
     #[test]

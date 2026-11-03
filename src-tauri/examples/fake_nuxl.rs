@@ -13,10 +13,12 @@
 //!   segv      prints a step and a line to stderr, then crashes: SIGSEGV (Unix), an access violation's
 //!             status 0xC0000005 (Windows)
 //!   diskfull  writes OpenMS' error of an output it cannot write, exit code 12
-//!   fewpsms   as a search, but "Too few PSMs for score recalibration. Skipped." (stderr), no _perc_ files
+//!   fewpsms   as a search, but "Too few PSMs for score recalibration. Skipped." (stderr, also with
+//!             -percolator_backend none, as OpenNuXL prints it), no _perc_ files
 //!   <other>   searches the input and exits 0
 //!
-//! In the search folder (the parent of `<out>`'s folder) it appends a line to inputs.txt (the -in path and the
+//! Beside -in it writes OpenNuXL's debug table `<in>.ambiguous_masses.csv` (every run that gets to the nucleotide
+//! tags). In the search folder (the parent of `<out>`'s folder) it appends a line to inputs.txt (the -in path and the
 //! file it resolves to) and leaves tool.pid and, for hang and stubborn, children.pid; beside `<out>` it leaves
 //! `<stem>.argv.txt` (one argument per line). `--help` prints OpenMS' version line (to stderr, as TOPPBase
 //! does); `--sleep` (the children) sleeps five minutes.
@@ -209,7 +211,7 @@ fn main() {
             exit(0);
         }
         "crash" => {
-            out("Running autotune...\n");
+            out("Running autotune...\nIDFilter excludes 0 spectra.\n");
             progress("loading mzML");
             eprintln!("Schema error: Trying to register schema with name Abs");
             eprintln!("Error: Unable to read file (the input broke {input})");
@@ -231,6 +233,7 @@ fn main() {
 
     out("Running autotune...\n");
     out("autotune: too few non-cross-linked peptides found. Will keep parameters as-is.\n");
+    out("IDFilter excludes 0 spectra.\n");
     progress("loading mzML");
     done_line();
     for step in [
@@ -245,6 +248,15 @@ fn main() {
     ] {
         progress(step);
         done_line();
+        // (OpenNuXL's debug table, beside -in: File::path(in) + '/' + File::basename(in) + ".ambiguous_masses.csv")
+        if step == "Calculate Nucleotide Tags..." {
+            let table = format!("{input}.ambiguous_masses.csv");
+            fs::write(
+                table,
+                "Ambiguous residues (+adduct) masses that exactly match to other masses.\nTotal\tResidue\tAdduct\n",
+            )
+            .unwrap();
+        }
     }
     progress("Scoring peptide models against spectra...");
     for pct in ["0.00", "33.33", "66.67", "99.99"] {
@@ -263,20 +275,20 @@ fn main() {
     idxml("all", &output);
     write_fdr_outputs(&format!("{base}_"), &thresholds);
     out("done.\n");
-    if backend != "none" {
-        if mode == "fewpsms" {
-            eprintln!("Too few PSMs for score recalibration. Skipped.");
-        } else {
-            out("Running percolator.\ndone.\n");
-            idxml("percolator", &format!("{base}_perc.idXML"));
-            if !tsv.is_empty() {
-                let perc = format!("{}_perc.tsv", tsv.strip_suffix(".tsv").unwrap_or(&tsv));
-                fs::write(perc, "report\tperc\n").unwrap();
-            }
-            out("Calculating peptide and XL q-values for percolator results.\n");
-            write_fdr_outputs(&format!("{base}_perc_"), &thresholds);
-            out("done.\n");
+    // (OpenNuXL warns of too few PSMs also when the rescoring is off)
+    if mode == "fewpsms" {
+        eprintln!("Too few PSMs for score recalibration. Skipped.");
+    }
+    if backend != "none" && mode != "fewpsms" {
+        out("Running percolator.\ndone.\n");
+        idxml("percolator", &format!("{base}_perc.idXML"));
+        if !tsv.is_empty() {
+            let perc = format!("{}_perc.tsv", tsv.strip_suffix(".tsv").unwrap_or(&tsv));
+            fs::write(perc, "report\tperc\n").unwrap();
         }
+        out("Calculating peptide and XL q-values for percolator results.\n");
+        write_fdr_outputs(&format!("{base}_perc_"), &thresholds);
+        out("done.\n");
     }
     if !tsv.is_empty() {
         fs::write(&tsv, "report\n").unwrap();

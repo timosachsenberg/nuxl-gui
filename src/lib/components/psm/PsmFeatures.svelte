@@ -62,6 +62,12 @@
   const items = $derived.by(() => {
     const list: Item[] = [{ name: scoreName, value: formatScore(ps.score[row], ps.qValue[row]) }]
     list.push({ name: 'q-value', value: formatQValue(ps.qValue[row]) })
+    if (Number.isFinite(ps.xl.peptideQValue[row]))
+      list.push({
+        name: 'Peptide q-value',
+        value: formatQValue(ps.xl.peptideQValue[row]),
+        title: 'OpenNuXL’s peptide-level q-value (by the best PSM of the sequence); a peptide PSM counts at the peptide FDR only if this is below it too.',
+      })
     if (Number.isFinite(ps.pep[row])) list.push({ name: 'PEP', value: formatQValue(ps.pep[row]) })
     if (model.rescored && Number.isFinite(feature('NuXL:score'))) list.push({ name: 'NuXL score', value: number(feature('NuXL:score'), 3) })
     if (matched) {

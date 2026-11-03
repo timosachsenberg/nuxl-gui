@@ -180,3 +180,41 @@ describe('the cross-link columns', () => {
     ])
   })
 })
+
+describe("the peptides' peptide-level q-value", () => {
+  /**
+   * NuXLFDR filters the peptide PSMs at report:peptideFDR t on their 'peptide q-value' (dropped at t or more) and on
+   * their PSM q-value (kept at most t); the cross-links only on the PSM q-value (report:xl_peptidelevel_FDR 1.0).
+   * Two peptides of PSM q-value 0.005: one of peptide q-value 0.004, one of 0.01; a cross-link of peptide q-value 0.2.
+   */
+  function withPeptideQ() {
+    const t = makeTables({
+      files: ['a.mzML'],
+      proteins: [{ accession: 'P1', sequence: 'AAAKCCCKDDDK', qValue: NaN }],
+      peptides: [
+        { sequence: 'AAAK', proteins: [0] },
+        { sequence: 'DDDK', proteins: [0] },
+        { sequence: 'CCCK', adduct: 'U', proteins: [0] },
+      ],
+      psms: [
+        { peptide: 0, qValue: 0.005, peptideQValue: 0.004 },
+        { peptide: 1, qValue: 0.005, peptideQValue: 0.01 },
+        { peptide: 2, qValue: 0.005, peptideQValue: 0.2 },
+      ],
+    })
+    return buildModel(t, syntheticDesign(['a.mzML']), { showTechReplicates: false, psmFdr: 0.01, xlFdr: 0.01, proteinFdr: 1 })
+  }
+
+  it('keeps a peptide PSM at the peptide FDR only below it, as OpenNuXL; a cross-link whatever its own', () => {
+    const m = withPeptideQ()
+    const f = { ...defaultFilters(), maxQ: 0.01, maxXlQ: 0.01 }
+    expect(list(applyFilters(m, 'psms', f))).toEqual([0, 2])
+    expect(list(applyFilters(m, 'peptides', f))).toEqual([0, 2])
+    expect(Array.from(m.peptide.psms)).toEqual([1, 0, 1])
+    expect(Array.from(m.peptide.bestPeptideQ)).toEqual([0.004, 0.01, NaN])
+    // a tighter limit applies to both q-values; a looser search cutoff keeps both
+    expect(list(applyFilters(m, 'psms', { ...f, maxQ: 0.004 }))).toEqual([2])
+    const loose = buildModel(m.tables, syntheticDesign(['a.mzML']), { showTechReplicates: false, psmFdr: 0.05, xlFdr: 0.01, proteinFdr: 1 })
+    expect(list(applyFilters(loose, 'psms', { ...f, maxQ: 0.05 }))).toEqual([0, 1, 2])
+  })
+})

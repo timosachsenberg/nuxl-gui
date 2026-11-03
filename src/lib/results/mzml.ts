@@ -2,14 +2,16 @@
 // input mzML only so, never whole): an indexedmzML by its index (the tail's <indexListOffset>, the index's
 // <offset idRef="...">), else by scanning the file once in chunks for its <spectrum> elements (at most
 // MAX_SCANNED bytes), and then that <spectrum> element alone. Its binary data arrays are decoded as mzML 1.1 has them
-// (MzMLHandler): base64, zlib or no compression (MS:1000574, MS:1000576), 32- or 64-bit floats (MS:1000521,
-// MS:1000523), the m/z and intensity arrays by their CV terms (MS:1000514, MS:1000515). MS-Numpress is not supported:
-// such a spectrum has no peaks, with a reason (SpectrumError).
+// (MzMLHandler): base64, zlib or no compression (MS:1000574, MS:1000576), zstd as OpenMS develop writes it (MS:1003780,
+// byte-shuffled MS:1003781, dictionary-encoded MS:1003782; ZstdCompression.cpp), 32- or 64-bit floats (MS:1000521,
+// MS:1000523), the m/z and intensity arrays by their CV terms (MS:1000514, MS:1000515). MS-Numpress (alone or followed
+// by zlib or zstd) is not supported: such a spectrum has no peaks, with a reason (SpectrumError).
 //
 // Byte offsets are of the file's bytes: the scanner decodes it as windows-1252 (one character per byte, so that a
 // character's index is its byte's), and the native IDs it finds from their own bytes as UTF-8.
 
 import { unzlibSync } from 'fflate'
+import { decompress as unzstd } from 'fzstd'
 import { unescapeXml } from './idxml'
 
 /** A part of a file: its last `tail` bytes, or `length` bytes from `offset` (fewer at its end). */
@@ -236,8 +238,60 @@ export function base64Bytes(text: string): Uint8Array {
   return out.subarray(0, n)
 }
 
-/** MS-Numpress compressions (MS:1002312–1002314 and their zlib combinations MS:1002746–1002748). */
-const NUMPRESS = new Set(['MS:1002312', 'MS:1002313', 'MS:1002314', 'MS:1002746', 'MS:1002747', 'MS:1002748'])
+/**
+ * MS-Numpress compressions (MS:1002312–1002314, their zlib combinations MS:1002746–1002748 and their zstd ones
+ * MS:1003783–1003785).
+ */
+const NUMPRESS = new Set(['MS:1002312', 'MS:1002313', 'MS:1002314', 'MS:1002746', 'MS:1002747', 'MS:1002748', 'MS:1003783', 'MS:1003784', 'MS:1003785'])
+
+/** zstd compressions (MS:1003780) and the byte transforms before them: byte shuffle (MS:1003781), dictionary (MS:1003782). */
+const ZSTD = { 'MS:1003780': 'none', 'MS:1003781': 'shuffle', 'MS:1003782': 'dictionary' } as const
+
+/** ZstdCompression::byteUnshuffle: `bytes` holds byte i of every element, then byte i + 1, ... */
+function byteUnshuffle(bytes: Uint8Array, size: number): Uint8Array {
+  if (bytes.length % size !== 0) throw new Error(`its byte-shuffled array of ${bytes.length} bytes is not of ${size}-byte values`)
+  const count = bytes.length / size
+  const out = new Uint8Array(bytes.length)
+  for (let i = 0; i < size; i++) for (let j = 0; j < count; j++) out[j * size + i] = bytes[i * count + j]
+  return out
+}
+
+/** The index width (bytes) the mzML specification gives `values` distinct values. */
+const indexWidth = (values: number) => (values < 2 ** 8 ? 1 : values < 2 ** 16 ? 2 : values < 2 ** 32 ? 4 : 8)
+
+/**
+ * ZstdCompression::dictionaryDecode: a 16-byte header (the offset of the indices and the number of distinct values,
+ * uint64 little-endian), the byte-shuffled values, the byte-shuffled indices (of the width the writer took, one of
+ * the specification's widths next to it when `length` tells, as OpenMS accepts it).
+ */
+function dictionaryDecode(bytes: Uint8Array, size: number, length: number): Uint8Array {
+  if (bytes.length === 0) return bytes
+  if (bytes.length < 16) throw new Error('its dictionary-encoded array is shorter than its header')
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length)
+  const offset = Number(view.getBigUint64(0, true))
+  const values = Number(view.getBigUint64(8, true))
+  if (offset < 16 || offset > bytes.length || offset - 16 !== values * size) throw new Error('its dictionary-encoded array has a broken header')
+  const indexBytes = bytes.length - offset
+  const spec = indexWidth(values)
+  let width = spec
+  if (length > 0 && indexBytes % length === 0) {
+    const w = indexBytes / length
+    if ([1, 2, 4, 8].includes(w) && (w === spec || w === indexWidth(values - 1) || w === indexWidth(values + 1))) width = w
+  }
+  if (indexBytes % width !== 0) throw new Error('its dictionary-encoded indices do not fit their width')
+  const dictionary = byteUnshuffle(bytes.subarray(16, offset), size)
+  const indices = byteUnshuffle(bytes.subarray(offset), width)
+  const iv = new DataView(indices.buffer, indices.byteOffset, indices.length)
+  const count = indexBytes / width
+  const out = new Uint8Array(count * size)
+  for (let j = 0; j < count; j++) {
+    const at = j * width
+    const index = width === 1 ? indices[at] : width === 2 ? iv.getUint16(at, true) : width === 4 ? iv.getUint32(at, true) : Number(iv.getBigUint64(at, true))
+    if (index >= values) throw new Error(`its dictionary-encoded array has an index (${index}) beyond its ${values} values`)
+    out.set(dictionary.subarray(index * size, index * size + size), j * size)
+  }
+  return out
+}
 
 /** The values of a binaryDataArray (little-endian floats, as mzML has them). */
 function decodeArray(text: string, length: number): { kind: 'mz' | 'intensity' | null; values: Float64Array } {
@@ -251,7 +305,19 @@ function decodeArray(text: string, length: number): { kind: 'mz' | 'intensity' |
   if (bits === 0) throw new SpectrumError(`Its ${kind === 'mz' ? 'm/z' : 'intensity'} array has a precision the app does not read (neither 32- nor 64-bit float).`)
   const binary = /<binary>([\s\S]*?)<\/binary>/.exec(text)
   let bytes = base64Bytes(binary ? binary[1] : '')
-  if (params.has('MS:1000574')) {
+  const zstd = (Object.keys(ZSTD) as (keyof typeof ZSTD)[]).find((a) => params.has(a))
+  if (zstd !== undefined) {
+    if (bytes.length > 0) {
+      try {
+        bytes = unzstd(bytes)
+        const transform = ZSTD[zstd]
+        if (transform === 'shuffle') bytes = byteUnshuffle(bytes, bits / 8)
+        else if (transform === 'dictionary') bytes = dictionaryDecode(bytes, bits / 8, length)
+      } catch (e) {
+        throw new Error(`its zstd-compressed ${kind} array cannot be decompressed (${(e as Error).message})`, { cause: e })
+      }
+    }
+  } else if (params.has('MS:1000574')) {
     try {
       bytes = unzlibSync(bytes)
     } catch (e) {

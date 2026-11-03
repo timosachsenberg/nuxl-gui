@@ -56,6 +56,8 @@ export type PsmSpec = {
   site?: number
   /** NuXL: the FDR group; default 'XL' for a cross-link, else 'peptide' */
   fdrGroup?: string
+  /** NuXL: the 'peptide q-value' of the hit; default NaN (none) */
+  peptideQValue?: number
   /** NuXL: the fragment_annotation; default '' */
   annotation?: string
 }
@@ -112,6 +114,7 @@ export function makeTables(spec: TablesSpec): ResultTables {
     psm.xl.adductLength[i] = psm.xl.nucleotide[i].length
     psm.xl.site[i] = p.site ?? -1
     psm.xl.fdrGroup[i] = p.fdrGroup ?? (isXL ? 'XL' : 'peptide')
+    psm.xl.peptideQValue[i] = p.peptideQValue ?? NaN
     psm.xl.annotation[i] = p.annotation ?? ''
   })
 
@@ -399,6 +402,7 @@ export function noCrossLinks(count: number): CrossLinkColumns {
     siteScore: new Float64Array(count).fill(NaN),
     siteSequence: new Array<string>(count).fill(''),
     fdrGroup: new Array<string>(count).fill('peptide'),
+    peptideQValue: new Float64Array(count).fill(NaN),
     annotation: new Array<string>(count).fill(''),
   }
 }

@@ -58,11 +58,17 @@ A search lives in `<app data>/searches/<id>/` (`<id>.partial/` while it runs), a
 
     `xls`, `peptides`, `proteins`, `report` are `null` when the file is not there. With `percolator: true` they
     are the `_perc_` files (Percolator ran and its results were written), else the plain ones. `xls` is the file
-    of the highest cross-link threshold (`1.0000`: every target cross-link with its q-value); `proteins` is that of
+    of the highest cross-link threshold (`1.0000`: every target cross-link with its q-value; a `0.0000` one is a
+    positive cross-link FDR below 0.00005 rounded by `%.4f`, since NuXLFDR turns 0 into 1 before it names any file); `proteins` is that of
     the lowest threshold ≤ 0.1 (OpenNuXL writes no protein report above 10 %). `notes` are OpenNuXL's warnings of
-    the run worth showing (the skipped Percolator), and the shim's note when the database's own decoys were left out. `fdr` are the search's cutoffs as the request gave them
+    the run worth showing (the skipped Percolator; OpenNuXL warns of too few PSMs also with the rescoring off, and
+    then the shim leaves that warning out), and the shim's note when the database's own decoys were left out. `fdr` are the search's cutoffs as the request gave them
     (`settings.peptideFdr`, `settings.xlFdr`, fractions): OpenNuXL ran without filtering, so the results view filters
     the peptide PSMs and the cross-link PSMs at these.
+- OpenNuXL also writes a debug table beside its `-in` in every run, `<-in>.ambiguous_masses.csv`
+  (`calculateNucleotideTags_`): through a link it is in the search folder; with the user's own path (Windows) it is
+  beside the user's mzML. The shim removes it after each run, unless a file of that name was there before the run
+  (OpenNuXL overwrites that one; the shim leaves it).
 - `search.json` and `proteins.fasta`: History's record and the identified proteins, as in ProSE desktop.
 
 ## 3. The command line of one run
@@ -77,7 +83,8 @@ OpenNuXL -in <link or path> -database <database.fasta or the user's FASTA> -out 
          <the allowlisted parameters of the form>
 ```
 
-- `report:peptideFDR 0` keeps every target peptide PSM with its q-value, `report:xlFDR 1.0` every target cross-link
+- `report:peptideFDR 0` keeps every target peptide PSM with its q-value (and its peptide-level `peptide q-value`,
+  which NuXLFDR filters on too at a peptide FDR: the results view applies both, §5), `report:xlFDR 1.0` every target cross-link
   with its q-value, so that the results view filters at the search's FDR and can tighten it; `<fdr>` (the form's
   cross-link FDR, ≤ 0.1, left out when it is 1.0) is there so that OpenNuXL writes its protein report.
 - The allowlist (`args.rs` `PARAMETERS`) holds OpenNuXL's options by their full name (`precursor:mass_tolerance`,
@@ -104,7 +111,8 @@ OpenNuXL prints OpenMS' progress lines on stdout: `Progress of '<label>':`, then
 `{ label, file, fraction }`: the file `k` of `n` and a fraction over all runs, each run weighted equally and split
 into its stages (reading and preprocessing the spectra, the database and decoys, scoring — the long stage, with
 its percentages —, post-processing, FDR, Percolator). Labels as in ProSE desktop: "Searching <name> (2 of 3)...",
-"Scoring <name> (2 of 3)... 45 %", "Percolator: <name> (2 of 3)...".
+"Scoring <name> (2 of 3)... 45 %", "Percolator: <name> (2 of 3)...". The autotune's own load of the spectra (the filter `spectrumclusterfilter`,
+before `IDFilter excludes <n> spectra.`) is part of the autotune.
 
 ## 5. Results (the front end)
 
@@ -117,12 +125,16 @@ its percentages —, post-processing, FDR, Percolator). Labels as in ProSE deskt
   some rescored, NuXL's for all, so that the column has one scale; `SearchResult.nuxl.percolatorScores`), `pep`
   Percolator's PEP when it is there;
 - `tables.psms.xl` (see `types.ts`): per PSM row whether it is a cross-link, its adduct, nucleotide, site and
-  site score, FDR group, and NuXL's fragment annotation;
+  site score, FDR group, peptide-level q-value (`peptide q-value`) and NuXL's fragment annotation;
+- a peptide PSM is within the peptide FDR t as OpenNuXL would report it at `report:peptideFDR` t: PSM q-value ≤ t and
+  `peptide q-value` < t (NuXLFDR filters on both); a cross-link PSM by its q-value ≤ the cross-link FDR only
+  (`report:xl_peptidelevel_FDR` 1.0);
 - peptides unique by sequence with modifications and adduct (`tables.peptides.adduct`, `tables.peptides.isXL`);
   a localized cross-link carries its adduct as a modification (`NuXL:U-H3O4P1` in OpenNuXL's sequence) at its site;
 - proteins from the hits' protein references, sequences from the FASTA; no protein FDR (NaN);
 - the peaks of a PSM's spectrum come from the input mzML (by its index, else by scanning a file of at most 256 MB),
-  read through `read_search_file` by byte range; when the file cannot be read (moved, an imported project), the
+  read through `read_search_file` by byte range; arrays uncompressed, zlib or zstd (plain, byte-shuffled,
+  dictionary-encoded, as OpenMS develop writes them), not MS-Numpress; when the file cannot be read (moved, an imported project), the
   PSM view shows the peaks NuXL annotated (`fragment_annotation`) only.
 
 ## 6. Left out (for now)

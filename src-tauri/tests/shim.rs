@@ -1518,6 +1518,97 @@ fn the_cutoffs_and_the_rescoring_of_the_request_shape_the_outputs() {
     );
 }
 
+/// OpenNuXL warns "Too few PSMs for score recalibration. Skipped." for a run of fewer than 1000 PSMs also with
+/// `-percolator_backend none` (OpenNuXL.cpp: the `else` of `recalibrate && sufficient_PSMs...`); with the
+/// rescoring off, Percolator was not skipped but not asked for, so the note is left out.
+#[test]
+fn too_few_psms_is_no_note_when_the_rescoring_is_off() {
+    let run = Run::new();
+    let i = inputs();
+    let few = i.dir.write("data/fewpsms.mzML", "<mzML/>");
+    let mut req = request(&[&few], &i.fasta, false, json!({}));
+    req.settings.rescore = false;
+    let (_, rx) = run.start(req, None);
+    let folder = done_folder(&until_terminal(&rx, WAIT));
+    let log = fs::read_to_string(folder.join("nuxl.log")).unwrap();
+    assert!(
+        log.contains("Too few PSMs for score recalibration."),
+        "{log}"
+    );
+    let outputs = outputs_of(&folder, &stem_of(0, "fewpsms.mzML"));
+    assert_eq!(outputs["percolator"], false);
+    assert!(
+        !outputs["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().starts_with("Too few PSMs")),
+        "{outputs}"
+    );
+}
+
+/// A cross-link FDR below 0.00005 (`-report:xlFDR 1.0 1e-05`): OpenNuXL names the filtered file `_0.0000_XLs`
+/// (`%.4f`), which is not the unfiltered one; `xls` stays `_1.0000_`.
+#[test]
+fn a_cross_link_fdr_that_rounds_to_zero_keeps_the_unfiltered_cross_links() {
+    let run = Run::new();
+    let i = inputs();
+    let mut req = request(&[&i.mzml], &i.fasta, false, json!({}));
+    req.settings.xl_fdr = 1e-5;
+    let (_, rx) = run.start(req, None);
+    let folder = done_folder(&until_terminal(&rx, WAIT));
+    let stem = stem_of(0, "a.mzML");
+    assert!(folder
+        .join(format!("nuxl/{stem}_perc_0.0000_XLs.idXML"))
+        .is_file());
+    let outputs = outputs_of(&folder, &stem);
+    assert_eq!(outputs["xls"], format!("nuxl/{stem}_perc_1.0000_XLs.idXML"));
+    assert_eq!(
+        outputs["proteins"],
+        format!("nuxl/{stem}_perc_proteins0.0000_XLs.tsv")
+    );
+}
+
+/// OpenNuXL writes `<-in>.ambiguous_masses.csv` beside its `-in` in every run (calculateNucleotideTags_). Through
+/// a link that is the search folder, which drops it; by the file's own path (Windows' way) beside the user's
+/// file, where the shim removes the one the run made but never one that was there before.
+#[test]
+fn the_tools_debug_table_beside_the_input_is_not_left_behind() {
+    let table = |p: &Path| PathBuf::from(format!("{}.ambiguous_masses.csv", p.display()));
+    // a link in the search folder
+    let run = Run::new();
+    let i = inputs();
+    let (_, rx) = run.start(request(&[&i.mzml], &i.fasta, false, json!({})), None);
+    let folder = done_folder(&until_terminal(&rx, WAIT));
+    let names: Vec<String> = fs::read_dir(&folder)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !names.iter().any(|n| n.ends_with(".ambiguous_masses.csv")),
+        "{names:?}"
+    );
+    assert!(!table(&i.mzml).exists());
+
+    // the user's own path: the run's table is removed, one of the user's stays
+    let run = Run::with_links(InputLinks::PathsOrHardLinks);
+    let b = i.dir.write("other/b.mzML", "<mzML/>");
+    let kept = i.dir.write("other/c.mzML", "<mzML/>");
+    fs::write(table(&kept), "the user's").unwrap();
+    let (_, rx) = run.start(request(&[&b, &kept], &i.fasta, false, json!({})), None);
+    done_folder(&until_terminal(&rx, WAIT));
+    assert!(!table(&b).exists(), "the run's table is gone");
+    assert!(table(&kept).is_file(), "a table that was there stays");
+    let mut left: Vec<String> = fs::read_dir(b.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["b.mzML", "c.mzML", "c.mzML.ambiguous_masses.csv"]);
+}
+
 #[test]
 fn a_database_with_decoys_is_searched_without_them_and_says_so() {
     let run = Run::new();

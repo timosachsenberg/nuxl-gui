@@ -16,7 +16,7 @@
   import { annotatePeaks, type ModificationMass } from '$lib/psm/annotate'
   import { fragmentTolerance, modificationList, spectrumPeaks, svgFileName, ION_TYPES, type IonType } from '$lib/psm/psm'
   import { exportSpectrumSvg } from '$lib/psm/svg-export'
-  import { baseName } from '$lib/results/model'
+  import { baseName, passesPeptideQ } from '$lib/results/model'
   import { formatQValue, parseAccession, parseDescription, scanNumber } from '$lib/results/display'
   import type { LoadedSpectra, PsmSpectra } from '$lib/results/read'
   import type { PeakAnnotationResult } from '$lib/results/types'
@@ -93,7 +93,9 @@
   )
   const fdr = $derived(fdrOf(isXL, fdrs))
   const qValue = $derived(ps.qValue[row])
-  const passes = $derived(!(qValue > fdr.cutoff))
+  // (a peptide PSM also by its peptide-level q-value, as OpenNuXL filters it)
+  const peptideQ = $derived(xl.peptideQValue[row])
+  const passes = $derived(!(qValue > fdr.cutoff) && (isXL || passesPeptideQ(peptideQ, fdr.cutoff)))
 
   // the search's settings: the parameters it changed, else OpenNuXL's defaults
   const parameters = $derived(view.result.settings.parameters)
@@ -468,7 +470,8 @@
       {/if}
     </span>
     {#if fdrGroup !== ''}<span aria-hidden="true">· FDR group {fdrGroup}</span>{/if}
-    <span data-testid="psm-q">· q {formatQValue(qValue)} at the {fdr.name} of {percent(fdr.cutoff)}{#if !passes}<Marker text="above the {fdr.name}" />{/if}</span>
+    <span data-testid="psm-q">· q {formatQValue(qValue)} at the {fdr.name} of {percent(fdr.cutoff)}{#if !passes}<Marker
+          text={qValue > fdr.cutoff ? `above the ${fdr.name}` : `peptide q-value ${formatQValue(peptideQ)}, not below the ${fdr.name}`} />{/if}</span>
   </p>
 
   <div class="rounded-lg border bg-background px-3.5 pt-3 pb-2">

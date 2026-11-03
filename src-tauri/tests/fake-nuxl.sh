@@ -13,10 +13,12 @@
 #   crash     prints two steps, writes OpenMS' error of a file it cannot read to stderr, exits with code 3
 #   segv      prints a step and a line to stderr, then ends with SIGSEGV
 #   diskfull  writes OpenMS' error of an output it cannot write (in nuxl/ of the search folder), exit code 12
-#   fewpsms   as a search, but "Too few PSMs for score recalibration. Skipped." (stderr), no _perc_ files
+#   fewpsms   as a search, but "Too few PSMs for score recalibration. Skipped." (stderr, also with
+#             -percolator_backend none, as OpenNuXL prints it), no _perc_ files
 #   <other>   searches the input and exits 0
 #
-# In the search folder (the parent of <out>'s folder) it appends a line to inputs.txt (the -in path and the file
+# Beside -in it writes OpenNuXL's debug table <in>.ambiguous_masses.csv (every run that gets to the nucleotide
+# tags). In the search folder (the parent of <out>'s folder) it appends a line to inputs.txt (the -in path and the file
 # it resolves to) and leaves tool.pid (its pid) and, for hang and stubborn, children.pid; beside <out> it leaves
 # <stem>.argv.txt (one argument per line). `--help` prints OpenMS' version line (to stderr, as TOPPBase does).
 #
@@ -92,6 +94,7 @@ case "$mode" in
     ;;
   crash)
     echo "Running autotune..."
+    echo "IDFilter excludes 0 spectra."
     progress "loading mzML"
     echo "Schema error: Trying to register schema with name Abs" >&2
     echo "Error: Unable to read file (the input broke $input)" >&2
@@ -113,6 +116,7 @@ esac
 
 echo "Running autotune..."
 echo "autotune: too few non-cross-linked peptides found. Will keep parameters as-is."
+echo "IDFilter excludes 0 spectra."
 progress "loading mzML"
 done_line
 for step in "Filtering spectra..." "Calculate Nucleotide Tags..." "Calculate intensity ranks..." \
@@ -120,6 +124,11 @@ for step in "Filtering spectra..." "Calculate Nucleotide Tags..." "Calculate int
   "Load database from FASTA file..." "Generating decoys..."; do
   progress "$step"
   done_line
+  # (OpenNuXL's debug table, beside -in: File::path(in) + '/' + File::basename(in) + ".ambiguous_masses.csv")
+  if [ "$step" = "Calculate Nucleotide Tags..." ]; then
+    printf 'Ambiguous residues (+adduct) masses that exactly match to other masses.\nTotal\tResidue\tAdduct\n' \
+      > "$(dirname "$input")/$(basename "$input").ambiguous_masses.csv"
+  fi
 done
 results=${FAKE_NUXL_RESULTS:-}
 delay=0
@@ -152,7 +161,8 @@ if [ -n "$results" ]; then
     fi
   done
   echo "done."
-  [ "$backend" != none ] && echo "Too few PSMs for score recalibration. Skipped." >&2
+  # (also with -percolator_backend none, as OpenNuXL)
+  echo "Too few PSMs for score recalibration. Skipped." >&2
   [ -n "$out_tsv" ] && printf 'report\n' > "$out_tsv"
   echo "OpenNuXL took 0.10 s (wall), 0.10 s (CPU), 0.00 s (system), 0.10 s (user); Peak Memory Usage: 10 MB."
   exit 0
@@ -175,10 +185,10 @@ echo "Calculating peptide and XL q-values."
 idxml all "$out"
 write_fdr_outputs "${base}_"
 echo "done."
+# (OpenNuXL warns of too few PSMs also when the rescoring is off)
+[ "$mode" = fewpsms ] && echo "Too few PSMs for score recalibration. Skipped." >&2
 if [ "$backend" != none ]; then
-  if [ "$mode" = fewpsms ]; then
-    echo "Too few PSMs for score recalibration. Skipped." >&2
-  else
+  if [ "$mode" != fewpsms ]; then
     echo "Running percolator."
     echo "done."
     idxml percolator "${base}_perc.idXML"
