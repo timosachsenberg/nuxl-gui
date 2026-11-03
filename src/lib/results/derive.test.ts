@@ -6,6 +6,9 @@ import {
   isEnz,
   modificationMass,
   openmsString,
+  parseOpenmsSequence,
+  tableModifications,
+  unimodAccession,
   pinEnzymeName,
   proformaString,
   reversePeptides,
@@ -104,4 +107,45 @@ test('ion names as the web app writes them', () => {
   expect(webIonName('b3+')).toBe('b3')
   expect(webIonName('y5++')).toBe('y5++')
   expect(webIonName('y12+')).toBe('y12')
+})
+
+describe('parseOpenmsSequence and tableModifications', () => {
+  const noAdduct = () => NaN
+  test("OpenNuXL's sequences: adducts in parentheses, Unimod names, terminal and mass-only modifications", () => {
+    expect(parseOpenmsSequence('AEADNLDDK(NuXL:U-H3O4P1)K')).toEqual({
+      sequence: 'AEADNLDDKK',
+      mods: [{ position: 8, name: 'NuXL:U-H3O4P1', mass: NaN, absolute: false }],
+    })
+    expect(parseOpenmsSequence('.(Acetyl)M(Oxidation)PEPTIDER.(Amidated)').mods.map((m) => [m.position, m.name])).toEqual([
+      [-1, 'Acetyl'],
+      [0, 'Oxidation'],
+      [9, 'Amidated'],
+    ])
+    expect(parseOpenmsSequence('PEPK(Label:13C(6)15N(2))').mods[0].name).toBe('Label:13C(6)15N(2)')
+    expect(parseOpenmsSequence('M[+15.9949]K[147.0354]').mods).toEqual([
+      { position: 0, name: '', mass: 15.9949, absolute: false },
+      { position: 1, name: '', mass: 147.0354, absolute: true },
+    ])
+    expect(() => parseOpenmsSequence('PEPK(Oxidation')).toThrow(/no '\)'/)
+    expect(() => parseOpenmsSequence('PEP K')).toThrow(/unexpected/)
+    expect(() => parseOpenmsSequence('M[abc]')).toThrow(/no mass/)
+  })
+
+  test('the table modifications: Unimod by name and accession, adducts without their prefix, masses as deltas', () => {
+    const { sequence, mods } = parseOpenmsSequence('.(Acetyl)M(UniMod:35)C(Carbamidomethyl)K(NuXL:U-H3O4P1)M[147.0354]S[+79.9663]')
+    const adduct = (id: string) => (id === 'NuXL:U-H3O4P1' ? 226.058973 : NaN)
+    expect(tableModifications(sequence, mods, adduct)).toEqual([
+      { position: -1, name: 'Acetyl', unimod: 1, mass: 42.010565 },
+      { position: 0, name: 'Oxidation', unimod: 35, mass: 15.994915 },
+      { position: 1, name: 'Carbamidomethyl', unimod: 4, mass: 57.021464 },
+      { position: 2, name: 'U-H3O4P1', unimod: -1, mass: 226.058973 },
+      { position: 3, name: '+15.9949', unimod: -1, mass: 147.0354 - 131.040485 },
+      { position: 4, name: '+79.9663', unimod: -1, mass: 79.9663 },
+    ])
+    expect(tableModifications('K', [{ position: 0, name: 'NoSuchMod', mass: NaN, absolute: false }], noAdduct)).toEqual([
+      { position: 0, name: 'NoSuchMod', unimod: -1, mass: NaN },
+    ])
+    expect(unimodAccession('Phospho')).toBe(21)
+    expect(unimodAccession('NoSuchMod')).toBe(-1)
+  })
 })

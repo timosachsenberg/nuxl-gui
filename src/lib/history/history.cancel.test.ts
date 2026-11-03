@@ -25,13 +25,13 @@ const request: SearchRequest = {
   files: [{ id: 'f1', path: '/runs/a.mzML' }],
   database: '/db/human.fasta',
   contaminants: false,
-  settings: { parameters: {}, rescore: true, peptdeep: false, threads: 0 },
+  settings: { parameters: {}, rescore: true, threads: 0, peptideFdr: 0.01, xlFdr: 0.01 },
 }
 const meta = {
   design: { rows: [], samples: [], conditions: [] } as never,
   psmFdr: 0.01,
-  proteinFdr: 0.01,
-  settings: { parameters: {}, fixedMods: [], database: 'human.fasta', rescore: true, peptdeep: false, contaminants: false },
+  proteinFdr: 1,
+  settings: { parameters: {}, fixedMods: [], database: 'human.fasta', rescore: true, contaminants: false, peptideFdr: 0.01, xlFdr: 0.01 },
 }
 const settle = () => new Promise((r) => setTimeout(r, 0))
 
@@ -46,7 +46,7 @@ describe('a search that finishes while it is cancelled', () => {
   it('has its folder deleted right away, and is not in History', async () => {
     initHistory()
     await refreshHistory()
-    disk.addFolder('19-0', { 'qpx/quantms.psm.parquet': 'x' })
+    disk.addFolder('19-0', { 'inputs.json': 'x' })
     let finish!: (d: { folder: string }) => void
     const done = new Promise<{ folder: string }>((r) => (finish = r))
     fake.start.mockImplementationOnce(async () => ({ searchId: '19-0', done, stop: () => {} }))
@@ -65,7 +65,7 @@ describe('a search that finishes while it is cancelled', () => {
   })
 
   it('stays in the list when the folder cannot be deleted yet; the next attempt removes it', async () => {
-    disk.addFolder('20-0', { 'qpx/quantms.psm.parquet': 'x' })
+    disk.addFolder('20-0', { 'inputs.json': 'x' })
     disk.failures.delete = 'busy'
     let finish!: (d: { folder: string }) => void
     const done = new Promise<{ folder: string }>((r) => (finish = r))

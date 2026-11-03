@@ -1,12 +1,11 @@
 // History and project files, without Tauri or Svelte: the record of a search (`search.json`), what is
 // written to the search's folder when the search is saved, how a folder is opened again, and the
-// project file (`.prose`: the folder's regular files as a zip, made and read here with fflate).
+// project file (`.nuxl`: the folder's regular files as a zip, made and read here with fflate).
 //
-// The folder is the shim's (docs/parity.md for the tool's outputs); History adds
+// The folder is the shim's (docs/design.md §2 for OpenNuXL's outputs); History adds
 //
-//   search.json     the record below, written as soon as ProSE has ended (before the results are read,
-//                   from the request and the QPX run view qpx/quantms.run.parquet): a folder with it is a
-//                   saved search
+//   search.json     the record below, written as soon as the OpenNuXL runs have ended (before the results are
+//                   read, from the request and the runs' filtered files): a folder with it is a saved search
 //   proteins.fasta  every protein of the result's protein table (accession, description, sequence;
 //                   generated decoys as searched), written once the results are read, so that the search
 //                   opens when the FASTA it was searched with has moved, or on another computer; the
@@ -22,12 +21,11 @@
 
 import { strToU8, unzipSync } from 'fflate'
 import type { DesignResolution } from '../design/model'
-import { readSearch, RUNS, type ByteRange, type SearchFiles } from '../results/read'
+import { countTargetPsms, readSearch, type ByteRange, type SearchFiles } from '../results/read'
 import type { ResultTables } from '../results/types'
 import { formatBytes } from '../format/bytes'
 import { errorText } from '../format/error'
 import { fileSafe, resultName } from '../results/display'
-import { readRuns, targetPsmsOf } from '../results/summary'
 import type { EndedSearch, OpenResult } from '../search/session.svelte'
 // (only the version: a named import of a JSON module leaves the rest of package.json out of the bundle)
 import { version } from '../../../package.json'
@@ -49,7 +47,7 @@ export type SearchRecord = {
   name: string
   /** ISO 8601, when the search finished. */
   createdAt: string
-  /** The version of the app that saved it, and of the ProSE tool that searched. */
+  /** The version of the app that saved it, and of the OpenNuXL tool that searched. */
   appVersion: string
   toolVersion: string
   /** The names of the searched files, in the order of the design. */
@@ -58,18 +56,20 @@ export type SearchRecord = {
   database: string
   design: DesignResolution
   settings: {
-    /** The parameters that differ from ProSE's defaults. */
+    /** The parameters that differ from OpenNuXL's defaults. */
     parameters: Record<string, unknown>
     /** The fixed modifications of the search (OpenMS names), which the tables do not mark. */
     fixedMods: string[]
     rescore: boolean
-    peptdeep: boolean
     contaminants: boolean
     presetId?: string
+    /** The FDRs of the peptide PSMs and of the cross-link PSMs (fractions). */
+    peptideFdr: number
+    xlFdr: number
   }
-  /** Target PSMs within the PSM FDR: the key figure of the list. */
+  /** Target PSMs within the search's FDRs (peptides and cross-links): the key figure of the list. */
   psms: number
-  /** The search's cutoffs (q-values). */
+  /** The search's cutoffs (q-values): psmFdr is the peptides' (settings.peptideFdr); proteinFdr 1 (no protein FDR). */
   psmFdr: number
   proteinFdr: number
   /** The time of the search proper, in seconds. */
@@ -109,13 +109,13 @@ export class ProjectError extends Error {
   }
 }
 
-/** The project (or stored search) was saved by a newer version of ProSE than this one. */
+/** The project (or stored search) was saved by a newer version of NuXL Desktop than this one. */
 export class ProjectVersionError extends ProjectError {
   readonly schema: number
   constructor(schema: number, kind: 'project' | 'search' = 'project') {
     super(
-      `This ${kind} was saved by a newer version of ProSE (schema ${schema}) and cannot be opened by this one ` +
-        `(it reads schema ${SCHEMA_VERSION}). Open it with the latest version of ProSE.`,
+      `This ${kind} was saved by a newer version of NuXL Desktop (schema ${schema}) and cannot be opened by this one ` +
+        `(it reads schema ${SCHEMA_VERSION}). Open it with the latest version of NuXL Desktop.`,
     )
     this.name = 'ProjectVersionError'
     this.schema = schema
@@ -141,7 +141,7 @@ export interface HistoryBackend {
    */
   saveProject(id: string, name: string, onProgress?: (fraction: number) => void): Promise<string | null>
   /**
-   * The open dialog for a `.prose` file and the bytes of the file chosen, or null if the user cancelled.
+   * The open dialog for a `.nuxl` file and the bytes of the file chosen, or null if the user cancelled.
    * (The dialog and the read are one step in Rust: the page never names a path to read.)
    */
   openProject(): Promise<Uint8Array | null>
@@ -152,26 +152,29 @@ export interface HistoryBackend {
 //------------------------------------------------------------------------------------------------
 // The record
 
-/** Target PSMs within the PSM FDR (a PSM without q-value counts): the "PSMs" key figure. */
-export function countPsms(tables: ResultTables, psmFdr: number): number {
-  const { count, decoy, qValue } = tables.psms
+/**
+ * Target PSMs within the search's FDRs (a PSM without q-value counts): the "PSMs" key figure. The cross-links
+ * (psms.xl.isXL) count at `xlFdr`, the others at `psmFdr` (the peptides'); without `xlFdr`, all at `psmFdr`.
+ */
+export function countPsms(tables: ResultTables, psmFdr: number, xlFdr = psmFdr): number {
+  const { count, decoy, qValue, xl } = tables.psms
   let n = 0
-  for (let i = 0; i < count; i++) if (!decoy[i] && !(qValue[i] > psmFdr)) n++
+  for (let i = 0; i < count; i++) if (!decoy[i] && !(qValue[i] > (xl.isXL[i] ? xlFdr : psmFdr))) n++
   return n
 }
 
 /** The record of `result` under `name`. A stored result keeps the versions that made it. */
 export function recordOf(result: OpenResult, name: string, toolVersion: string): SearchRecord {
   return {
-    ...endedRecordOf({ ...result, seconds: result.outcome.seconds }, name, toolVersion, countPsms(result.outcome.tables, result.psmFdr)),
+    ...endedRecordOf({ ...result, seconds: result.outcome.seconds }, name, toolVersion, countPsms(result.outcome.tables, result.psmFdr, result.settings.xlFdr)),
     appVersion: result.stored?.appVersion ?? APP_VERSION,
     toolVersion: result.stored?.moduleVersion ?? toolVersion,
   }
 }
 
 /**
- * The record of a search whose ProSE has ended, before its results are read: from the request (`search`)
- * and the target PSMs that ProSE reports (`psms`, `psmsOfSearch`).
+ * The record of a search whose OpenNuXL runs have ended, before its results are read: from the request (`search`)
+ * and the target PSMs of the runs' filtered files (`psms`, `psmsOfSearch`).
  */
 export function endedRecordOf(search: EndedSearch, name: string, toolVersion: string, psms: number): SearchRecord {
   const s = search.settings
@@ -189,9 +192,10 @@ export function endedRecordOf(search: EndedSearch, name: string, toolVersion: st
       parameters: s.parameters,
       fixedMods: s.fixedMods,
       rescore: s.rescore,
-      peptdeep: s.peptdeep,
       contaminants: s.contaminants,
       ...(s.presetId !== undefined ? { presetId: s.presetId } : {}),
+      peptideFdr: s.peptideFdr,
+      xlFdr: s.xlFdr,
     },
     psms,
     psmFdr: search.psmFdr,
@@ -201,16 +205,11 @@ export function endedRecordOf(search: EndedSearch, name: string, toolVersion: st
 }
 
 /**
- * The target PSMs of a search by its QPX run view (the sum of `identified_spectra_count`; 0 if it says none).
- * Rejects if the file is missing or is not ProSE's run view.
+ * The target PSMs of a search within its FDRs, from its runs' filtered files (read.ts `countTargetPsms`). Rejects if
+ * a file cannot be read, naming it.
  */
 export async function psmsOfSearch(backend: HistoryBackend, id: string): Promise<number> {
-  const bytes = await backend.read(id, RUNS)
-  try {
-    return targetPsmsOf(await readRuns(bytes))
-  } catch (e) {
-    throw new Error(`${RUNS}: ${errorText(e)}`, { cause: e })
-  }
+  return countTargetPsms(folderFiles(backend, id))
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -224,7 +223,7 @@ export function parseRecord(text: string, kind: 'project' | 'search' = 'search')
     throw new ProjectError(`${RECORD_FILE} is not valid JSON.`)
   }
   if (!isObject(value)) throw new ProjectError(`${RECORD_FILE} is not a search record.`)
-  if (typeof value.schema !== 'number') throw new ProjectError(`${RECORD_FILE} has no schema: it is not a ProSE search record.`)
+  if (typeof value.schema !== 'number') throw new ProjectError(`${RECORD_FILE} has no schema: it is not a NuXL search record.`)
   if (value.schema > SCHEMA_VERSION) throw new ProjectVersionError(value.schema, kind)
   if (value.schema !== SCHEMA_VERSION) throw new ProjectError(`${RECORD_FILE} has the unknown schema ${value.schema}.`)
   const bad = (what: string) => new ProjectError(`${RECORD_FILE} is incomplete: ${what}.`)
@@ -243,6 +242,14 @@ export function parseRecord(text: string, kind: 'project' | 'search' = 'search')
   }
   const settings = value.settings
   if (!isObject(settings) || !isObject(settings.parameters) || !Array.isArray(settings.fixedMods)) throw bad('settings is missing')
+  // the FDRs of the peptides and the cross-links: fractions. A record without them (none of this app writes one; the
+  // Rust tests' project fixture has the record of ProSE desktop) takes the PSM FDR for both
+  for (const k of ['peptideFdr', 'xlFdr']) {
+    const v = settings[k]
+    if (v === undefined && typeof value.psmFdr === 'number' && value.psmFdr > 0 && value.psmFdr <= 1) settings[k] = value.psmFdr
+    else if (typeof v !== 'number' || !(v > 0 && v <= 1)) throw bad(`settings.${k} is not a fraction`)
+  }
+  delete settings.peptdeep
   return value as unknown as SearchRecord
 }
 
@@ -260,16 +267,17 @@ export function resultFromRecord(record: SearchRecord, outcome: OpenResult['outc
       fixedMods: s.fixedMods,
       database: record.database,
       rescore: s.rescore,
-      peptdeep: s.peptdeep,
       contaminants: s.contaminants,
       ...(s.presetId !== undefined ? { presetId: s.presetId } : {}),
+      peptideFdr: s.peptideFdr,
+      xlFdr: s.xlFdr,
     },
   }
 }
 
 /**
  * `proteins.fasta`: every protein of the result's protein table, as searched (decoys included; those
- * ProSE generated with the sequences the reader rebuilt). The reader looks here first.
+ * OpenNuXL generated with their sequences). The reader looks here first.
  */
 export function proteinsFasta(tables: ResultTables): string {
   const { count, accession, description, sequence } = tables.proteins
@@ -326,10 +334,10 @@ export async function openSearch(
 //------------------------------------------------------------------------------------------------
 // Project files
 
-/** `<name>.prose`, the name reduced to letters (of any script), digits, `-`, `_` and `.` (`fileSafe`). */
+/** `<name>.nuxl`, the name reduced to letters (of any script), digits, `-`, `_` and `.` (`fileSafe`). */
 export function projectFileName(name: string): string {
   const safe = fileSafe(name)
-  return `${safe.length >= 1 ? safe : 'prose-results'}.prose`
+  return `${safe.length >= 1 ? safe : 'nuxl-results'}.nuxl`
 }
 
 /** The name a result has in project files and exports when History has none for it. */
@@ -337,7 +345,7 @@ export function defaultName(result: OpenResult): string {
   return resultName(result.design.rows.map((r) => r.fileName))
 }
 
-/** Files that deflate does not shrink (Parquet is compressed already): stored as they are (`project.rs` `stored`). */
+/** Files that deflate does not shrink (compressed already): stored as they are (`project.rs` `stored`). */
 export const STORE = /\.(parquet|gz|zst)$/i
 /** The deflate level of the other files: the quickest (they are small). */
 export const LEVEL = 1
@@ -346,7 +354,7 @@ export const LEVEL = 1
  * Files of the folder that a project leaves out: the database copy (`proteins.fasta` has the sequences)
  * and the tool's log (its first line is the full command line, with paths of this computer). As `project.rs` `LEFT_OUT`.
  */
-export const LEFT_OUT: ReadonlySet<string> = new Set(['database.fasta', 'database.json', 'prose.log'])
+export const LEFT_OUT: ReadonlySet<string> = new Set(['database.fasta', 'database.json', 'nuxl.log'])
 
 /**
  * `inputs.json` as a project holds it: the files by name only, not the paths of this computer.
@@ -404,8 +412,8 @@ function tooLargeForAProject(bytes: number, files: number): ProjectError {
   const what = files > MAX_ZIP_ENTRIES ? `${files} files` : formatBytes(bytes)
   return new ProjectError(
     `This search is too large for a project file: its results take ${what}, and a project file holds at most ` +
-      `${formatBytes(MAX_UNPACKED)}. That is the most ProSE can open. A larger zip, over 4 GB or 65,535 files, needs ` +
-      'the zip64 format, which ProSE does not write. The search stays in History on this computer.',
+      `${formatBytes(MAX_UNPACKED)}. That is the most NuXL Desktop can open. A larger zip, over 4 GB or 65,535 files, needs ` +
+      'the zip64 format, which NuXL Desktop does not write. The search stays in History on this computer.',
   )
 }
 
@@ -482,7 +490,7 @@ function centralDirectory(bytes: Uint8Array): CentralEntry[] {
 }
 
 /**
- * The files of a project file, checked before anything is written: a zip with `.prose`'s plain names
+ * The files of a project file, checked before anything is written: a zip with `.nuxl`'s plain names
  * (no `..`, no absolute path, no link, no name twice, no file that is also a folder), within the size
  * limit (`maxUnpacked`, the sum of the sizes the zip declares, checked again as fflate unpacks it), and a
  * `search.json` of this schema. The zip's directory is read here and by fflate, and the two must agree
@@ -540,7 +548,7 @@ export function unpackProject(bytes: Uint8Array, maxUnpacked = MAX_UNPACKED): { 
     }
   }
   const record = entries.find((e) => e.name === RECORD_FILE)
-  if (!record) throw new ProjectError(`This file is not a ProSE project: it has no ${RECORD_FILE}.`)
+  if (!record) throw new ProjectError(`This file is not a NuXL project: it has no ${RECORD_FILE}.`)
   parseRecord(new TextDecoder().decode(record.data), 'project')
   return entries
 }
@@ -568,7 +576,7 @@ export function frameEntries(entries: { name: string; data: Uint8Array }[]): Uin
 }
 
 /**
- * Opens the dialog for a `.prose` file (in Rust, which reads the file) and makes a search of it in History. Resolves with the new
+ * Opens the dialog for a `.nuxl` file (in Rust, which reads the file) and makes a search of it in History. Resolves with the new
  * search's id, or null if the user cancelled. Throws a ProjectError that says what is wrong.
  */
 export async function importProject(backend: HistoryBackend): Promise<string | null> {

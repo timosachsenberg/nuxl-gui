@@ -127,12 +127,11 @@ async function scanIndex(read: ReadRange, maxBytes: number): Promise<SpectrumInd
   let at = 0
   let listEnd: number | undefined
   while (true) {
-    if (at >= maxBytes) {
-      throw new SpectrumError(`The file has no index and is larger than ${Math.round(maxBytes / 2 ** 20)} MB, so its spectra are not looked up.`)
-    }
-    const bytes = await read({ offset: at, length: SCAN_CHUNK })
+    // (one byte beyond the limit, to tell a file of the limit from a larger one)
+    const length = Math.min(SCAN_CHUNK, maxBytes + 1 - at)
+    const bytes = await read({ offset: at, length })
     const text = bytesText(bytes)
-    const atEnd = bytes.length < SCAN_CHUNK
+    const atEnd = bytes.length < length
     // a tag cut at the chunk's end is read again with the next chunk
     let next = atEnd ? text.length : Math.max(0, text.length - 64)
     tag.lastIndex = 0
@@ -157,6 +156,9 @@ async function scanIndex(read: ReadRange, maxBytes: number): Promise<SpectrumInd
       break
     }
     if (atEnd) break
+    if (at + bytes.length > maxBytes) {
+      throw new SpectrumError(`The file has no index and is larger than ${Math.max(1, Math.round(maxBytes / 2 ** 20))} MB, so its spectra are not looked up.`)
+    }
     if (next === 0) next = text.length // (no progress: a tag longer than a chunk)
     at += next
   }
@@ -239,7 +241,7 @@ const NUMPRESS = new Set(['MS:1002312', 'MS:1002313', 'MS:1002314', 'MS:1002746'
 
 /** The values of a binaryDataArray (little-endian floats, as mzML has them). */
 function decodeArray(text: string, length: number): { kind: 'mz' | 'intensity' | null; values: Float64Array } {
-  const params = cvParams(text.slice(0, text.indexOf('<binary')))
+  const params = cvParams(text.slice(0, text.indexOf('<binary>')))
   const kind = params.has('MS:1000514') ? 'mz' : params.has('MS:1000515') ? 'intensity' : null
   if (kind === null) return { kind, values: new Float64Array(0) }
   for (const accession of params.keys()) {

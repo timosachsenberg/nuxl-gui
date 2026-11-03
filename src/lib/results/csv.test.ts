@@ -52,6 +52,28 @@ describe('toCsv', () => {
     ])
   })
 
+  it('NuXL: writes the cross-link columns of the PSMs and the peptides', () => {
+    const tables = makeTables({
+      files: ['ctrl_a.mzML', 'egf_a.mzML'],
+      proteins: [{ accession: 'P1', sequence: 'MKAEADNLDDKKLR' }],
+      peptides: [{ sequence: 'AEADNLDDKK', adduct: 'U-H3O4P1' }, { sequence: 'AEADNLDDKK' }].map((p) => ({ ...p, proteins: [0] })),
+      psms: [{ peptide: 0, site: 8 }, { peptide: 1 }],
+    })
+    tables.psms.xl.adductMass[0] = 226.058973
+    tables.psms.xl.siteScore[0] = 0.75
+    const m = buildModel(tables, sampleDesign(), { showTechReplicates: false, ...cutoffs })
+    expect(lines(toCsv(m, 'psms', rows(0, 1), ['crossLink', 'adduct', 'adductMass', 'nucleotide', 'site', 'siteScore', 'fdrGroup'], all))).toEqual([
+      'Cross-link,Adduct,Adduct mass (Da),Nucleotide,Site,Site score,FDR group',
+      '1,U-H3O4P1,226.058973,U,K9,0.75,XL',
+      '0,,,,,,peptide',
+    ])
+    expect(lines(toCsv(m, 'peptides', rows(0, 1), ['sequence', 'adduct', 'crossLink'], all))).toEqual([
+      'Sequence,Adduct,Cross-link',
+      'AEADNLDDKK,U-H3O4P1,1',
+      'AEADNLDDKK,,0',
+    ])
+  })
+
   it('quotes fields with commas, quotes and line breaks', () => {
     const m = model()
     m.tables.proteins.description[1] = 'say "hi", then\nleave'
@@ -71,7 +93,7 @@ describe('toCsv', () => {
     })
     const m = buildModel(tables, resolveDesign([input('a.mzML')]), { showTechReplicates: false, ...cutoffs })
     expect(lines(toCsv(m, 'peptides', rows(0), ['proteins'], all))).toEqual(['Proteins', 'P1;P2'])
-    expect(lines(toCsv(m, 'psms', rows(0), ['qValue', 'score'], all))).toEqual(['q-value,ln(hyperscore)', ',50'])
+    expect(lines(toCsv(m, 'psms', rows(0), ['qValue', 'score'], all))).toEqual(['q-value,NuXL score', ',50'])
   })
 
   it('writes the filtered, sorted view', () => {
@@ -120,13 +142,13 @@ describe('toCsv', () => {
     tables.psms.deltaMass[0] = -0.002
     const m = buildModel(tables, design, { showTechReplicates: false, ...cutoffs })
     expect(lines(toCsv(m, 'proteins', rows(0, 1, 2), ['accession', 'description', 'score', 'samples'], all))).toEqual([
-      "Accession,Description,Best ln(hyperscore),'=evil 1",
+      "Accession,Description,Best NuXL score,'=evil 1",
       `'@user,"'=HYPERLINK(""http://x"",""y"")",1,1`,
       `ok,"'+49 (0)7071, Tübingen",1,1`,
       "'\tTab,'-1 is text here,1,0", // a tab needs no quotes
     ])
     // numbers keep their sign
-    expect(lines(toCsv(m, 'psms', rows(0), ['score', 'deltaMass', 'peptide'], all))).toEqual(['ln(hyperscore),Delta mass (Da),Peptide', '-12.5,-0.002,AAAAAK'])
+    expect(lines(toCsv(m, 'psms', rows(0), ['score', 'deltaMass', 'peptide'], all))).toEqual(['NuXL score,Delta mass (Da),Peptide', '-12.5,-0.002,AAAAAK'])
   })
 
   it('writes and sorts the gene of a UniProt description', () => {
@@ -166,13 +188,13 @@ describe('toCsv', () => {
     ])
   })
 
-  it('names the score after what the search used: Percolator or ln(hyperscore)', () => {
+  it('names the score after what the search used: Percolator or NuXL score', () => {
     const percolator = buildModel(sampleTables(), sampleDesign(), { showTechReplicates: false, rescored: true, ...cutoffs })
     expect(lines(toCsv(percolator, 'psms', rows(), ['score'], all))).toEqual(['Percolator score'])
     expect(lines(toCsv(percolator, 'proteins', rows(), ['score'], all))).toEqual(['Best Percolator score'])
     const hyperscore = model()
-    expect(lines(toCsv(hyperscore, 'psms', rows(), ['score'], all))).toEqual(['ln(hyperscore)'])
-    expect(lines(toCsv(hyperscore, 'proteins', rows(), ['score'], all))).toEqual(['Best ln(hyperscore)'])
+    expect(lines(toCsv(hyperscore, 'psms', rows(), ['score'], all))).toEqual(['NuXL score'])
+    expect(lines(toCsv(hyperscore, 'proteins', rows(), ['score'], all))).toEqual(['Best NuXL score'])
   })
 
   it('writes only the header for no rows, and rejects unknown columns', () => {

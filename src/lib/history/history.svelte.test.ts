@@ -65,7 +65,7 @@ describe('History', () => {
       ['2-0', 'second'],
       ['1-0', 'first'],
     ])
-    expect(history.entries[0]).toMatchObject({ files: ['Ecoli_1.mzML', 'Ecoli_2.mzML'], database: 'human.fasta', error: null })
+    expect(history.entries[0]).toMatchObject({ files: ['OpenNuXL_1_input.mzML'], database: 'OpenNuXL_1_input.fasta', error: null })
     expect(history.entries[0].psms).toBeGreaterThan(0)
     expect(history.entries[0].bytes).toBeGreaterThan(1000)
 
@@ -85,11 +85,11 @@ describe('History', () => {
     disk.addFolder('2-0', { 'search.json': '{ broken' })
     disk.addFolder('3-0', { 'search.json': JSON.stringify({ schema: 2, id: '3-0', name: 'future' }) })
     // a finished search that was not saved (no record): listed as such, so that it can be deleted
-    disk.addFolder('4-0', { 'qpx/quantms.psm.parquet': 'x' })
+    disk.addFolder('4-0', { 'inputs.json': 'x' })
     await refreshHistory()
     expect(history.entries.map((e) => e.id).sort()).toEqual(['1-0', '2-0', '3-0', '4-0'])
     expect(history.entries.find((e) => e.id === '2-0')?.error).toMatch(/search\.json/)
-    expect(history.entries.find((e) => e.id === '3-0')?.error).toMatch(/newer version of ProSE/)
+    expect(history.entries.find((e) => e.id === '3-0')?.error).toMatch(/newer version of NuXL Desktop/)
     expect(history.entries.find((e) => e.id === '4-0')?.error).toMatch(/This search was not saved/)
     expect(history.entries.find((e) => e.id === '1-0')?.error).toBeNull()
     // opening a broken one says why; opening the good one works
@@ -142,7 +142,7 @@ describe('History', () => {
     expect(history.save).toEqual({ id: '1-0', state: 'saved' })
     expect(history.entries.map((e) => e.id)).toEqual(['1-0'])
     // the name of a search is that of the exports until it is renamed
-    expect(history.entries[0].name).toBe('Ecoli')
+    expect(history.entries[0].name).toBe('OpenNuXL_1_input')
 
     disk.addFolder('2-0', fixture)
     disk.failures.save = 'no space left'
@@ -199,11 +199,11 @@ describe('History', () => {
   test('a project saves from a search and opens again as a new search of History', async () => {
     await finished('1-0', 'first', '2026-10-20T09:00:00.000Z')
     const open = { ...result, id: '1-0', stored: { name: 'first', appVersion: '0.1.0', moduleVersion: '3.6.0' } }
-    expect(await saveProjectFile(open)).toBe('/saved/first.prose')
+    expect(await saveProjectFile(open)).toBe('/saved/first.nuxl')
     const bytes = disk.saved[0].bytes
     // open it (the same disk: a second copy of the search)
-    disk.projects.set('/p/first.prose', bytes)
-    disk.chosen = '/p/first.prose'
+    disk.projects.set('/p/first.nuxl', bytes)
+    disk.chosen = '/p/first.nuxl'
     expect(await openProjectFile()).toBe(true)
     expect(history.entries).toHaveLength(2)
     const copy = history.entries.find((e) => e.id !== '1-0')!
@@ -223,7 +223,7 @@ describe('History', () => {
 
   test('the project of a search that failed to save is saved to History first; if that fails, it says so', async () => {
     disk.addFolder('5-0', fixture)
-    expect(await saveProjectFile({ ...result, id: '5-0' })).toBe('/saved/Ecoli.prose')
+    expect(await saveProjectFile({ ...result, id: '5-0' })).toBe('/saved/OpenNuXL_1_input.nuxl')
     expect(history.entries.map((e) => e.id)).toContain('5-0')
     disk.addFolder('6-0', fixture)
     disk.failures.save = 'read-only'
@@ -232,14 +232,14 @@ describe('History', () => {
 
   test('a project of a newer version is refused with its message', async () => {
     const { strToU8, zipSync } = await import('fflate')
-    disk.projects.set('/p/new.prose', zipSync({ 'search.json': strToU8(JSON.stringify({ schema: 3 })) }))
-    disk.chosen = '/p/new.prose'
-    await expect(openProjectFile()).rejects.toThrow(/saved by a newer version of ProSE \(schema 3\)/)
+    disk.projects.set('/p/new.nuxl', zipSync({ 'search.json': strToU8(JSON.stringify({ schema: 3 })) }))
+    disk.chosen = '/p/new.nuxl'
+    await expect(openProjectFile()).rejects.toThrow(/saved by a newer version of NuXL Desktop \(schema 3\)/)
     expect(history.entries).toEqual([])
   })
 
   test('a disk error while opening a project is a ProjectError with its text', async () => {
-    disk.chosen = '/p/absent.prose'
+    disk.chosen = '/p/absent.nuxl'
     await expect(openProjectFile()).rejects.toBeInstanceOf(ProjectError)
     await expect(openProjectFile()).rejects.toThrow(/cannot be read/)
   })

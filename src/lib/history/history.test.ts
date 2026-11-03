@@ -1,12 +1,11 @@
 // History without the disk: the record, the folder a saved search leaves, the project file (read with
 // fflate; made by the Rust side, here by the memory backend, and one the Rust side made: fixtures/rust-project.prose),
-// and how a project is refused. Against a search folder of the pinned tool
-// (results/fixtures/example) held in memory; the Rust side has its own tests (src-tauri/tests/history.rs).
+// and how a project is refused. Against the reader's example search folder (results/fixtures/example, OpenNuXL's
+// test data) held in memory; the Rust side has its own tests (src-tauri/tests/history.rs).
 
 import { strToU8, zipSync } from 'fflate'
 import { readFileSync } from 'node:fs'
 import { beforeAll, describe, expect, test, vi } from 'vitest'
-import { OldLayoutError, RUNS } from '../results/read'
 import type { OpenResult } from '../search/session.svelte'
 import {
   countPsms,
@@ -59,12 +58,15 @@ describe('the record', () => {
       name: 'Example',
       createdAt: '2026-10-20T10:00:00.000Z',
       toolVersion: '3.6.0',
-      files: ['Ecoli_1.mzML', 'Ecoli_2.mzML'],
-      database: 'human.fasta',
-      psms: countPsms(result.outcome.tables, 0.02),
+      files: ['OpenNuXL_1_input.mzML'],
+      database: 'OpenNuXL_1_input.fasta',
+      // within the peptides' and the cross-links' FDR (1 %): 3 peptide PSMs, 14 cross-links
+      psms: 17,
       seconds: 12.5,
     })
-    expect(record.psms).toBeGreaterThan(0)
+    expect(record.psms).toBe(countPsms(result.outcome.tables, 0.01, 0.01))
+    expect(record.settings).toMatchObject({ peptideFdr: 0.01, xlFdr: 0.01 })
+    expect('peptdeep' in record.settings).toBe(false)
     expect(record.appVersion).toMatch(/^\d+\.\d+\.\d+/)
     // a stored result keeps the versions that made it
     const stored = recordOf({ ...result, stored: { name: 'x', appVersion: '0.0.9', moduleVersion: '3.5.0' } }, 'y', '3.6.0')
@@ -86,13 +88,15 @@ describe('the record', () => {
     refuse((r) => delete r.design, /design is missing/)
     refuse((r) => delete r.settings, /settings is missing/)
     refuse((r) => (r.psmFdr = 'x'), /psmFdr is missing/)
+    refuse((r) => ((r.settings as Record<string, unknown>).xlFdr = 'x'), /settings.xlFdr is not a fraction/)
+    refuse((r) => ((r.settings as Record<string, unknown>).peptideFdr = 0), /settings.peptideFdr is not a fraction/)
     refuse((r) => delete r.name, /name is missing/)
   })
 
   test('a newer schema is refused with a message', () => {
     const newer = JSON.stringify({ ...recordOf(result, 'x', '1'), schema: 2 })
     expect(() => parseRecord(newer)).toThrow(ProjectVersionError)
-    expect(() => parseRecord(newer)).toThrow(/saved by a newer version of ProSE \(schema 2\).*reads schema 1/)
+    expect(() => parseRecord(newer)).toThrow(/saved by a newer version of NuXL Desktop \(schema 2\).*reads schema 1/)
     expect(() => parseRecord(newer, 'project')).toThrow(/This project was saved by a newer version/)
     expect(() => parseRecord(newer)).toThrow(/This search was saved by a newer version/)
   })
@@ -100,19 +104,21 @@ describe('the record', () => {
 
 describe('proteins.fasta', () => {
   test('lists every protein of the table, decoys as searched', async () => {
-    // (the web app's example: its result has decoy proteins, the app's example none)
-    const { tables } = (await exampleResult(exampleFolder('suitability'))).outcome
+    // (a decoy protein, as a peptide of a target and a decoy has it)
+    const tables = structuredClone((await exampleResult(exampleFolder('runs'))).outcome.tables)
+    tables.proteins.decoy[1] = 1
+    tables.proteins.accession[1] = `DECOY_${tables.proteins.accession[1]}`
     const { proteins } = tables
     const fasta = proteinsFasta(tables)
     const lines = fasta.trimEnd().split('\n')
     expect(lines.length).toBe(2 * proteins.count)
-    expect(proteins.count).toBeGreaterThan(10)
+    expect(proteins.count).toBe(5)
     for (let p = 0; p < proteins.count; p++) {
       const head = proteins.description[p] ? `${proteins.accession[p]} ${proteins.description[p]}` : proteins.accession[p]
       expect(lines[2 * p]).toBe(`>${head}`)
       expect(lines[2 * p + 1]).toBe(proteins.sequence[p])
     }
-    // decoys are in it, with their generated sequences
+    // decoys are in it, with their sequences
     const decoy = [...proteins.decoy].findIndex((d) => d === 1)
     expect(decoy).toBeGreaterThanOrEqual(0)
     expect(proteins.sequence[decoy].length).toBeGreaterThan(0)
@@ -146,19 +152,10 @@ describe('a saved search', () => {
     expect(opened.result.stored).toEqual({ name: 'Example', appVersion: recordOf(result, '', '').appVersion, moduleVersion: '3.6.0' })
     expect(opened.result.settings).toEqual(result.settings)
     expect(opened.result.design).toEqual(JSON.parse(JSON.stringify(result.design)))
-    expect([opened.result.psmFdr, opened.result.proteinFdr]).toEqual([0.02, 0.01])
+    expect([opened.result.psmFdr, opened.result.proteinFdr]).toEqual([0.01, 1])
   })
 
-  test('a search of the earlier layout (summary.yaml, no QPX columns) does not open, with a message that says why', async () => {
-    const backend = await savedBackend()
-    const folder = backend.folders.get('100-0')!
-    for (const name of [...folder.keys()]) if (name.startsWith('qpx/')) folder.delete(name)
-    folder.set('summary.yaml', strToU8('shared:\n  enzyme: "Trypsin"\nper_file: []\n'))
-    await expect(openSearch(backend, '100-0')).rejects.toBeInstanceOf(OldLayoutError)
-    await expect(openSearch(backend, '100-0')).rejects.toThrow(/saved by an earlier version of ProSE Desktop/)
-  })
-
-  test('the PSMs of a search come from its QPX run view', async () => {
+  test("the PSMs of a search come from its runs' filtered files", async () => {
     const backend = new MemoryBackend()
     backend.addFolder('7-0', fixture)
     const asked: string[] = []
@@ -167,12 +164,12 @@ describe('a saved search', () => {
       asked.push(name)
       return read(id, name, range)
     }
-    // 77 target PSMs in each of the example's two files
-    expect(await psmsOfSearch(backend, '7-0')).toBe(154)
-    expect(asked).toEqual([RUNS])
+    expect(await psmsOfSearch(backend, '7-0')).toBe(17)
+    expect(asked.sort()).toEqual(['inputs.json', 'nuxl/1__OpenNuXL_1_input.outputs.json', 'nuxl/1__OpenNuXL_1_input_0.0000_peptides.idXML', 'nuxl/1__OpenNuXL_1_input_1.0000_XLs.idXML'])
     await expect(psmsOfSearch(backend, 'missing')).rejects.toThrow()
-    backend.folders.get('7-0')!.set(RUNS, strToU8('not parquet'))
-    await expect(psmsOfSearch(backend, '7-0')).rejects.toThrow(`${RUNS}:`)
+    const xls = 'nuxl/1__OpenNuXL_1_input_1.0000_XLs.idXML'
+    backend.folders.get('7-0')!.set(xls, strToU8('not idXML'))
+    await expect(psmsOfSearch(backend, '7-0')).rejects.toThrow(`${xls}:`)
   })
 
   test('opens when the FASTA it was searched with is gone: proteins.fasta has the sequences', async () => {
@@ -189,7 +186,7 @@ describe('a saved search', () => {
     const backend = await savedBackend()
     const folder = backend.folders.get('100-0')!
     folder.set('search.json', strToU8(JSON.stringify({ ...recordOf(result, 'x', '1'), schema: 7 })))
-    await expect(openSearch(backend, '100-0')).rejects.toThrow(/newer version of ProSE \(schema 7\)/)
+    await expect(openSearch(backend, '100-0')).rejects.toThrow(/newer version of NuXL Desktop \(schema 7\)/)
     folder.delete('search.json')
     await expect(openSearch(backend, '100-0')).rejects.toThrow(ProjectError)
   })
@@ -209,9 +206,9 @@ function renamed(zip: Uint8Array, from: string, to: string): Uint8Array {
 describe('project files', () => {
   test('a project round-trips (export, import, same tables)', async () => {
     const backend = await savedBackend('100-0', 'My search')
-    expect(await exportProject(backend, '100-0', 'My search')).toBe('/saved/My_search.prose')
+    expect(await exportProject(backend, '100-0', 'My search')).toBe('/saved/My_search.nuxl')
     const [{ name, bytes }] = backend.saved
-    expect(name).toBe('My_search.prose')
+    expect(name).toBe('My_search.nuxl')
     // a zip of the folder's files, search.json first, no links, no database copy
     const zipped = unpackProject(bytes)
     expect(zipped[0].name).toBe('search.json')
@@ -219,53 +216,55 @@ describe('project files', () => {
 
     // another computer: a fresh backend, the file chosen in the open dialog
     const other = new MemoryBackend()
-    other.projects.set('/home/me/My_search.prose', bytes)
-    other.chosen = '/home/me/My_search.prose'
+    other.projects.set('/home/me/My_search.nuxl', bytes)
+    other.chosen = '/home/me/My_search.nuxl'
     const id = await importProject(other)
     expect(id).not.toBeNull()
     expect(id).not.toBe('100-0')
     const [entry] = await other.list()
-    expect(entry).toMatchObject({ id, name: 'My search', files: ['Ecoli_1.mzML', 'Ecoli_2.mzML'], database: 'human.fasta', error: null })
+    expect(entry).toMatchObject({ id, name: 'My search', files: ['OpenNuXL_1_input.mzML'], database: 'OpenNuXL_1_input.fasta', error: null })
     // the FASTA was not exported: the sequences come from proteins.fasta
     expect(other.folders.get(id!)!.has('database.fasta')).toBe(false)
     const opened = await openSearch(other, id!)
     // the same tables; the searched files are named, not placed (the paths of the other computer are not in the project)
     const named = (files: string[]) => files.map((f) => f.split('/').pop())
     expect(opened.result.outcome.tables).toEqual({ ...result.outcome.tables, files: named(result.outcome.tables.files) })
-    expect(opened.result.outcome.tables.files).toEqual(['Ecoli_1.mzML', 'Ecoli_2.mzML'])
-    // the spectra are read when a PSM is opened: the same peaks
+    expect(opened.result.outcome.tables.files).toEqual(['OpenNuXL_1_input.mzML'])
+    // a project has no inputs: a PSM shows NuXL's annotated peaks, and says why (the folder has no input)
     const [a, b] = [await opened.result.outcome.spectra.load(5), await result.outcome.spectra.load(5)]
-    expect(a.spectra.mz).toEqual(b.spectra.mz)
-    expect(a.predicted).toEqual(b.predicted)
-    expect(opened.result.outcome.summary.files.map((f) => f.path)).toEqual(['Ecoli_1.mzML', 'Ecoli_2.mzML'])
+    expect(a.spectra.psmSpectrum[0]).toBe(-1)
+    expect(a.missing).toMatch(/^OpenNuXL_1_input.mzML /)
+    expect(a.annotation).toEqual(b.annotation)
+    expect(a.annotation.length).toBeGreaterThan(0)
+    expect(opened.result.outcome.summary.files.map((f) => f.path)).toEqual(['OpenNuXL_1_input.mzML'])
     expect({ ...opened.result.outcome.summary, files: [] }).toEqual({ ...result.outcome.summary, files: [] })
     expect(opened.origin.id).toBe(id)
     expect(opened.result.stored?.name).toBe('My search')
     // the imported search is marked, and the database path of its footer is refused (not "not found"):
     // the reader goes on with proteins.fasta and has no warning
     expect(JSON.parse(new TextDecoder().decode(other.folders.get(id!)!.get('search.json')!)).imported).toBe(true)
-    await expect(other.read(id!, '/tmp/prose-fixture-rouhIU/search/database.fasta')).rejects.toThrow(/imported search reads only its own folder/)
+    await expect(other.read(id!, '/data/OpenNuXL_1_input.mzML')).rejects.toThrow(/imported search reads only its own folder/)
     expect(opened.result.outcome.warnings).toEqual(result.outcome.warnings)
   })
 
   test('a project does not carry the database copy or the paths of this computer', async () => {
     const backend = await savedBackend()
-    backend.folders.get('100-0')!.set('prose.log', strToU8('$ /home/me/ProSE -in /home/me/data/a.mzML'))
+    backend.folders.get('100-0')!.set('nuxl.log', strToU8('$ /home/me/OpenNuXL -in /home/me/data/a.mzML'))
     // (saving the proteins removed database.fasta; a folder still has it before its results are read)
     expect(backend.folders.get('100-0')!.has('database.fasta')).toBe(false)
     backend.folders.get('100-0')!.set('database.fasta', strToU8('>sp|P1|X\nPEPTIDE\n'))
     await exportProject(backend, '100-0', 'x')
     const files = Object.fromEntries(unpackProject(backend.saved[0].bytes).map((e) => [e.name, e.data]))
     expect(Object.keys(files)).not.toContain('database.fasta')
-    expect(Object.keys(files)).not.toContain('prose.log')
+    expect(Object.keys(files)).not.toContain('nuxl.log')
     expect(Object.keys(files)).toContain('proteins.fasta')
     const inputs = JSON.parse(new TextDecoder().decode(files['inputs.json']))
-    expect(inputs.map((r: { path: string; name: string }) => r.path)).toEqual(['Ecoli_1.mzML', 'Ecoli_2.mzML'])
+    expect(inputs.map((r: { path: string; name: string }) => r.path)).toEqual(['OpenNuXL_1_input.mzML'])
     expect(JSON.stringify(inputs)).not.toContain('/data/')
     // the other fields of the records stay (the reader uses them)
-    expect(inputs[0]).toMatchObject({ id: 'f1', index: 0, link: '1__Ecoli_1.mzML', stem: '1__Ecoli_1' })
+    expect(inputs[0]).toMatchObject({ id: 'f0', index: 0, link: '1__OpenNuXL_1_input.mzML', stem: '1__OpenNuXL_1_input' })
     // the folder itself is untouched
-    expect(new TextDecoder().decode(backend.folders.get('100-0')!.get('inputs.json'))).toContain('/data/Ecoli_1.mzML')
+    expect(new TextDecoder().decode(backend.folders.get('100-0')!.get('inputs.json'))).toContain('/data/OpenNuXL_1_input.mzML')
     // an inputs.json that is not a list stops the export
     backend.folders.get('100-0')!.set('inputs.json', strToU8('{"a":1}'))
     await expect(exportProject(backend, '100-0', 'x')).rejects.toThrow(/inputs.json/)
@@ -278,15 +277,15 @@ describe('project files', () => {
     const read = vi.spyOn(backend, 'read')
     const files = backend.files.bind(backend)
     // results of more than the 3 GB a project opens with (and so near the 4 GB a zip without zip64 holds)
-    backend.files = async (id: string) => [...(await files(id)), { name: 'qpx/huge.psm.parquet', size: MAX_UNPACKED }]
+    backend.files = async (id: string) => [...(await files(id)), { name: 'nuxl/huge.idXML', size: MAX_UNPACKED }]
     await expect(exportProject(backend, '100-0', 'x')).rejects.toThrow(
       /too large for a project file: its results take 3\.\d+ GB, and a project file holds at most 3\.\d+ GB/,
     )
     expect(read).not.toHaveBeenCalled()
     expect(backend.saved).toEqual([])
-    // the files left out of a project do not count (prose.log, database.fasta)
+    // the files left out of a project do not count (nuxl.log, database.fasta)
     backend.files = async (id: string) => [...(await files(id)), { name: 'database.fasta', size: MAX_UNPACKED }]
-    expect(await exportProject(backend, '100-0', 'x')).toBe('/saved/x.prose')
+    expect(await exportProject(backend, '100-0', 'x')).toBe('/saved/x.nuxl')
     // a project of more files than a zip without zip64 holds
     backend.files = async () => Array.from({ length: MAX_ZIP_ENTRIES + 1 }, (_, i) => ({ name: i === 0 ? 'search.json' : `f/${i}`, size: 1 }))
     await expect(exportProject(backend, '100-0', 'x')).rejects.toThrow(/its results take 65536 files/)
@@ -307,8 +306,9 @@ describe('project files', () => {
     expect(backend.imported).toBe(0)
   })
 
-  test('parquet is stored, the rest deflated', async () => {
+  test('compressed files are stored, the rest deflated', async () => {
     const backend = await savedBackend()
+    backend.folders.get('100-0')!.set('nuxl/1__OpenNuXL_1_input.tsv.gz', new Uint8Array([31, 139, 8, 0]))
     await exportProject(backend, '100-0', 'x')
     const bytes = backend.saved[0].bytes
     // the method of each local entry: 0 stored, 8 deflated
@@ -322,7 +322,8 @@ describe('project files', () => {
       methods.set(new TextDecoder().decode(bytes.subarray(at + 30, at + 30 + nameLength)), method)
       at += 30 + nameLength + extra + compressed
     }
-    expect(methods.get('qpx/runs/1__Ecoli_1.psm.parquet')).toBe(0)
+    expect(methods.get('nuxl/1__OpenNuXL_1_input.tsv.gz')).toBe(0)
+    expect(methods.get('nuxl/1__OpenNuXL_1_input_1.0000_XLs.idXML')).toBe(8)
     expect(methods.get('inputs.json')).toBe(8)
   })
 
@@ -365,7 +366,7 @@ describe('project files', () => {
   test('a newer schema is refused with a message, and nothing is written', async () => {
     const newer = zipSync({ 'search.json': strToU8(JSON.stringify({ ...recordOf(result, 'x', '1'), schema: 2 })), 'a.txt': strToU8('x') })
     const backend = new MemoryBackend()
-    await expect(importProjectBytes(backend, newer)).rejects.toThrow(/This project was saved by a newer version of ProSE \(schema 2\)/)
+    await expect(importProjectBytes(backend, newer)).rejects.toThrow(/This project was saved by a newer version of NuXL Desktop \(schema 2\)/)
     await expect(importProjectBytes(backend, newer)).rejects.toBeInstanceOf(ProjectVersionError)
     expect(backend.imported).toBe(0)
   })
@@ -459,12 +460,12 @@ describe('project files', () => {
   })
 
   test('project names are reduced to safe file names', () => {
-    expect(projectFileName('My search #1')).toBe('My_search_1.prose')
-    expect(projectFileName('../etc/passwd')).toBe('etc_passwd.prose')
-    expect(projectFileName('???')).toBe('prose-results.prose')
-    expect(projectFileName('Probe Größe ä ö ü')).toBe('Probe_Größe_ä_ö_ü.prose')
-    expect(projectFileName('蛋白质组 a:b')).toBe('蛋白质组_a_b.prose')
-    expect(projectFileName('DatabaseSuitability.v2')).toBe('DatabaseSuitability.v2.prose')
+    expect(projectFileName('My search #1')).toBe('My_search_1.nuxl')
+    expect(projectFileName('../etc/passwd')).toBe('etc_passwd.nuxl')
+    expect(projectFileName('???')).toBe('nuxl-results.nuxl')
+    expect(projectFileName('Probe Größe ä ö ü')).toBe('Probe_Größe_ä_ö_ü.nuxl')
+    expect(projectFileName('蛋白质组 a:b')).toBe('蛋白质组_a_b.nuxl')
+    expect(projectFileName('Cascade.v2')).toBe('Cascade.v2.nuxl')
   })
 
   test('the entries are framed as the Rust side reads them', () => {

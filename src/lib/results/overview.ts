@@ -23,6 +23,9 @@ const SHORT_NOTES: [RegExp, string][] = [
   [/^No decoy PSMs for the target\/decoy competition/, 'No decoy PSMs to learn from'],
   [/^No search run .* to rescore/, 'No search run to rescore'],
   [/^Percolator failed/, 'Percolator failed'],
+  // OpenNuXL's (it rescores 1000 PSMs or more)
+  [/^Too few PSMs for score recalibration/, 'Too few PSMs (Percolator needs 1000)'],
+  [/^Score recalibration failed/, 'Percolator failed'],
 ]
 
 /** A long engine text as a short line: a known one in plain words, else its first sentence, cut at 80 characters. */

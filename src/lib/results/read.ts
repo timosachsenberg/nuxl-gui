@@ -25,7 +25,7 @@ import { parseFragmentAnnotation, type NuxlPeak } from '../psm/nuxl-annotation'
 import { C13C12_MASSDIFF_U, parseOpenmsSequence, proformaString, tableModifications, type Modification } from './derive'
 import { numberColumn, readIdXML, textColumn, type IdXML, type IdXMLSearchParameters } from './idxml'
 import { readSpectrum, spectrumIndex, SpectrumError, type MzmlSpectrum, type ReadRange, type SpectrumIndex } from './mzml'
-import { parseOutputs, toSummary, targetPsmsOf, type InputCounts, type NuxlSummary, type RunOutputs } from './summary'
+import { parseOutputs, toSummary, type InputCounts, type NuxlSummary, type RunOutputs } from './summary'
 import type { CrossLinkColumns, PredictedSpectra, ProSEMultiSummary, ResultTables, StoredSpectra } from './types'
 
 /** A part of a file: its last `tail` bytes (all of a smaller file), or `length` bytes from `offset` (fewer at its end). */
@@ -391,17 +391,18 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     // database.fasta with the contaminants, else the user's FASTA)
     const tried: string[] = []
     let fasta: Map<string, FastaEntry> | null = null
-    const sources: [string | null, boolean][] = [
-      ['proteins.fasta', true],
-      ['database.fasta', false],
+    const sources: [() => Promise<string | null>, boolean][] = [
+      [async () => 'proteins.fasta', true],
+      [async () => 'database.fasta', false],
+      [() => userDatabase(files), false],
     ]
-    for (let s = 0; s <= sources.length && !fasta; s++) {
-      if (s === sources.length) sources.push([await userDatabase(files), false])
-      const [name, own] = sources[s]
+    for (const [source, own] of sources) {
+      const name = await source()
       if (name === null) continue
       try {
         fasta = readFasta(utf8.decode(await files(name)))
         proteinsSaved = own
+        break
       } catch (e) {
         tried.push(isNotFound(e) ? `${name} (not found)` : `${name} (${errorText(e)})`)
       }
@@ -751,7 +752,6 @@ export async function countTargetPsms(files: SearchFiles): Promise<number> {
   return n
 }
 
-export { targetPsmsOf }
 
 //------------------------------------------------------------------------------
 // The spectra of the PSMs: from the input mzML, by byte range
@@ -858,8 +858,8 @@ function psmSpectra(files: SearchFiles, inputs: InputRecord[], psms: ResultTable
     } catch (e) {
       // whatever keeps the peaks from the PSM view (the file not there, refused, no such spectrum, its peaks in a
       // format the app does not read, a broken file): it says why, and shows NuXL's annotated peaks
-      if (e instanceof SpectrumError && file === null) return result(NO_PEAKS(psms.mz[row]), e.message)
       const message = errorText(e)
+      if (message.startsWith(`${input.name} `)) return result(NO_PEAKS(psms.mz[row]), message)
       const own = file && message.startsWith(`${file.name}: `) ? message.slice(file.name.length + 2) : message
       return result(NO_PEAKS(psms.mz[row]), `${input.name}: ${own}`)
     }

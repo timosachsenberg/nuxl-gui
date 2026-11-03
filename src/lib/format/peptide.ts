@@ -32,9 +32,17 @@ const shortLabels: Readonly<Record<string, string>> = {
   TMT6plex: 'tmt',
 }
 
-/** The short label of a modification ("Oxidation" is "ox"); unlisted ones get their first three letters, lower-cased. */
+/** A nucleic acid adduct of OpenNuXL: nucleotides, then a formula gained or lost ('U-H3O4P1', 'UU-H2O1', 'AU', 'U'). */
+const ADDUCT = /^([ACGTU]+)(?:[-+][A-Za-z0-9+-]*)?$/
+
+/**
+ * The short label of a modification ("Oxidation" is "ox"; a nucleic acid adduct its nucleotides, "U-H3O4P1" is
+ * "U"); unlisted ones get their first three letters, lower-cased.
+ */
 export function shortModLabel(name: string): string {
-  return Object.hasOwn(shortLabels, name) ? shortLabels[name] : name.slice(0, 3).toLowerCase()
+  if (Object.hasOwn(shortLabels, name)) return shortLabels[name]
+  const adduct = ADDUCT.exec(name)
+  return adduct ? adduct[1] : name.slice(0, 3).toLowerCase()
 }
 
 /** A modification's hover title: "Oxidation (Unimod:35) +15.9949". */

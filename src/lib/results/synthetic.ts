@@ -2,7 +2,7 @@
 // does, `makeLargeTables` generates a big, consistent one.
 
 import { resolveDesign, type DesignInput, type DesignResolution } from '../design/model'
-import type { ResultTables } from '../results/types'
+import type { CrossLinkColumns, ResultTables } from '../results/types'
 
 export type ProteinSpec = {
   accession: string
@@ -28,6 +28,10 @@ export type PeptideSpec = {
   openms?: string
   decoy?: boolean
   mods?: ModSpec[]
+  /** NuXL: the precursor adduct ('U-H3O4P1'); default none */
+  adduct?: string
+  /** NuXL: a cross-link; default: it has an adduct */
+  isXL?: boolean
   /** The proteins it maps to: an index (the peptide is looked up in the protein's sequence) or the index with its 0-based start. */
   proteins: (number | { protein: number; start: number })[]
 }
@@ -48,6 +52,12 @@ export type PsmSpec = {
   qValue?: number
   /** default: the peptide's */
   decoy?: boolean
+  /** NuXL: the cross-linked residue (0-based); default −1 (not localized) */
+  site?: number
+  /** NuXL: the FDR group; default 'XL' for a cross-link, else 'peptide' */
+  fdrGroup?: string
+  /** NuXL: the fragment_annotation; default '' */
+  annotation?: string
 }
 
 export type TablesSpec = { files: string[]; proteins: ProteinSpec[]; peptides: PeptideSpec[]; psms: PsmSpec[] }
@@ -90,7 +100,20 @@ export function makeTables(spec: TablesSpec): ResultTables {
     decoy: Uint8Array.from(psms, (p) => (p.decoy ?? peptides[p.peptide].decoy ?? false) ? 1 : 0),
     featureNames: [] as string[],
     features: new Float64Array(0),
+    xl: noCrossLinks(psms.length),
   }
+  psms.forEach((p, i) => {
+    const pep = peptides[p.peptide]
+    const adduct = pep.adduct ?? ''
+    const isXL = pep.isXL ?? adduct !== ''
+    psm.xl.isXL[i] = isXL ? 1 : 0
+    psm.xl.adduct[i] = adduct
+    psm.xl.nucleotide[i] = adduct.replace(/[-+].*$/, '')
+    psm.xl.adductLength[i] = psm.xl.nucleotide[i].length
+    psm.xl.site[i] = p.site ?? -1
+    psm.xl.fdrGroup[i] = p.fdrGroup ?? (isXL ? 'XL' : 'peptide')
+    psm.xl.annotation[i] = p.annotation ?? ''
+  })
 
   return {
     files: spec.files,
@@ -101,6 +124,8 @@ export function makeTables(spec: TablesSpec): ResultTables {
       proforma: peptides.map((p) => p.proforma ?? p.sequence),
       sequence: peptides.map((p) => p.sequence),
       decoy: Uint8Array.from(peptides, (p) => (p.decoy ? 1 : 0)),
+      adduct: peptides.map((p) => p.adduct ?? ''),
+      isXL: Uint8Array.from(peptides, (p) => ((p.isXL ?? (p.adduct ?? '') !== '') ? 1 : 0)),
       modOffsets,
       modPosition: Int16Array.from(mods, (m) => m.position),
       modName: mods.map((m) => m.name),
@@ -242,6 +267,10 @@ export function makeLargeTables(nPsms: number, nPeptides: number, nProteins: num
     proteinOffsets[k + 1] = refProtein.length
   }
 
+  // NuXL: every third peptide a cross-link (on its first residue; without a modification, so that the random
+  // sequences and the counts stay those of the earlier generator)
+  const adducts = Array.from({ length: nPeptides }, (_, k) => (k % 3 === 1 ? ADDUCTS[k % ADDUCTS.length][0] : ''))
+
   // the PSMs
   const file = new Uint16Array(nPsms)
   const nativeId: string[] = new Array(nPsms)
@@ -317,6 +346,7 @@ export function makeLargeTables(nPsms: number, nPeptides: number, nProteins: num
       decoy: psmDecoy,
       featureNames: [],
       features: new Float64Array(0),
+      xl: largeCrossLinks(peptide, adducts, nPsms),
     },
     peptides: {
       count: nPeptides,
@@ -324,6 +354,8 @@ export function makeLargeTables(nPsms: number, nPeptides: number, nProteins: num
       proforma,
       sequence,
       decoy,
+      adduct: adducts,
+      isXL: Uint8Array.from(adducts, (a) => (a !== '' ? 1 : 0)),
       modOffsets,
       modPosition: Int16Array.from(modPosition),
       modName,
@@ -353,4 +385,46 @@ export function syntheticDesign(files: string[]): DesignResolution {
     }
   })
   return resolveDesign(inputs)
+}
+
+/** The cross-link columns of `count` PSMs that are no cross-links (types.ts `CrossLinkColumns`). */
+export function noCrossLinks(count: number): CrossLinkColumns {
+  return {
+    isXL: new Uint8Array(count),
+    adduct: new Array<string>(count).fill(''),
+    adductMass: new Float64Array(count),
+    nucleotide: new Array<string>(count).fill(''),
+    adductLength: new Uint8Array(count),
+    site: new Int16Array(count).fill(-1),
+    siteScore: new Float64Array(count).fill(NaN),
+    siteSequence: new Array<string>(count).fill(''),
+    fdrGroup: new Array<string>(count).fill('peptide'),
+    annotation: new Array<string>(count).fill(''),
+  }
+}
+
+/** The adducts of the large result's cross-linked peptides, with their masses. */
+const ADDUCTS: [string, number][] = [
+  ['U', 324.035867],
+  ['U-H2O1', 306.025302],
+  ['U-H3O4P1', 226.058973],
+  ['UU-H3O4P1', 532.084278],
+]
+
+/** The cross-link columns of the large result: the PSMs of a peptide with an adduct are its cross-links. */
+function largeCrossLinks(peptide: Uint32Array, adducts: string[], nPsms: number): CrossLinkColumns {
+  const xl = noCrossLinks(nPsms)
+  for (let i = 0; i < nPsms; i++) {
+    const a = adducts[peptide[i]]
+    if (a === '') continue
+    xl.isXL[i] = 1
+    xl.adduct[i] = a
+    xl.adductMass[i] = ADDUCTS.find(([name]) => name === a)![1]
+    xl.nucleotide[i] = a.replace(/-.*$/, '')
+    xl.adductLength[i] = xl.nucleotide[i].length
+    xl.site[i] = 0
+    xl.siteScore[i] = 0.9
+    xl.fdrGroup[i] = 'XL'
+  }
+  return xl
 }

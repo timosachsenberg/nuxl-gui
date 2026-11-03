@@ -23,18 +23,18 @@ describe('displaySettings', () => {
     expect((await load()).modMode).toBe('marked')
   })
 
-  it('persists the switch in localStorage "prose.modMode"', async () => {
+  it('persists the switch in localStorage "nuxl.modMode"', async () => {
     const data = stubStorage()
     const settings = await load()
     settings.modMode = 'proforma'
     expect(settings.modMode).toBe('proforma')
-    expect(data.get('prose.modMode')).toBe('proforma')
+    expect(data.get('nuxl.modMode')).toBe('proforma')
     // a reload picks it up
     expect((await load()).modMode).toBe('proforma')
   })
 
   it('ignores an unknown stored value', async () => {
-    stubStorage({ 'prose.modMode': 'lowercase' })
+    stubStorage({ 'nuxl.modMode': 'lowercase' })
     expect((await load()).modMode).toBe('marked')
   })
 

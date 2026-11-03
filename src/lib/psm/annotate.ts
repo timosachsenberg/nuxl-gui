@@ -358,8 +358,9 @@ function parsePeptide(text: string, massOf?: ModificationMass): Peptide {
       }
       if (end >= s.length) throw new AnnotationError(`Cannot convert '${text}' to a peptide: missing ')'.`)
       const name = s.slice(i + 1, end)
-      // a name the Unimod file does not have for this place: its mass delta, if the caller knows it
-      const known = massOf?.(name)
+      // a name the Unimod file does not have for this place: its mass delta, if the caller knows it (OpenNuXL's adducts
+      // 'NuXL:U-H3O4P1' by the name the result tables give them, 'U-H3O4P1')
+      const known = massOf?.(name) ?? (name.startsWith('NuXL:') ? massOf?.(name.slice(5)) : undefined)
       const byMass = <T>(lookup: () => T): T => {
         try {
           return lookup()

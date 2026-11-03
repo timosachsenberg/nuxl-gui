@@ -132,19 +132,4 @@ describe('shiftSummary', () => {
     // 15.9949 + 2 = 17.9949; 17.9 (the observed mean) is too far; 31.51 is near the observed mass of the last
     expect(shiftSummary(variants, [17.99, 17.9, 31.51])).toMatchObject({ shifted: 3, mapped: 2, unassigned: 1 })
   })
-
-  it("reproduces the engine's counts of a real open search (iPRG2015 subset): 4,874 target PSMs of 4,922", async () => {
-    // the engine's own counts with the decoys: 4,922 PSMs, 1,898 shifted, 1,162 mapped, 736 not; computing them from
-    // all PSMs gives the same, so from the targets alone they are right too
-    const { readFileSync } = await import('node:fs')
-    const { join } = await import('node:path')
-    const { parseModificationAnalysis } = await import('./summary')
-    const dir = join(__dirname, 'fixtures', 'open-search-shifts')
-    const a = parseModificationAnalysis(readFileSync(join(dir, 'DeltaMassStats.tsv'), 'utf8'), readFileSync(join(dir, 'PTMStats.tsv'), 'utf8'))
-    const psms = readFileSync(join(dir, 'shifts.tsv'), 'utf8').trim().split('\n').map((l) => l.split('\t'))
-    const all = shiftSummary(a, psms.map(([d]) => Number(d)))
-    expect(all).toMatchObject({ total: a.deltaMasses.totalPSMs, shifted: a.deltaMasses.modifiedPSMs, mapped: a.ptms.totalModifiedPSMs, unassigned: a.ptms.unknownModificationPSMs })
-    const targets = shiftSummary(a, psms.filter(([, decoy]) => decoy === '0').map(([d]) => Number(d)))
-    expect(targets).toMatchObject({ total: 4874, shifted: 1852, unmodified: 3022, mapped: 1151, unassigned: 701 })
-  })
 })

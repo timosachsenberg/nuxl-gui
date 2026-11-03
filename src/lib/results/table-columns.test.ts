@@ -38,17 +38,24 @@ describe('columnSpecs', () => {
   it('names the score after the rescoring', () => {
     const score = (rescored: boolean) => columnSpecs(model({ rescored }), 'psms', { openSearch: false }).find((s) => s.id === 'score')!
     expect(score(true).header).toBe('Percolator score')
-    expect(score(false).header).toBe('ln(hyperscore)')
+    expect(score(false).header).toBe('NuXL score')
   })
 
   it('peptides: the best PSM q-value, counts per sample; PSMs: no sample counts', () => {
     expect(ids(columnSpecs(model(), 'peptides', { openSearch: false }))).toEqual([
-      'peptide', 'proteins', 'psms', 'sample:0', 'sample:1', 'foundIn', 'bestQ', 'length',
+      'peptide', 'adduct', 'proteins', 'psms', 'sample:0', 'sample:1', 'foundIn', 'bestQ', 'length',
     ])
     expect(ids(columnSpecs(model(), 'psms', { openSearch: false }))).toEqual([
-      'peptide', 'proteins', 'sample', 'scan', 'charge', 'mz', 'rt', 'precursorError', 'score', 'qValue',
-      'pep', 'deltaMass', 'file', 'isotopeError',
+      'peptide', 'adduct', 'site', 'proteins', 'sample', 'scan', 'charge', 'mz', 'rt', 'precursorError', 'score', 'qValue',
+      'pep', 'deltaMass', 'fdrGroup', 'file', 'isotopeError',
     ])
+  })
+
+  it('NuXL: the adduct and the site export the cross-link columns', () => {
+    const specs = columnSpecs(model(), 'psms', { openSearch: false })
+    expect(specs.find((s) => s.id === 'adduct')!.csv).toEqual(['crossLink', 'adduct', 'adductMass', 'nucleotide'])
+    expect(specs.find((s) => s.id === 'site')!.csv).toEqual(['site', 'siteScore'])
+    expect(columnSpecs(model(), 'peptides', { openSearch: false }).find((s) => s.id === 'adduct')!.csv).toEqual(['adduct', 'crossLink'])
   })
 
   it('samples without a condition have no group', () => {
@@ -64,8 +71,8 @@ describe('defaultHidden', () => {
   it('hides the less common columns, and the mass shift of a closed search', () => {
     const m = model()
     expect(defaultHidden(columnSpecs(m, 'proteins', { openSearch: false }), m)).toEqual(['gene', 'qValue', 'score', 'length', 'group'])
-    expect(defaultHidden(columnSpecs(m, 'psms', { openSearch: false }), m)).toEqual(['pep', 'deltaMass', 'file', 'isotopeError'])
-    expect(defaultHidden(columnSpecs(m, 'psms', { openSearch: true }), m)).toEqual(['pep', 'file', 'isotopeError'])
+    expect(defaultHidden(columnSpecs(m, 'psms', { openSearch: false }), m)).toEqual(['pep', 'deltaMass', 'fdrGroup', 'file', 'isotopeError'])
+    expect(defaultHidden(columnSpecs(m, 'psms', { openSearch: true }), m)).toEqual(['pep', 'fdrGroup', 'file', 'isotopeError'])
   })
 
   it('shows the gene when the descriptions name one', () => {
@@ -92,8 +99,8 @@ describe('visibleSpecs and csvColumns', () => {
   it('write what a PSM column shows: the scan as the native ID, RT in seconds, the file', () => {
     const specs = columnSpecs(model(), 'psms', { openSearch: true })
     expect(csvColumns(visibleSpecs(specs, []))).toEqual([
-      'peptide', 'proteins', 'sample', 'nativeId', 'charge', 'mz', 'rt', 'precursorErrorPpm', 'score', 'qValue',
-      'pep', 'deltaMass', 'file', 'isotopeError',
+      'peptide', 'crossLink', 'adduct', 'adductMass', 'nucleotide', 'site', 'siteScore', 'proteins', 'sample', 'nativeId',
+      'charge', 'mz', 'rt', 'precursorErrorPpm', 'score', 'qValue', 'pep', 'deltaMass', 'fdrGroup', 'file', 'isotopeError',
     ])
   })
 })

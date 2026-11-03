@@ -73,6 +73,9 @@ const peptides: Record<string, ColumnDef> = {
   foundIn: num('Found in', (_, k, c) => c.foundIn[k]),
   contaminant: num('Contaminant', (m, k) => m.peptide.contaminant[k]),
   decoy: num('Decoy', (m, k) => m.tables.peptides.decoy[k]),
+  // NuXL: the nucleic acid adduct ('' none) and whether the peptide is a cross-link
+  adduct: str('Adduct', (m, k) => m.tables.peptides.adduct[k]),
+  crossLink: num('Cross-link', (m, k) => m.tables.peptides.isXL[k]),
 }
 
 const psms: Record<string, ColumnDef> = {
@@ -99,6 +102,27 @@ const psms: Record<string, ColumnDef> = {
   isotopeError: num('Isotope error', (m, i) => m.tables.psms.isotopeError[i]),
   deltaMass: num('Delta mass (Da)', (m, i) => m.tables.psms.deltaMass[i]),
   decoy: num('Decoy', (m, i) => m.tables.psms.decoy[i]),
+  // NuXL: the cross-link facts of the PSM (psms.xl)
+  crossLink: num('Cross-link', (m, i) => m.tables.psms.xl.isXL[i]),
+  adduct: str('Adduct', (m, i) => m.tables.psms.xl.adduct[i]),
+  adductMass: num('Adduct mass (Da)', (m, i) => (m.tables.psms.xl.adduct[i] === '' ? NaN : m.tables.psms.xl.adductMass[i])),
+  nucleotide: str('Nucleotide', (m, i) => m.tables.psms.xl.nucleotide[i]),
+  // the cross-linked residue, 1-based as a residue is named ('K9'); sorts by its position, '' when not localized
+  site: label(
+    'Site',
+    (m, i) => (m.tables.psms.xl.site[i] >= 0 ? m.tables.psms.xl.site[i] + 1 : NaN),
+    (m, i) => siteName(m, i),
+  ),
+  siteScore: num('Site score', (m, i) => m.tables.psms.xl.siteScore[i]),
+  fdrGroup: str('FDR group', (m, i) => m.tables.psms.xl.fdrGroup[i]),
+}
+
+/** The cross-linked residue of PSM `i` with its 1-based position ('K9'); '' when not localized. */
+export function siteName(m: ResultModel, i: number): string {
+  const site = m.tables.psms.xl.site[i]
+  if (site < 0) return ''
+  const residue = m.tables.peptides.sequence[m.tables.psms.peptide[i]][site] ?? ''
+  return `${residue}${site + 1}`
 }
 
 const tables: Record<Level, Record<string, ColumnDef>> = { proteins, peptides, psms }
@@ -110,7 +134,7 @@ const tables: Record<Level, Record<string, ColumnDef>> = { proteins, peptides, p
  */
 export function columnDef(m: ResultModel, level: Level, id: string): ColumnDef | undefined {
   if (id === 'score' && level !== 'peptides') {
-    const name = m.rescored ? 'Percolator score' : 'ln(hyperscore)'
+    const name = m.rescored ? 'Percolator score' : 'NuXL score'
     return { ...tables[level].score, header: level === 'psms' ? name : `Best ${name}` }
   }
   if (Object.hasOwn(tables[level], id)) return tables[level][id]

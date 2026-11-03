@@ -73,6 +73,7 @@ export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: 
   if (level === 'peptides') {
     return [
       col('peptide', 'Peptide', 'auto', 'left', { sortKey: 'sequence' }),
+      col('adduct', 'Adduct', 110, 'left', { csv: ['adduct', 'crossLink'], optional: 'shown', title: 'Nucleic acid adduct of the precursor (OpenNuXL)' }),
       col('proteins', 'Proteins', 190, 'left'),
       col('psms', 'PSMs', 84, 'right', { title: 'PSMs that pass the Best PSM q-value filter' }),
       ...sampleSpecs(m),
@@ -83,6 +84,8 @@ export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: 
   }
   return [
     col('peptide', 'Peptide', 'auto', 'left', { sortKey: 'sequence' }),
+    col('adduct', 'Adduct', 110, 'left', { csv: ['crossLink', 'adduct', 'adductMass', 'nucleotide'], optional: 'shown', title: 'Nucleic acid adduct of the precursor (OpenNuXL)' }),
+    col('site', 'Site', 64, 'left', { csv: ['site', 'siteScore'], optional: 'shown', title: 'Cross-linked residue (OpenNuXL’s best localization)' }),
     col('proteins', 'Proteins', 150, 'left'),
     col('sample', 'Sample', 96, 'left'),
     col('scan', 'Spectrum', 90, 'left', { sortKey: 'nativeId', csv: ['nativeId'], title: spectrumTitle }),
@@ -94,6 +97,7 @@ export function columnSpecs(m: ResultModel, level: Level, search: { openSearch: 
     col('qValue', 'q-value', 90, 'right'),
     col('pep', 'PEP', 70, 'right', { optional: 'hidden', title: 'Posterior error probability (Percolator)' }),
     col('deltaMass', 'Δ mass (Da)', 104, 'right', { optional: search.openSearch ? 'shown' : 'hidden', title: 'Unassigned mass shift of an open search' }),
+    col('fdrGroup', 'FDR group', 96, 'left', { optional: 'hidden', title: 'The target-decoy group of the PSM’s q-value: peptides, cross-links (short cross-links can be their own)' }),
     col('file', 'File', 160, 'left', { optional: 'hidden' }),
     col('isotopeError', 'Isotope error', 110, 'right', { optional: 'hidden' }),
   ]

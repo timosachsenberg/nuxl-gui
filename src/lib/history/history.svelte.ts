@@ -1,6 +1,6 @@
 // The state of History for the views: the saved searches, what became of the last save, and the actions
 // of the views (open from History, save and open a project file, rename, delete). A search is saved here
-// automatically: its record as soon as ProSE has ended (before its results are read, so that a search
+// automatically: its record as soon as its OpenNuXL runs have ended (before its results are read, so that a search
 // whose results cannot be read stays in History and can be opened again), its proteins.fasta once its
 // results are read. Saving never breaks the results view, it only reports. A search that finished while it
 // was being cancelled has its folder removed at once.
@@ -141,8 +141,8 @@ async function writeRecord(id: string, record: string): Promise<boolean> {
 }
 
 /**
- * Saves the record of a search whose ProSE has just ended, before its results are read: from the request
- * and the target PSMs of its QPX run view (0 if that cannot be read). Never rejects: the outcome is
+ * Saves the record of a search whose OpenNuXL runs have just ended, before its results are read: from the request
+ * and the target PSMs of its runs' filtered files (0 if they cannot be read). Never rejects: the outcome is
  * `history.save`.
  */
 export function saveEnded(search: EndedSearch): Promise<void> {
@@ -161,7 +161,7 @@ export function saveEnded(search: EndedSearch): Promise<void> {
 
 /**
  * Completes the save of a search whose results have been read in this session: its record, if it has none
- * yet (the save when ProSE ended failed, or a result opened otherwise), then its proteins.fasta, which
+ * yet (the save when the runs ended failed, or a result opened otherwise), then its proteins.fasta, which
  * replaces the folder's database.fasta. Saves go one after the other; this never rejects: the outcome is
  * `history.save` (a failure of proteins.fasta alone is not reported: the search is saved, opens with its
  * database, and its next opening writes proteins.fasta).

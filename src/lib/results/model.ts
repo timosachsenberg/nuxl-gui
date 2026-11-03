@@ -53,7 +53,7 @@ export type ResultModel = {
    */
   samples: ResultSample[]
   showTechReplicates: boolean
-  /** The search rescored its PSMs with Percolator: `psms.score` is Percolator's, else ln(hyperscore). */
+  /** The search rescored its PSMs with Percolator: `psms.score` is Percolator's, else NuXL's (NuXL:score). */
   rescored: boolean
   /**
    * The search's cutoffs. PSMs above `psmFdr` are no evidence: they are not counted anywhere, and

@@ -17,13 +17,14 @@ function result(psmFdr = 0.01, proteinFdr = 0.01, rescored = false, proteinFdrAp
     design: sampleDesign(),
     psmFdr,
     proteinFdr,
-    settings: { parameters: {}, fixedMods: [], database: 'db.fasta', rescore: rescored, peptdeep: false, contaminants: true },
+    settings: { parameters: {}, fixedMods: [], database: 'db.fasta', rescore: rescored, contaminants: true, peptideFdr: psmFdr, xlFdr: psmFdr },
     outcome: {
       tables,
       spectra: { predictions: false, load: () => Promise.reject(new Error('no spectra')) } as PsmSpectra,
       warnings: [],
       proteinsSaved: true,
       seconds: 1,
+      nuxl: { xlFdr: psmFdr, peptideFdr: psmFdr, percolator: tables.files.map(() => rescored), notes: tables.files.map(() => []) },
       summary: {
         files: tables.files.map((path) => ({ path, ms2Spectra: 10, percolator: rescored ? { applied: true } : null })),
         proteinFdrApplied,
@@ -96,8 +97,8 @@ describe('ResultsView', () => {
     expect(p.counts.psms[0]).toBe(2)
     expect(Array.from(p.rows)).toEqual([0, 1]) // peptide 2's best PSM is at 0.005, peptide 3 is trypsin's
     const lines = csvLines(p.csv())
-    expect(lines[0]).toBe('Peptide,Proteins,PSMs,control 1,EGF 1,Found in,Best PSM q-value')
-    expect(lines[1]).toBe('M[Oxidation]KWVTF,sp|P02768|ALBU_HUMAN,2,2,0,1,0.001')
+    expect(lines[0]).toBe('Peptide,Adduct,Cross-link,Proteins,PSMs,control 1,EGF 1,Found in,Best PSM q-value')
+    expect(lines[1]).toBe('M[Oxidation]KWVTF,,0,sp|P02768|ALBU_HUMAN,2,2,0,1,0.001')
   })
 
   it('writes the visible columns only, and the rows of the filtered view', () => {

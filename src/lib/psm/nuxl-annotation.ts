@@ -6,7 +6,7 @@
 //   y1-H2O1+  a2-H3N1+                with a neutral loss (its formula as EmpiricalFormula writes it)
 //   y5+U'-H2O++  b2+U'+               shifted by a fragment of the cross-linked nucleotide ("+" shift, then the charge)
 //   MI:A'+  MI:U-H3PO4+               a marker ion of a nucleotide (fragment)
-//   [M+H]+  [M+2H-H2O]+U-H3PO4++      the precursor, with a loss and a shift
+//   [M+H]+  [M+2H-H2O]+U-H3PO4++      the precursor, with a loss and a shift ('[M+2H+U-H2O1]++', '[M+2H]-CH4S')
 //   iK(C5H10N1)U'-H2O+  iW+U+  iF+    an immonium ion, with its composition and a shift
 //   AD-CO-H2O1+  YTF  QQ-H3N1+        an internal fragment (its residues; '-CO': a-type), with losses
 //
@@ -80,7 +80,8 @@ export function parseFragmentAnnotation(value: string): NuxlPeak[] {
 
 const SEQUENCE_ION = /^([abcxyz])(\d+)(.*?)(\+*)$/
 const MARKER = /^MI:(.*?)(\+*)$/
-const PRECURSOR = /^\[M(?:\+(\d*)H)?((?:-[A-Za-z0-9]+)*)\](?:\+(.+?))?(\+*)$/
+// [M+<n>H<inside>]<losses>+<shift><charge>: inside, '-<loss>' or '+<shift>' ('[M+2H+U-H2O1]++'); after, losses
+const PRECURSOR = /^\[M(?:\+(\d*)H)?([^\]]*)\]((?:-[A-Za-z0-9]+)*)(?:\+([^+].*?))?(\+*)$/
 const IMMONIUM = /^i([A-Z])(?:\(([^)]*)\))?(.*?)(\+*)$/
 const INTERNAL = /^([A-Z]{2,})((?:-[A-Za-z0-9]+)*)(\+*)$/
 
@@ -112,7 +113,11 @@ export function classifyLabel(label: string, charge = 1): NuxlIon {
   }
   if ((m = MARKER.exec(label))) return ion('marker', { shift: m[1], charge: chargeOf(m[2], charge) })
   if ((m = PRECURSOR.exec(label))) {
-    return ion('precursor', { loss: lossOf(m[2]), shift: m[3] ?? '', charge: chargeOf(m[4], m[1] === undefined ? charge : Number(m[1] || 1)) })
+    const inside = m[2]
+    const shifted = inside.startsWith('+')
+    const loss = [shifted ? '' : lossOf(inside), lossOf(m[3])].filter((l) => l !== '').join('-')
+    const shift = [shifted ? inside.slice(1) : '', m[4] ?? ''].filter((x) => x !== '').join('+')
+    return ion('precursor', { loss, shift, charge: chargeOf(m[5], m[1] === undefined ? charge : Number(m[1] || 1)) })
   }
   if ((m = IMMONIUM.exec(label))) {
     const rest = m[3]

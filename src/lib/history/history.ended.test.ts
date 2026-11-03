@@ -1,6 +1,6 @@
 // A search as it ends, through the session's real flow with a fake shim and History on a disk in memory:
-// its record is saved as soon as ProSE has ended (before the results are read), proteins.fasta once they
-// are read; a search whose results cannot be read stays in History and opens again; Cancel after ProSE's
+// its record is saved as soon as the OpenNuXL runs have ended (before the results are read), proteins.fasta once they
+// are read; a search whose results cannot be read stays in History and opens again; Cancel after OpenNuXL's
 // end does not lose the search; a record that cannot be written is listed as not saved and saved again.
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -35,12 +35,11 @@ const { canRetrySave, dismissSaveStatus, history, initHistory, openAgain, refres
 
 const request: SearchRequest = {
   files: [
-    { id: 'f1', path: '/data/Ecoli_1.mzML' },
-    { id: 'f2', path: '/data/Ecoli_2.mzML' },
+    { id: 'f0', path: '/data/OpenNuXL_1_input.mzML' },
   ],
-  database: '/db/human.fasta',
+  database: '/db/OpenNuXL_1_input.fasta',
   contaminants: true,
-  settings: { parameters: {}, rescore: true, peptdeep: false, threads: 0 },
+  settings: { parameters: {}, rescore: true, threads: 0, peptideFdr: 0.01, xlFdr: 0.01 },
 }
 
 let fixture: Record<string, Uint8Array>
@@ -68,7 +67,7 @@ beforeEach(async () => {
 const settle = () => new Promise((r) => setTimeout(r, 0))
 const text = (bytes: Uint8Array | undefined) => new TextDecoder().decode(bytes)
 
-/** The search `id` started in the fake shim, its folder as ProSE leaves it; `finish` sends its done. */
+/** The search `id` started in the fake shim, its folder as the shim leaves it; `finish` sends its done. */
 function started(id: string) {
   disk.addFolder(id, fixture)
   let finish!: () => void
@@ -78,7 +77,7 @@ function started(id: string) {
 }
 
 describe('a search as it ends', () => {
-  it('is saved to History as soon as ProSE has ended, from the request and the footer of its QPX psm file; proteins.fasta follows the read', async () => {
+  it('is saved to History as soon as OpenNuXL has ended, from the request and the filtered files of its runs; proteins.fasta follows the read', async () => {
     const search = started('30-0')
     let atRead: { record: boolean; proteins: boolean; listed: boolean } | null = null
     fake.read.mockImplementationOnce(async (files: SearchFiles) => {
@@ -93,8 +92,8 @@ describe('a search as it ends', () => {
     // when the results were read, the search was in History already (an app closed meanwhile keeps it)
     expect(atRead).toEqual({ record: true, proteins: false, listed: true })
     const record = JSON.parse(text(disk.folders.get('30-0')!.get('search.json')))
-    // the PSMs of the footer: 77 target PSMs in each of the two files
-    expect(record).toMatchObject({ id: '30-0', name: 'Ecoli', psms: 154, files: ['Ecoli_1.mzML', 'Ecoli_2.mzML'], database: 'human.fasta' })
+    // the PSMs within the FDRs of the filtered files: 3 peptide PSMs and 14 cross-links
+    expect(record).toMatchObject({ id: '30-0', name: 'OpenNuXL_1_input', psms: 17, files: ['OpenNuXL_1_input.mzML'], database: 'OpenNuXL_1_input.fasta' })
     expect(record.seconds).toBeGreaterThanOrEqual(0)
     await settle()
     await settle()
@@ -103,10 +102,10 @@ describe('a search as it ends', () => {
     expect(folder.has('proteins.fasta')).toBe(true)
     expect(folder.has('database.fasta')).toBe(false)
     expect(history.save).toEqual({ id: '30-0', state: 'saved' })
-    expect(history.entries.find((e) => e.id === '30-0')).toMatchObject({ psms: 154, error: null })
+    expect(history.entries.find((e) => e.id === '30-0')).toMatchObject({ psms: 17, error: null })
   })
 
-  it('cannot be cancelled once ProSE has ended (the done won): it is saved and opened, its folder kept', async () => {
+  it('cannot be cancelled once OpenNuXL has ended (the done won): it is saved and opened, its folder kept', async () => {
     const search = started('31-0')
     const run = runSearch(request, meta)
     await settle()
@@ -127,7 +126,7 @@ describe('a search as it ends', () => {
 
   it('whose results cannot be read stays in History, and opens again', async () => {
     const search = started('32-0')
-    fake.read.mockRejectedValueOnce(new Error('qpx/1__Ecoli_1.psm.parquet: not a Parquet file'))
+    fake.read.mockRejectedValueOnce(new Error('nuxl/1__OpenNuXL_1_input_1.0000_XLs.idXML: it is not an idXML file'))
     const run = runSearch(request, meta)
     await settle()
     search.finish()
@@ -135,7 +134,7 @@ describe('a search as it ends', () => {
     expect(searchRun.status).toBe('failed')
     expect(searchRun.failure).toMatchObject({ context: 'While reading the results', searchId: '32-0' })
     await refreshHistory()
-    expect(history.entries.find((e) => e.id === '32-0')).toMatchObject({ error: null, psms: 154 })
+    expect(history.entries.find((e) => e.id === '32-0')).toMatchObject({ error: null, psms: 17 })
     expect(disk.folders.get('32-0')!.has('proteins.fasta')).toBe(false)
     // opened again (from the error, or from History): read, shown, and its proteins.fasta written now
     await openAgain('32-0')
