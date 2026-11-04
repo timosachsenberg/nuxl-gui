@@ -6,10 +6,13 @@
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
   import { adductLabel, peptideView } from '$lib/format/peptide'
   import { formatCount, formatQValue } from '$lib/results/display'
+  import { peptideSite } from '$lib/results/positions'
   import type { LevelState, ResultsView } from '$lib/results/view.svelte'
   import { adductTitle, tableColumns, sampleIndex, type CellDef } from './cells'
   import DataTable from './DataTable.svelte'
   import Marker from './Marker.svelte'
+  import PositionCell from './PositionCell.svelte'
+  import { rangeCellTitle, rangeView, siteCellTitle, siteView } from './position-cells'
   import ProteinRefs from './ProteinRefs.svelte'
 
   let { view, level }: { view: ResultsView; level: LevelState } = $props()
@@ -47,6 +50,23 @@
         }
       case 'crossLink':
         return { cell: (k) => (pt.isXL[k] ? xlCell : ''), cellTitle: (k) => (pt.isXL[k] ? XL_TITLE : undefined) }
+      case 'sequence':
+        return { cell: (k) => pt.sequence[k], cellTitle: (k) => pt.sequence[k], class: 'font-mono text-[12.5px]' }
+      case 'proteinStart':
+      case 'proteinEnd': {
+        const end = id === 'proteinEnd'
+        return {
+          cell: (k) => (rangeView(m, k, end) ? (end ? endCell : startCell) : '–'),
+          cellTitle: (k) => rangeCellTitle(m, k),
+          placeholder: (k) => rangeView(m, k, end) === null,
+        }
+      }
+      case 'proteinSite':
+        return {
+          cell: (k) => (siteView(m, k, peptideSite(m, k)) ? proteinSiteCell : '–'),
+          cellTitle: (k) => siteCellTitle(m, k, peptideSite(m, k), pt.isXL[k] === 1),
+          placeholder: (k) => siteView(m, k, peptideSite(m, k)) === null,
+        }
       case 'proteins':
         return { cell: () => proteinsCell, cellTitle: (k) => Array.from(m.peptide.proteins[k], (p) => m.tables.proteins.accession[p]).join('\n') }
       case 'psms':
@@ -80,6 +100,18 @@
 
 {#snippet proteinsCell(k: number)}
   <ProteinRefs model={m} peptide={k} />
+{/snippet}
+
+{#snippet startCell(k: number)}
+  <PositionCell view={rangeView(m, k, false)!} />
+{/snippet}
+
+{#snippet endCell(k: number)}
+  <PositionCell view={rangeView(m, k, true)!} />
+{/snippet}
+
+{#snippet proteinSiteCell(k: number)}
+  <PositionCell view={siteView(m, k, peptideSite(m, k))!} />
 {/snippet}
 
 <DataTable

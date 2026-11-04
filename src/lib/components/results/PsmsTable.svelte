@@ -8,12 +8,15 @@
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
   import { adductLabel, peptideView } from '$lib/format/peptide'
   import { siteName } from '$lib/results/columns'
+  import { psmSite } from '$lib/results/positions'
   import { baseName } from '$lib/results/model'
   import { formatQCompact, formatQValue, formatScore, spectrumLabel } from '$lib/results/display'
   import type { LevelState, ResultsView } from '$lib/results/view.svelte'
   import { adductTitle, fdrGroupLabel, fixed, signed, siteScoreText, tableColumns, type CellDef } from './cells'
   import DataTable from './DataTable.svelte'
   import Marker from './Marker.svelte'
+  import PositionCell from './PositionCell.svelte'
+  import { rangeCellTitle, rangeView, siteCellTitle, siteView } from './position-cells'
   import ProteinRefs from './ProteinRefs.svelte'
 
   let {
@@ -54,6 +57,23 @@
     switch (id) {
       case 'peptide':
         return { cell: () => peptideCell, cellTitle: (i) => withMarks(m.tables.peptides.proforma[ps.peptide[i]], i) }
+      case 'sequence':
+        return { cell: (i) => m.tables.peptides.sequence[ps.peptide[i]], cellTitle: (i) => m.tables.peptides.sequence[ps.peptide[i]], class: 'font-mono text-[12.5px]' }
+      case 'proteinStart':
+      case 'proteinEnd': {
+        const end = id === 'proteinEnd'
+        return {
+          cell: (i) => (rangeView(m, ps.peptide[i], end) ? (end ? endCell : startCell) : '–'),
+          cellTitle: (i) => rangeCellTitle(m, ps.peptide[i]),
+          placeholder: (i) => rangeView(m, ps.peptide[i], end) === null,
+        }
+      }
+      case 'proteinSite':
+        return {
+          cell: (i) => (siteView(m, ps.peptide[i], psmSite(m, i)) ? proteinSiteCell : '–'),
+          cellTitle: (i) => siteCellTitle(m, ps.peptide[i], psmSite(m, i), xl.isXL[i] === 1, xl.siteSequence[i]),
+          placeholder: (i) => siteView(m, ps.peptide[i], psmSite(m, i)) === null,
+        }
       case 'proteins':
         return {
           cell: () => proteinsCell,
@@ -161,6 +181,18 @@
 
 {#snippet proteinsCell(i: number)}
   <ProteinRefs model={m} peptide={ps.peptide[i]} />
+{/snippet}
+
+{#snippet startCell(i: number)}
+  <PositionCell view={rangeView(m, ps.peptide[i], false)!} />
+{/snippet}
+
+{#snippet endCell(i: number)}
+  <PositionCell view={rangeView(m, ps.peptide[i], true)!} />
+{/snippet}
+
+{#snippet proteinSiteCell(i: number)}
+  <PositionCell view={siteView(m, ps.peptide[i], psmSite(m, i))!} />
 {/snippet}
 
 <DataTable

@@ -91,6 +91,9 @@ describe('the PSM view', () => {
     expect(text('xl-badge')).toBe('cross-link')
     expect(text('psm-adduct')).toBe('adduct U-H₃PO₄ (+226.0590 Da)')
     expect(text('psm-site')).toBe('on Y2 (score 0.82)')
+    // in the protein, 1-based: DYHTVLGAR is residues 84–92 of Cas5 (the example's FASTA), so Y2 is Y85
+    expect(text('psm-protein-site')).toBe('· Cas5 Y85 ·') // (then the site sequence)
+    expect(target.querySelector('[data-testid="psm-protein-site"]')?.getAttribute('title')).toBe('In the protein (1-based): Cas5 Y85')
     const residues = Array.from(target.querySelectorAll('[data-testid="site-sequence"] span'))
     expect(residues.map((r) => r.textContent).join('')).toBe('DYHTVLGAR')
     expect(residues.filter((r) => r.classList.contains('candidate')).map((r) => r.textContent)).toEqual(['Y'])
@@ -98,7 +101,7 @@ describe('the PSM view', () => {
     expect(text('psm-crosslink')).toContain('FDR group XL')
     expect(text('psm-q')).toBe('· q < 0.001 at the cross-link FDR of 1 %')
     // the screen reader's sentence
-    expect(text('psm-crosslink')).toContain('Cross-link with U-H₃PO₄ (+226.0590 Da), on Y2 (localization score 0.82).')
+    expect(text('psm-crosslink')).toContain('Cross-link with U-H₃PO₄ (+226.0590 Da), on Y2 (localization score 0.82), Cas5 Y85 in the protein.')
   })
 
   it("shows the observed peaks with NuXL's annotation, and the linear peptide below", async () => {
@@ -142,6 +145,7 @@ describe('the PSM view', () => {
   it('says when a cross-link is not localized, and when a peptide PSM is above the peptide FDR', async () => {
     const xl = await show(true, 'VEDVHPISERPQYFSGDGK')
     expect(xl.text('psm-site')).toBe('not localized')
+    expect(xl.text('psm-protein-site')).toBeNull()
     expect(xl.text('psm-adduct')).toBe('adduct UU-H₃PO₄ (+532.0843 Da)')
     unmount(shown!)
     shown = null

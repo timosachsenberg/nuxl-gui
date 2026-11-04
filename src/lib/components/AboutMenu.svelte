@@ -38,6 +38,7 @@
     <div class="grid gap-0.5">
       <p class="font-semibold" data-testid="about-version">NuXL {updateState.appVersion ?? ''}</p>
       <p class="text-xs text-muted-foreground" data-testid="about-tool">{tool}</p>
+      <p class="text-xs text-muted-foreground" data-testid="about-author">Created by Timo Sachsenberg</p>
     </div>
     <div class="grid gap-2 border-t pt-3">
       <Button

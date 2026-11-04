@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // The cross-link cells of the Peptides and PSMs tables: the "XL" badge and the adduct (its mass in the tooltip), the
-// cross-linked residue ("K4", or "–"), and the badge after the peptide when the Adduct column is hidden.
+// cross-linked residue ("K4", or "–"), the stripped sequence and the positions in the proteins ("5 +1", "P1 K8"), and
+// the badge after the peptide when the Adduct column is hidden.
 import { flushSync, mount, unmount } from 'svelte'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { PsmSpectra } from '../../results/read'
@@ -14,10 +15,14 @@ import PsmsTable from './PsmsTable.svelte'
 function result(): OpenResult {
   const tables = makeTables({
     files: ['a.mzML'],
-    proteins: [{ accession: 'P1', sequence: 'AAAKCCCK' }],
+    proteins: [
+      { accession: 'P1', sequence: 'AAAKCCCK' },
+      { accession: 'sp|Q2|CAS5_ECOLI', sequence: 'GGCCCK' },
+      { accession: 'P3', sequence: '' },
+    ],
     peptides: [
-      { sequence: 'AAAK', proteins: [0] },
-      { sequence: 'CCCK', adduct: 'U-H3O4P1', proteins: [0] },
+      { sequence: 'AAAK', proteins: [0, { protein: 2, start: 9 }] },
+      { sequence: 'CCCK', adduct: 'U-H3O4P1', openms: 'CCCK(NuXL:U-H3O4P1)', mods: [{ position: 3, name: 'U-H3O4P1' }], proteins: [0, 1] },
     ],
     psms: [
       { peptide: 0, qValue: 0.001 },
@@ -87,11 +92,43 @@ describe('the cross-link cells', () => {
     const rows = cells(target)
     expect(rows.map((r) => [r.Peptide, r.Adduct, r.Site, r['FDR group']])).toEqual([
       ['AAAK', '–', '–', 'Peptide'],
-      ['CCCK', 'XLU-H₃PO₄', 'K4', 'Short cross-link'],
+      ['CCCKU', 'XLU-H₃PO₄', 'K4', 'Short cross-link'], // (the adduct on K4 marked in the peptide)
     ])
     const adduct = target.querySelector('[title^="U-H₃PO₄"]')
     expect(adduct?.getAttribute('title')).toBe('U-H₃PO₄ · +226.0590 Da · nucleotide U')
     expect(target.querySelector('[title^="Cross-linked residue K4"]')?.getAttribute('title')).toBe('Cross-linked residue K4 (localization score 0.93)')
+  })
+
+  it('show the stripped sequence and where the peptide and its cross-link are in the proteins (1-based)', () => {
+    const view = resultsViewFor(result())
+    view.psms.filters.kind = 'all'
+    const target = show(PsmsTable, { view, level: view.psms, onOpen: () => {} })
+    expect(cells(target).map((r) => [r.Sequence, r.Start, r.End, r['Protein site']])).toEqual([
+      ['AAAK', '1 +1', '4 +1', '–'],
+      ['CCCK', '5 +1', '8 +1', 'P1 K8 +1'],
+    ])
+    expect(target.querySelector('[title^="P1 1–4"]')?.getAttribute('title')).toBe(
+      'P1 1–4; P3 10–13?\n?: as the search recorded it; the protein’s sequence is unknown or does not have the peptide there',
+    )
+    expect(target.querySelector('[title^="P1 K8"]')?.getAttribute('title')).toBe('P1 K8; Q2 K6')
+  })
+
+  it('name the other residues OpenNuXL finds likely in the Protein site tooltip', () => {
+    const r = result()
+    r.outcome.tables.psms.xl.siteSequence[1] = 'cCCk' // C1 is about as likely as K4
+    const view = resultsViewFor(r)
+    const target = show(PsmsTable, { view, level: view.psms, onOpen: () => {} })
+    expect(target.querySelector('[title^="P1 K8"]')?.getAttribute('title')).toBe('P1 K8; Q2 K6\nAlso possible: P1 C5; Q2 C3')
+  })
+
+  it('give a peptide row the site of its adduct in the proteins', () => {
+    const view = resultsViewFor(result())
+    view.peptides.filters.kind = 'all'
+    const target = show(PeptidesTable, { view, level: view.peptides })
+    expect(cells(target).map((r) => [r.Sequence, r.Start, r['Protein site']])).toEqual([
+      ['AAAK', '1 +1', '–'],
+      ['CCCK', '5 +1', 'P1 K8 +1'],
+    ])
   })
 
   it('put the badge after the peptide when the Adduct column is hidden', () => {
@@ -99,6 +136,6 @@ describe('the cross-link cells', () => {
     expect(view.peptides.filters.kind).toBe('xl')
     view.peptides.toggleColumn('adduct', false)
     const target = show(PeptidesTable, { view, level: view.peptides })
-    expect(cells(target).map((r) => r.Peptide)).toEqual(['CCCKXL'])
+    expect(cells(target).map((r) => r.Peptide)).toEqual(['CCCKUXL'])
   })
 })

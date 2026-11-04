@@ -156,6 +156,7 @@ describe('the About menu', () => {
     expect(byId('about-menu')!.getAttribute('aria-label')).toBe('About NuXL')
     expect(byId('about-version')!.textContent).toBe('NuXL 0.3.0')
     expect(byId('about-tool')!.textContent).toBe('OpenNuXL 3.5.0')
+    expect(byId('about-author')!.textContent).toBe('Created by Timo Sachsenberg')
     const toggle = byId('update-at-start')!
     expect(toggle.getAttribute('aria-checked')).toBe('true')
     expect(document.querySelector('label[for="about-check-at-start"]')!.textContent).toBe('Check for new versions at start')

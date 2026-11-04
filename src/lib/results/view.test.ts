@@ -165,8 +165,10 @@ describe('ResultsView', () => {
     expect(p.counts.psms[0]).toBe(2)
     expect(Array.from(p.rows)).toEqual([0, 1]) // peptide 2's best PSM is at 0.005, peptide 3 is trypsin's
     const lines = csvLines(p.csv())
-    expect(lines[0]).toBe('Peptide,Adduct,Cross-link,Proteins,PSMs,control 1,EGF 1,Found in,Best PSM q-value')
-    expect(lines[1]).toBe('M[Oxidation]KWVTF,,0,sp|P02768|ALBU_HUMAN,2,2,0,1,0.001')
+    expect(lines[0]).toBe(
+      'Peptide,Sequence,Adduct,Cross-link,Proteins,Protein start,Protein end,Protein site,PSMs,control 1,EGF 1,Found in,Best PSM q-value',
+    )
+    expect(lines[1]).toBe('M[Oxidation]KWVTF,MKWVTF,,0,sp|P02768|ALBU_HUMAN,1,6,,2,2,0,1,0.001')
   })
 
   it('writes the visible columns only, and the rows of the filtered view', () => {
