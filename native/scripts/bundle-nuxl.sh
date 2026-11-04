@@ -329,6 +329,7 @@ cp "$SRC/LICENSE" "$lic/OpenMS-LICENSE.txt"
 [ -f "$BUILD/thirdparty_licenses.txt" ] && cp "$BUILD/thirdparty_licenses.txt" "$lic/"
 if [ -f "$BUILD/third_party_notices/files.txt" ]; then
   while IFS='|' read -r dest source; do
+    source=${source%$'\r'}
     [ -n "$dest" ] && [ -f "$source" ] || continue
     mkdir -p "$share/$(dirname "$dest")"
     cp "$source" "$share/$dest"
@@ -343,8 +344,16 @@ done
 # The licences of the .raw reader: Thermo's RawFileReader licence (OpenMS's configure downloads it; the vcpkg
 # port installs it as its copyright), the bridge's notices (ThermoWrapperManaged, CommandLineParser, OpenMcdf,
 # nethost) and the .NET runtime's (fetch-dotnet-runtime.sh put them there).
-[ -f "$lic/ThermoRawFileReader-License.doc" ] || [ -f "$lic/vcpkg/openms-thermo-bridge/copyright" ] \
-  || die "no Thermo RawFileReader licence (LICENSES/ThermoRawFileReader-License.doc: OpenMS's configure downloads it; configure again)"
+# OpenMS's configure writes it to the build folder; take it from there if the notices' list did not bring it.
+if [ ! -f "$lic/ThermoRawFileReader-License.doc" ] && [ -f "$BUILD/ThermoRawFileReader-License.doc" ]; then
+  cp "$BUILD/ThermoRawFileReader-License.doc" "$lic/"
+fi
+if [ ! -f "$lic/ThermoRawFileReader-License.doc" ] && [ ! -f "$lic/vcpkg/openms-thermo-bridge/copyright" ]; then
+  echo "the notices' list ($BUILD/third_party_notices/files.txt) on Thermo:" >&2
+  grep -i thermo "$BUILD/third_party_notices/files.txt" >&2 || echo "  (none)" >&2
+  find "$BUILD" -maxdepth 3 -iname '*RawFileReader*' >&2 || true
+  die "no Thermo RawFileReader licence (LICENSES/ThermoRawFileReader-License.doc: OpenMS's configure downloads it; configure again)"
+fi
 [ -f "$managed/THIRD-PARTY-NOTICES.txt" ] || die "no THIRD-PARTY-NOTICES.txt in $managed"
 for f in LICENSE.txt ThirdPartyNotices.txt; do
   [ -f "$lic/dotnet/$f" ] || die "no $lic/dotnet/$f (the .NET runtime's)"
