@@ -92,7 +92,7 @@ describe('the PSM view', () => {
     expect(text('psm-adduct')).toBe('adduct U-H₃PO₄ (+226.0590 Da)')
     expect(text('psm-site')).toBe('on Y2 (score 0.82)')
     // in the protein, 1-based: DYHTVLGAR is residues 84–92 of Cas5 (the example's FASTA), so Y2 is Y85
-    expect(text('psm-protein-site')).toBe('· Cas5 Y85')
+    expect(text('psm-protein-site')).toBe('· Cas5 Y85 ·') // (then the site sequence)
     expect(target.querySelector('[data-testid="psm-protein-site"]')?.getAttribute('title')).toBe('In the protein (1-based): Cas5 Y85')
     const residues = Array.from(target.querySelectorAll('[data-testid="site-sequence"] span'))
     expect(residues.map((r) => r.textContent).join('')).toBe('DYHTVLGAR')

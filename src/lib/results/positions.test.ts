@@ -144,14 +144,14 @@ describe('the position columns', () => {
     expect(peptides).toContain('AAAK,3;11;3,Cas7 K6;Cas7 K14;sp|P12345|CAS5_ECOLI K6')
   })
 
-  it('sort by the first occurrence, rows without position last', () => {
+  it('sort by the first occurrence (by protein, then position), rows without position last', () => {
     const rows = applyFilters(m, 'psms', all)
     const peptideOf = (sorted: Uint32Array) => Array.from(sorted, (i) => m.tables.peptides.sequence[m.tables.psms.peptide[i]])
-    expect(peptideOf(sortRows(m, 'psms', rows, 'proteinStart', 'asc', all))).toEqual(['RRKAAA', 'IVGGYTCK', 'AAAK', 'AAAK', 'GGGK', 'LLKR', 'MKAA', 'WWWK'])
-    expect(peptideOf(sortRows(m, 'psms', rows, 'proteinEnd', 'desc', all))).toEqual(['LLKR', 'GGGK', 'IVGGYTCK', 'AAAK', 'AAAK', 'RRKAAA', 'MKAA', 'WWWK'])
+    expect(peptideOf(sortRows(m, 'psms', rows, 'proteinStart', 'asc', all))).toEqual(['AAAK', 'AAAK', 'GGGK', 'RRKAAA', 'IVGGYTCK', 'LLKR', 'MKAA', 'WWWK'])
+    expect(peptideOf(sortRows(m, 'psms', rows, 'proteinEnd', 'desc', all))).toEqual(['LLKR', 'IVGGYTCK', 'RRKAAA', 'GGGK', 'AAAK', 'AAAK', 'MKAA', 'WWWK'])
     // the protein site: by the accession as shown, then the position
     expect(peptideOf(sortRows(m, 'psms', rows, 'proteinSite', 'asc', all)).slice(0, 3)).toEqual(['AAAK', 'RRKAAA', 'LLKR'])
-    expect(peptideOf(sortRows(m, 'psms', rows, 'sequence', 'asc', all))[0]).toBe('AAAK')
+    expect(peptideOf(sortRows(m, 'psms', rows, 'residues', 'asc', all))[0]).toBe('AAAK')
   })
 
   it('find a peptide by its stripped sequence', () => {

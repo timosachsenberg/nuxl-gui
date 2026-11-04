@@ -566,8 +566,8 @@
           {/if}
         </span>
         {#if proteinSite}
-          <span data-testid="psm-protein-site" class="text-foreground" title={`In the protein (1-based): ${siteCellTitle(m, k, site, true)}`}
-            >{'· '}<PositionCell view={proteinSite} /></span>
+          <span data-testid="psm-protein-site" class="text-foreground" title={`In the protein (1-based): ${siteCellTitle(m, k, site, true, siteSequence)}`}
+            >{'· '}<span class="font-medium"><PositionCell view={proteinSite} plain /></span>{siteSequence !== '' ? ' ·' : ''}</span>
         {/if}
         {#if siteSequence !== ''}
           <span class="site-sequence font-mono" data-testid="site-sequence" title="The residues the cross-link may be on (NuXL's localization), the best one underlined"

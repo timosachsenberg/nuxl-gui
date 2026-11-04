@@ -32,7 +32,7 @@ export const spectrumTitle = 'Sorts by scan number if every spectrum has one. Ot
 
 /** The columns of where a peptide is in its proteins (PSM and Peptides tables, `positions.ts`), after the Proteins column. */
 function positionSpecs(site: string): ColumnSpec[] {
-  const first = 'In the first protein of the Proteins column; “+1” etc.: more proteins or occurrences (all in the tooltip and the CSV). “?”: as the search recorded it, the protein’s sequence is unknown or does not have the peptide there.'
+  const first = 'In the first protein of the Proteins column; sorts by protein, then position. +n: more occurrences (all in the tooltip and the CSV). ?: as the search recorded it, not confirmed by the protein’s sequence.'
   return [
     col('proteinStart', 'Start', 72, 'right', { optional: 'shown', title: `First residue of the peptide in the protein (1-based). ${first}` }),
     col('proteinEnd', 'End', 72, 'right', { optional: 'shown', title: `Last residue of the peptide in the protein (1-based, inclusive). ${first}` }),
@@ -41,7 +41,7 @@ function positionSpecs(site: string): ColumnSpec[] {
 }
 
 const sequenceSpec = (): ColumnSpec =>
-  col('sequence', 'Sequence', 150, 'left', { optional: 'shown', title: 'The residues of the peptide, without modifications or adduct' })
+  col('sequence', 'Sequence', 150, 'left', { sortKey: 'residues', optional: 'shown', title: 'The residues of the peptide, without modifications or adduct' })
 
 /** The pseudo-id of the Columns menu that hides all per-sample columns. */
 export const samplesColumn = 'samples'

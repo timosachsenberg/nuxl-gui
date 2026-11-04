@@ -8,7 +8,7 @@
 
 import { parseAccession, parseDescription } from './display'
 import { baseName, type Level, type PeptideCounts, type ResultModel } from './model'
-import { firstOccurrence, occurrences, peptideSite, positionText, proteinSites, psmSite, siteSortKey, siteText } from './positions'
+import { firstOccurrence, occurrences, peptideSite, positionText, proteinSites, psmSite, rangeSortKey, siteSortKey, siteText } from './positions'
 import { proteinXlSites } from './protein'
 
 type Get<T> = (m: ResultModel, row: number, peptideCounts: PeptideCounts) => T
@@ -47,8 +47,8 @@ const shown = (accession: string | undefined) => (accession === undefined ? '' :
 
 /**
  * The positions of peptide `k` in its proteins (`positions.ts`): the Start, End and Protein site columns of the PSM and
- * Peptides tables. They sort by the first occurrence (the Proteins column's first protein; a protein site by its
- * accession as shown, then its position); the CSV has every occurrence, joined by ";" in the order of the Proteins
+ * Peptides tables. They sort by the first occurrence (the Proteins column's first protein): by its accession as shown,
+ * then the position, so that a protein's peptides come together in order (missing positions last); the CSV has every occurrence, joined by ";" in the order of the Proteins
  * column's accessions ("12;3", "12?" as the search recorded it, empty without position; a site with its accession,
  * "Cas7 K123"). `site` is the cross-linked residue in the peptide (0-based, -1 none).
  */
@@ -59,8 +59,8 @@ function positionColumns(peptideOf: (m: ResultModel, row: number) => number, sit
       .join(';')
   const sites = (m: ResultModel, row: number) => proteinSites(m, peptideOf(m, row), siteOf(m, row))
   return {
-    proteinStart: label('Protein start', (m, row) => firstOccurrence(m, peptideOf(m, row))?.start ?? NaN, (m, row) => all(m, row, false)),
-    proteinEnd: label('Protein end', (m, row) => firstOccurrence(m, peptideOf(m, row))?.end ?? NaN, (m, row) => all(m, row, true)),
+    proteinStart: str('Protein start', (m, row) => rangeSortKey(m, firstOccurrence(m, peptideOf(m, row)), false), (m, row) => all(m, row, false)),
+    proteinEnd: str('Protein end', (m, row) => rangeSortKey(m, firstOccurrence(m, peptideOf(m, row)), true), (m, row) => all(m, row, true)),
     proteinSite: str(
       'Protein site',
       (m, row) => siteSortKey(m, sites(m, row)[0]),
@@ -95,6 +95,8 @@ const peptides: Record<string, ColumnDef> = {
   // ProForma, as the table has it: all modifications, fixed ones too
   peptide: str('Peptide', (m, k) => m.tables.peptides.proforma[k]),
   sequence: str('Sequence', (m, k) => m.tables.peptides.sequence[k]),
+  // the same, as the Sequence column's sort key (the Peptide column sorts by "sequence": one sorted header at a time)
+  residues: str('Sequence', (m, k) => m.tables.peptides.sequence[k]),
   length: num('Length', (m, k) => m.tables.peptides.sequence[k].length),
   proteins: str('Proteins', (m, k) => shown(accessions(m, k)[0]), (m, k) => accessions(m, k).join(';')),
   psms: num('PSMs', (_, k, c) => c.psms[k]),
@@ -120,6 +122,7 @@ const psms: Record<string, ColumnDef> = {
   // ProForma, as the peptide's (a localized adduct as its mass delta)
   peptide: str('Peptide', (m, i) => m.tables.peptides.proforma[m.tables.psms.peptide[i]]),
   sequence: str('Sequence', (m, i) => m.tables.peptides.sequence[m.tables.psms.peptide[i]]),
+  residues: str('Sequence', (m, i) => m.tables.peptides.sequence[m.tables.psms.peptide[i]]),
   proteins: str(
     'Proteins',
     (m, i) => shown(accessions(m, m.tables.psms.peptide[i])[0]),

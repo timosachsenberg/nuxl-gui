@@ -136,8 +136,9 @@ before `IDFilter excludes <n> spectra.`) is part of the autotune.
 - the PSM and Peptides tables show where a peptide is in its proteins (`positions.ts`): Sequence (the residues only),
   Start and End (1-based, inclusive) and Protein site (the cross-linked residue there, "Cas7 K137": a PSM's localized
   site, a peptide row's residue that carries the adduct; empty when not localized, the PSM's tooltip naming the
-  candidate residues). A cell shows the first occurrence, in the Proteins column's order, with "+n" for the others (all
-  in its tooltip); the CSV has every occurrence, joined by ";" in the order of its Proteins column ("Protein start",
+  candidate residues, and a localized one's tooltip the other residues OpenNuXL finds likely). A cell shows the first
+  occurrence, in the Proteins column's order, with "+n" for the others (all in its tooltip), and sorts by its protein,
+  then its position; the CSV has every occurrence, joined by ";" in the order of its Proteins column ("Protein start",
   "Protein end", "Protein site" with the accession). A position the protein's sequence does not confirm (no sequence,
   or the peptide is not there: read.ts keeps what the search recorded) has a "?" ("12?"); none recorded: "–" (empty in
   the CSV). The protein panel and the PSM view’s header ("· Cas7 K137") count from 1 as well;

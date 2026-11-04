@@ -113,6 +113,14 @@ describe('the cross-link cells', () => {
     expect(target.querySelector('[title^="P1 K8"]')?.getAttribute('title')).toBe('P1 K8; Q2 K6')
   })
 
+  it('name the other residues OpenNuXL finds likely in the Protein site tooltip', () => {
+    const r = result()
+    r.outcome.tables.psms.xl.siteSequence[1] = 'cCCk' // C1 is about as likely as K4
+    const view = resultsViewFor(r)
+    const target = show(PsmsTable, { view, level: view.psms, onOpen: () => {} })
+    expect(target.querySelector('[title^="P1 K8"]')?.getAttribute('title')).toBe('P1 K8; Q2 K6\nAlso possible: P1 C5; Q2 C3')
+  })
+
   it('give a peptide row the site of its adduct in the proteins', () => {
     const view = resultsViewFor(result())
     view.peptides.filters.kind = 'all'

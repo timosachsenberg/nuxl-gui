@@ -128,6 +128,12 @@ export function candidateSites(siteSequence: string, peptide: string): number[] 
   return at
 }
 
+/** The sort key of a Start (or End) cell: the accession as shown, then the position; '' none (last). */
+export function rangeSortKey(m: ResultModel, o: Occurrence | null, end: boolean): string {
+  if (!o || o.start !== o.start) return ''
+  return `${shown(m, o.protein).toLowerCase()}\u0000${String(end ? o.end : o.start).padStart(9, '0')}`
+}
+
 /** The sort key of a protein site: the accession as shown, then the position (natural order); '' none (last). */
 export function siteSortKey(m: ResultModel, s: ProteinSite | null | undefined): string {
   return s ? `${shown(m, s.protein).toLowerCase()}\u0000${String(s.position).padStart(9, '0')}` : ''

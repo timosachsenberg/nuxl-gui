@@ -4,9 +4,10 @@
   // (`position-cells.ts`; the tooltip lists them all).
   import type { PositionView } from './position-cells'
 
-  let { view }: { view: PositionView } = $props()
+  /** `plain`: in the body font (a line of prose, the PSM view's header), not monospace. */
+  let { view, plain = false }: { view: PositionView; plain?: boolean } = $props()
 </script>
 
-<span class="font-mono text-[12.5px]">{view.text}</span>{#if view.inexact}<span class="text-muted-foreground">?</span>{/if}{#if view.more > 0}<span
+<span class={plain ? undefined : 'font-mono text-[12.5px]'}>{view.text}</span>{#if view.inexact}<span class="text-muted-foreground">?</span>{/if}{#if view.more > 0}<span
     class="text-muted-foreground">{' '}+{view.more}</span
   >{/if}
