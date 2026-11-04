@@ -1884,7 +1884,7 @@ dependencies = [
 
 [[package]]
 name = "nuxl-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "crc32fast",
  "flate2",
