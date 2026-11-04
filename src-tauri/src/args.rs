@@ -1,10 +1,13 @@
-//! The search request and its translation into OpenNuXL's command lines, one per input file.
+//! The search request and its translation into OpenNuXL's command lines, one per input (an `.mzML` or Thermo
+//! `.raw` file, a Bruker timsTOF `.d` folder: [`InputKind`]).
 //!
 //! The front end sends a [`SearchRequest`] (camelCase JSON). [`build_runs`] checks it and turns it into the
-//! arguments of one run of the tool per input (`docs/design.md` §3), which `run.rs` starts one after the other.
-//! Nothing here runs a process or writes to the search folder; the folder is made by [`mod@crate::run`],
-//! which also creates the links and the database that these arguments name. The one thing read is the user's
-//! FASTA, for its decoys ([`plan_database`]).
+//! arguments of one run of the tool per input (`docs/design.md` §3), which `run.rs` starts one after the other;
+//! [`build_search_with`] also gives FileConverter's command line that converts the spectra of a `.raw` or `.d`
+//! input after its run ([`conversion_args`]). Nothing here runs a process or writes to the search folder; the
+//! folder is made by [`mod@crate::run`], which also creates the links and the database that these arguments name.
+//! The one thing read is the user's FASTA, for its decoys ([`plan_database`]), and of a `.d` which files it has
+//! ([`bruker_files`]).
 //!
 //! Parameters are OpenNuXL's options by their full names (`precursor:mass_tolerance`, `NuXL:presets`,
 //! `filter`). Only the names in [`PARAMETERS`] pass, each with the type it has in OpenNuXL, so that nothing
@@ -14,10 +17,10 @@
 use crate::decoys::{DecoyStatistics, Marker};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// One input file: the front end's id for it and its path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,15 +178,110 @@ fn has_suffix(name: &str, suffixes: &[&str]) -> bool {
     suffixes.iter().any(|s| suffix_start(name, s).is_some())
 }
 
-/// An input OpenNuXL searches: `.mzML` (its `-in` also takes `.raw`, through ThermoRawFileParser, which the app
-/// does not bundle).
-pub fn is_spectrum_file(name: &str) -> bool {
+/// The kinds of input OpenNuXL searches (its `-in`; the bundled build reads all three natively: OpenMS with
+/// `WITH_THERMO_RAW` and `WITH_OPENTIMS`, `native/scripts/build-openms.sh`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InputKind {
+    /// `.mzML`, a file.
+    Mzml,
+    /// Thermo `.raw`, a file (Thermo's RawFileReader in OpenMS' bridge, on the bundled .NET runtime).
+    Raw,
+    /// Bruker timsTOF `.d`, a folder with `analysis.tdf` and `analysis.tdf_bin` (TDF), or `analysis.tsf` and
+    /// `analysis.tsf_bin` (TSF) ([`bruker_files`]).
+    BrukerD,
+}
+
+/// The kind of an input by its name (its extension, ignoring ASCII case); None for anything else.
+pub fn input_kind(name: &str) -> Option<InputKind> {
+    if has_suffix(name, &[".mzml"]) {
+        Some(InputKind::Mzml)
+    } else if has_suffix(name, &[".raw"]) {
+        Some(InputKind::Raw)
+    } else if has_suffix(name, &[".d"]) {
+        Some(InputKind::BrukerD)
+    } else {
+        None
+    }
+}
+
+/// An input OpenNuXL searches, by its name: `.mzML`, Thermo `.raw` or Bruker `.d` ([`input_kind`]).
+pub fn is_search_input(name: &str) -> bool {
+    input_kind(name).is_some()
+}
+
+/// An mzML, by its name: what the PSM view reads of an input in parts (`files::input_file`).
+pub fn is_mzml_file(name: &str) -> bool {
     has_suffix(name, &[".mzml"])
 }
 
 /// A compressed mzML, which OpenNuXL cannot read (the app says so: unpack it first).
 pub fn is_compressed_mzml(name: &str) -> bool {
     has_suffix(name, &[".mzml.gz"])
+}
+
+/// A zipped Bruker `.d` folder (`.d.zip`): OpenMS would unpack it into a temporary folder for every read, the app
+/// asks for the folder (unzip it first).
+pub fn is_zipped_bruker(name: &str) -> bool {
+    has_suffix(name, &[".d.zip"])
+}
+
+/// The files of Bruker data in a `.d` folder that make it one OpenMS reads (`BrukerTimsFile::detectFormat`): TDF
+/// (`analysis.tdf` with `analysis.tdf_bin`), else TSF (`analysis.tsf` with `analysis.tsf_bin`).
+const BRUKER_FORMATS: [[&str; 2]; 2] = [
+    ["analysis.tdf", "analysis.tdf_bin"],
+    ["analysis.tsf", "analysis.tsf_bin"],
+];
+
+/// What a `.d` folder holds of Bruker timsTOF data ([`bruker_files`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrukerFolder {
+    /// The pair of files of TDF or TSF data.
+    Data([PathBuf; 2]),
+    /// The data's table (`analysis.tdf` or `analysis.tsf`) without its binary file (the name of the missing one).
+    Incomplete(&'static str),
+    /// Neither (an Agilent or Waters `.d`, or another folder).
+    None,
+}
+
+/// The Bruker timsTOF data of the folder `dir` ([`BrukerFolder`]).
+pub fn bruker_files(dir: &Path) -> BrukerFolder {
+    for [table, binary] in BRUKER_FORMATS {
+        if dir.join(table).is_file() {
+            return if dir.join(binary).is_file() {
+                BrukerFolder::Data([dir.join(table), dir.join(binary)])
+            } else {
+                BrukerFolder::Incomplete(binary)
+            };
+        }
+    }
+    BrukerFolder::None
+}
+
+/// Why `path`, a `.d` folder, is no Bruker timsTOF data OpenNuXL reads; None if it is.
+pub fn bruker_problem(path: &str) -> Option<String> {
+    let name = file_name(path);
+    match bruker_files(Path::new(path)) {
+        BrukerFolder::Data(_) => None,
+        BrukerFolder::Incomplete(missing) => Some(format!(
+            "{name} is not a complete Bruker timsTOF .d folder: it has no {missing}."
+        )),
+        BrukerFolder::None => Some(format!(
+            "{name} is not a Bruker timsTOF .d folder (no analysis.tdf or analysis.tsf)."
+        )),
+    }
+}
+
+/// An input's path as the shim uses it: without trailing separators (`/`, `\`), which a folder's path may have
+/// (a `.d` given as `run.d/`; OpenNuXL strips them too, `inputPath_`), so that the names made of it are the
+/// folder's and not of something inside it. A path of separators only keeps its first.
+pub fn input_path(path: &str) -> &str {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() && !path.is_empty() {
+        &path[..1]
+    } else {
+        trimmed
+    }
 }
 
 pub fn is_fasta_file(name: &str) -> bool {
@@ -215,7 +313,8 @@ const WINDOWS_MAX_PATH: usize = 259;
 /// The longest stem (bytes) an input may have in the search folder `folder` (its `.partial` path), for links
 /// `links`: [`MAX_STEM`]; on Windows ([`InputLinks::PathsOrHardLinks`]) also short enough that the path of
 /// OpenNuXL's longest output in the folder (`<folder>\nuxl\<stem>_perc_proteins0.0100_XLs.tsv`) and of every
-/// link (`<folder>\<n>__<stem>.mzML`, shorter) stays within MAX_PATH. A stem's UTF-16 units are never more
+/// link (`<folder>\<n>__<stem>.mzML`, shorter) stays within MAX_PATH; so do the converted spectra
+/// (`<folder>\nuxl\<stem>.spectra.tmp.mzML`, shorter too). A stem's UTF-16 units are never more
 /// than its bytes, so the bytes bound it. 0 if not even the fixed part of that path fits.
 pub fn max_stem(links: InputLinks, folder: &Path) -> usize {
     match links {
@@ -265,10 +364,11 @@ pub fn stem_too_long(name: &str, max_stem: usize) -> bool {
 }
 
 /// Whether `name`, a name in the top level of a search folder, is one of the links to the inputs
-/// (`<n>__<name>.mzML`): never one of the search's own files.
+/// (`<n>__<name>` of an `.mzML`, `.raw` or `.d`): never one of the search's own files. (The shim writes nothing
+/// of its own under such a name: the spectra it converts go into `nuxl/`, [`spectra_output`].)
 pub fn is_input_link(name: &str) -> bool {
     name.split_once("__").is_some_and(|(n, rest)| {
-        !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && is_spectrum_file(rest)
+        !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && is_search_input(rest)
     })
 }
 
@@ -280,7 +380,8 @@ pub enum InputLinks {
     Symlinks,
     /// Windows, where a symbolic link needs a privilege (developer mode): the inputs by their own paths
     /// when their stems do not clash (ignoring case, as NTFS does); those that do as hard links `<n>__<name>`
-    /// in the search folder, which works on the same volume only; never a copy.
+    /// in the search folder, which works on the same volume only; never a copy. A Bruker `.d` folder cannot be
+    /// hard-linked: it goes by its own path, and one that would need a link is refused ([`build_runs_with`]).
     PathsOrHardLinks,
 }
 
@@ -328,46 +429,66 @@ fn none_clash(names: &[String]) -> bool {
         .all(|(i, k)| keys[i + 1..].iter().all(|other| !stems_clash(k, other)))
 }
 
+/// Whether the input of this name is a Bruker `.d` folder, which Windows cannot hard-link.
+fn is_folder_input(name: &str) -> bool {
+    input_kind(name) == Some(InputKind::BrukerD)
+}
+
 /// How each input of `req` reaches OpenNuXL (in order), in the search folder `folder`.
+///
+/// On Windows a Bruker `.d` keeps its own path wherever it can: of two inputs whose outputs would clash, the
+/// other one goes as a link (a `.d` against a file, the later of two `.d`). A `.d` placed as a hard link here
+/// cannot be searched; [`build_runs_with`] refuses it with what to rename.
 pub fn input_placements(req: &SearchRequest, links: InputLinks, folder: &Path) -> Vec<Placement> {
     let max = max_stem(links, folder);
     match links {
         InputLinks::Symlinks => vec![Placement::Symlink; req.files.len()],
         InputLinks::PathsOrHardLinks => {
-            let keys: Vec<String> = req
+            let names: Vec<String> = req
                 .files
                 .iter()
-                .map(|f| stem_key(&file_name(&f.path)))
+                .map(|f| file_name(input_path(&f.path)))
                 .collect();
+            let keys: Vec<String> = names.iter().map(|n| stem_key(n)).collect();
+            let folders: Vec<bool> = names.iter().map(|n| is_folder_input(n)).collect();
             let placements: Vec<Placement> = keys
                 .iter()
                 .enumerate()
-                .zip(&req.files)
-                .map(|((i, k), f)| {
+                .map(|(i, k)| {
                     // an input whose outputs would clash with another's goes as a link `<n>__<name>`, as does one
-                    // whose name is too long for its outputs (the link's is shortened)
-                    let clashes = keys
-                        .iter()
-                        .enumerate()
-                        .any(|(j, other)| j != i && stems_clash(k, other));
-                    if clashes || stem_too_long(&file_name(&f.path), max) {
+                    // whose name is too long for its outputs (the link's is shortened); a `.d` yields only to an
+                    // earlier `.d`
+                    let clashes = keys.iter().enumerate().any(|(j, other)| {
+                        j != i && stems_clash(k, other) && !(folders[i] && (!folders[j] || i < j))
+                    });
+                    if clashes || stem_too_long(&names[i], max) {
                         Placement::HardLink
                     } else {
                         Placement::OwnPath
                     }
                 })
                 .collect();
-            // a file whose own name clashes with a link (`1__a.mzML` beside two `a.mzML`): all as links, whose
-            // `<n>__` keeps every stem apart
-            let names: Vec<String> = req
-                .files
+            // a file whose own name clashes with a link (`1__a.mzML` beside two `a.mzML`): all files as links,
+            // whose `<n>__` keeps every stem apart, the `.d` folders by their own paths; if they still clash, all
+            // as links
+            let seen = |placements: &[Placement]| -> Vec<String> {
+                req.files
+                    .iter()
+                    .enumerate()
+                    .zip(placements)
+                    .map(|((i, f), p)| seen_name(i, input_path(&f.path), *p, max))
+                    .collect()
+            };
+            if none_clash(&seen(&placements)) {
+                return placements;
+            }
+            let files_linked: Vec<Placement> = placements
                 .iter()
-                .enumerate()
-                .zip(&placements)
-                .map(|((i, f), p)| seen_name(i, &f.path, *p, max))
+                .zip(&folders)
+                .map(|(p, folder)| if *folder { *p } else { Placement::HardLink })
                 .collect();
-            if none_clash(&names) {
-                placements
+            if none_clash(&seen(&files_linked)) {
+                files_linked
             } else {
                 vec![Placement::HardLink; req.files.len()]
             }
@@ -384,9 +505,13 @@ fn seen_name(index: usize, path: &str, placement: Placement, max_stem: usize) ->
 }
 
 /// What the shim calls an input in the names of its outputs (`nuxl/<stem>.idXML`): the link's name without
-/// `.mzML`, ignoring ASCII case (as OpenMS' `File::stemName`).
+/// `.mzML`, `.raw` or `.d`, ignoring ASCII case (as OpenMS' `File::stemName`). Inputs of one name and different
+/// kinds (`a.mzML`, `a.raw`, `a.d`) have one stem, and clash ([`stems_clash`]).
 pub fn input_stem(link: &str) -> String {
-    match suffix_start(link, ".mzml") {
+    match [".mzml", ".raw", ".d"]
+        .iter()
+        .find_map(|suffix| suffix_start(link, suffix))
+    {
         Some(end) => link[..end].to_string(),
         None => link.to_string(),
     }
@@ -406,7 +531,79 @@ pub fn outputs_record(stem: &str) -> String {
     format!("{OUTPUT_DIR}/{stem}{OUTPUTS_SUFFIX}")
 }
 
-fn check_file(kind: &str, path: &str) -> Result<(), String> {
+/// The end of the name of the spectra the shim converts a `.raw` or `.d` input into, after its run
+/// (`nuxl/<stem>.spectra.mzML`, [`spectra_output`]).
+pub const SPECTRA_SUFFIX: &str = ".spectra.mzML";
+
+/// The spectra of the input of stem `stem` as mzML, which FileConverter writes after the input's run
+/// ([`conversion_args`]) for the PSM view, relative to the search folder: `nuxl/<stem>.spectra.mzML`. Only for a
+/// `.raw` or `.d` input (an mzML is read where it is); `outputs.json` records it (`spectra`).
+pub fn spectra_output(stem: &str) -> String {
+    format!("{OUTPUT_DIR}/{stem}{SPECTRA_SUFFIX}")
+}
+
+/// Where FileConverter writes the spectra ([`spectra_output`]) until it has ended successfully, when the shim
+/// renames the file: a conversion that failed or was cancelled leaves no file of the final name.
+pub fn spectra_partial(stem: &str) -> String {
+    format!("{OUTPUT_DIR}/{stem}.spectra.tmp.mzML")
+}
+
+/// Whether `name` (relative to a search folder, `/`-separated) is spectra the shim converted
+/// ([`spectra_output`], or its [`spectra_partial`]): large, and made again from the input; projects leave them
+/// out.
+pub fn is_converted_spectra(name: &str) -> bool {
+    name.strip_prefix(OUTPUT_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|file| {
+            !file.contains('/')
+                && (file.ends_with(SPECTRA_SUFFIX) || file.ends_with(".spectra.tmp.mzML"))
+        })
+}
+
+/// FileConverter's command line that writes the spectra of a `.raw` or `.d` input as mzML for the PSM view
+/// (design §2): `-in` as OpenNuXL got it (the link, or the user's path), `-out` the search folder's
+/// [`spectra_partial`] of the input's stem `stem`, the search's threads. None for an mzML.
+///
+/// - `-process_lowmemory`: the spectra stream from the vendor file to the mzML (a `.raw` of gigabytes is not held
+///   in memory).
+/// - `-zstd_compression`: lossless and smaller than zlib. Never `-lossy_compression` (Numpress, which the PSM
+///   view cannot decode).
+/// - `.raw`: `-RawToMzML:reader inprocess`, the reader OpenNuXL uses (Thermo's RawFileReader through OpenMS'
+///   bridge; FileConverter's default on Windows is ThermoRawFileParser, which the app does not bundle). The
+///   readers have the same defaults (Thermo's centroids), so the spectra and their native IDs
+///   (`controllerType=0 controllerNumber=1 scan=N`) are those OpenNuXL searched.
+/// - `.d`: `-bruker:load_ms1 false`: OpenNuXL searches the MS2 spectra (one per precursor, `frame=F scan=S
+///   precursor=P`), and the MS1 frames of a timsTOF run are most of its data.
+pub fn conversion_args(
+    input: &OsStr,
+    kind: InputKind,
+    out_dir: &Path,
+    stem: &str,
+    threads: u32,
+) -> Option<Vec<OsString>> {
+    let reader: &[&str] = match kind {
+        InputKind::Mzml => return None,
+        InputKind::Raw => &["-RawToMzML:reader", "inprocess"],
+        InputKind::BrukerD => &["-bruker:load_ms1", "false"],
+    };
+    let mut args: Vec<OsString> = vec![
+        "-in".into(),
+        input.to_os_string(),
+        "-out".into(),
+        out_dir.join(spectra_partial(stem)).into_os_string(),
+        "-out_type".into(),
+        "mzML".into(),
+        "-threads".into(),
+        threads.to_string().into(),
+        "-process_lowmemory".into(),
+        "-zstd_compression".into(),
+    ];
+    args.extend(reader.iter().map(OsString::from));
+    Some(args)
+}
+
+/// The metadata of `path` if it is an absolute path that can be read.
+fn check_path(kind: &str, path: &str) -> Result<fs::Metadata, String> {
     if path.is_empty() {
         return Err(format!("No {kind} was given."));
     }
@@ -415,16 +612,25 @@ fn check_file(kind: &str, path: &str) -> Result<(), String> {
     if !Path::new(path).is_absolute() {
         return Err(format!("The {kind} {path} is not an absolute path."));
     }
-    let meta =
-        fs::metadata(path).map_err(|e| format!("The {kind} {path} cannot be read ({e})."))?;
-    if !meta.is_file() {
+    fs::metadata(path).map_err(|e| format!("The {kind} {path} cannot be read ({e})."))
+}
+
+fn check_file(kind: &str, path: &str) -> Result<(), String> {
+    if !check_path(kind, path)?.is_file() {
         return Err(format!("The {kind} {path} is not a file."));
     }
     Ok(())
 }
 
-fn check_input(path: &str) -> Result<(), String> {
-    check_file("input file", path)?;
+/// What the app says of an input that is no `.mzML`, `.raw` or `.d`.
+pub const INPUT_KINDS: &str =
+    "an mzML file (.mzML), a Thermo .raw file or a Bruker timsTOF .d folder";
+
+/// Checks an input (its path without trailing separators, [`input_path`]): an `.mzML` or Thermo `.raw` file, or a
+/// Bruker timsTOF `.d` folder ([`bruker_files`]), named so that OpenNuXL's outputs can be named after it.
+fn check_input(given: &str) -> Result<(), String> {
+    let path = input_path(given);
+    let meta = check_path("input", path)?;
     let name = file_name(path);
     if is_compressed_mzml(&name) {
         return Err(format!(
@@ -432,10 +638,35 @@ fn check_input(path: &str) -> Result<(), String> {
              7-Zip) and add the .mzML."
         ));
     }
-    if !is_spectrum_file(&name) {
+    if is_zipped_bruker(&name) {
         return Err(format!(
-            "The input file {path} is not an mzML file (.mzML)."
+            "{path} is a zipped Bruker .d folder: unzip it first and add the .d folder."
         ));
+    }
+    match input_kind(&name) {
+        None => {
+            return Err(format!("The input {path} is not {INPUT_KINDS}."));
+        }
+        Some(InputKind::Mzml) if !meta.is_file() => {
+            return Err(format!("The input file {path} is not a file."));
+        }
+        Some(InputKind::Raw) if !meta.is_file() => {
+            return Err(format!(
+                "The input {path} is a folder, not a Thermo .raw file (a Waters .raw folder cannot be searched: \
+                 convert it to mzML first)."
+            ));
+        }
+        Some(InputKind::BrukerD) if !meta.is_dir() => {
+            return Err(format!(
+                "The input {path} is not a folder: a Bruker timsTOF .d is a folder (with analysis.tdf)."
+            ));
+        }
+        Some(InputKind::BrukerD) => {
+            if let Some(problem) = bruker_problem(path) {
+                return Err(problem);
+            }
+        }
+        Some(_) => {}
     }
     // OpenNuXL names its derived outputs by replacing every ".idXML" of the -out path (`StringUtils::substitute`):
     // one in the stem would give them names the shim does not find
@@ -654,6 +885,26 @@ pub fn build_runs_with(
     links: InputLinks,
     plan: &DatabasePlan,
 ) -> Result<Vec<Vec<OsString>>, String> {
+    Ok(build_search_with(req, out_dir, links, plan)?.runs)
+}
+
+/// The command lines of a search ([`build_search_with`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchRuns {
+    /// OpenNuXL's, one per input ([`build_runs_with`]).
+    pub runs: Vec<Vec<OsString>>,
+    /// FileConverter's after each input's run ([`conversion_args`]): None for an mzML.
+    pub conversions: Vec<Option<Vec<OsString>>>,
+}
+
+/// [`build_runs_with`], and the spectra conversion after each run of a `.raw` or `.d` input
+/// ([`conversion_args`], with the same `-in` and threads).
+pub fn build_search_with(
+    req: &SearchRequest,
+    out_dir: &Path,
+    links: InputLinks,
+    plan: &DatabasePlan,
+) -> Result<SearchRuns, String> {
     if req.files.is_empty() {
         return Err("There is no input file.".to_string());
     }
@@ -712,16 +963,32 @@ pub fn build_runs_with(
         (settings.xl_fdr <= MAX_PROTEIN_REPORT_FDR).then(|| settings.xl_fdr.to_string());
     let records = input_records_with(req, links, out_dir);
     let placements = input_placements(req, links, out_dir);
+    // (Windows) a `.d` folder that would need a link (std has no junctions, and a folder has no hard link)
+    for (record, placement) in records.iter().zip(&placements) {
+        if *placement == Placement::HardLink && is_folder_input(&record.name) {
+            return Err(folder_link_refused(record, &records, out_dir));
+        }
+    }
+    let inputs: Vec<OsString> = records
+        .iter()
+        .zip(&placements)
+        .map(|(record, placement)| match placement {
+            Placement::OwnPath => OsString::from(&record.path),
+            Placement::Symlink | Placement::HardLink => out_dir.join(&record.link).into_os_string(),
+        })
+        .collect();
+    let conversions = records
+        .iter()
+        .zip(&inputs)
+        .map(|(record, input)| {
+            let kind = input_kind(&record.name)?;
+            conversion_args(input, kind, out_dir, &record.stem, threads)
+        })
+        .collect();
     let runs = records
         .iter()
-        .zip(placements)
-        .map(|(record, placement)| {
-            let input = match placement {
-                Placement::OwnPath => OsString::from(&record.path),
-                Placement::Symlink | Placement::HardLink => {
-                    out_dir.join(&record.link).into_os_string()
-                }
-            };
+        .zip(inputs)
+        .map(|(record, input)| {
             let mut args: Vec<OsString> = vec![
                 "-in".into(),
                 input,
@@ -751,7 +1018,50 @@ pub fn build_runs_with(
             args
         })
         .collect();
-    Ok(runs)
+    Ok(SearchRuns { runs, conversions })
+}
+
+/// Why a Bruker `.d` input cannot be searched on Windows, where it would need a link into the search folder
+/// ([`input_placements`]): its name is too long for OpenNuXL's outputs, or its outputs would be confused with an
+/// earlier `.d`'s. In words that say what to rename.
+fn folder_link_refused(record: &InputRecord, records: &[InputRecord], out_dir: &Path) -> String {
+    let data = out_dir.parent().unwrap_or(out_dir).display();
+    if !record.link.ends_with(&record.name) {
+        return format!(
+            "The name of {} is too long for OpenNuXL's result files in the app's data folder ({data}), which are \
+             named after the input. A file of such a name is linked into the search folder under a shorter name, \
+             but Windows cannot link a Bruker .d folder: rename the folder to a shorter name and start the search \
+             again.",
+            record.name
+        );
+    }
+    let own = stem_key(&record.name);
+    let other = records
+        .iter()
+        .find(|r| r.index != record.index && stems_clash(&stem_key(&r.name), &own));
+    // no other input's own name: the folder's name looks like one of the app's links (`1__a.d` beside the link
+    // `1__a.mzML` of an `a.mzML` whose name another file has), which only renaming the folder avoids
+    if other.is_none() {
+        if let Some(linked) = records
+            .iter()
+            .find(|r| r.index != record.index && stems_clash(&stem_key(&r.link), &own))
+        {
+            return format!(
+                "The result files of {} would be confused with those of {}, which is linked into the search folder \
+                 as {} (OpenNuXL names its files after the input and adds endings such as _perc). Windows cannot \
+                 link a Bruker .d folder: rename the folder (to a name that does not begin with a number and __) \
+                 and start the search again.",
+                record.name, linked.name, linked.link
+            );
+        }
+    }
+    let other = other.map_or("another input", |r| r.name.as_str());
+    format!(
+        "The result files of {} would be confused with those of {other} (OpenNuXL names its files after the input \
+         and adds endings such as _perc). Files are then linked into the search folder under other names, but \
+         Windows cannot link a Bruker .d folder: rename one of them and start the search again.",
+        record.name
+    )
 }
 
 /// The contaminant prefix of the app's cRAP accessions.
@@ -899,7 +1209,7 @@ pub fn write_database(
     Ok(copy)
 }
 
-/// The record of one input in `inputs.json`: how the search folder's link maps to the user's file.
+/// The record of one input in `inputs.json`: how the search folder's link maps to the user's file (or `.d` folder).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct InputRecord {
@@ -912,9 +1222,9 @@ pub struct InputRecord {
     pub link: String,
     /// What the input's outputs are named after (`nuxl/<stem>.idXML`).
     pub stem: String,
-    /// The user's file name.
+    /// The user's file name (of a `.d`: the folder's).
     pub name: String,
-    /// The user's path, as given.
+    /// The user's path, as given (without trailing separators: [`input_path`]).
     pub path: String,
 }
 
@@ -931,14 +1241,15 @@ pub fn input_records_with(
         .zip(placements)
         .enumerate()
         .map(|(index, (f, placement))| {
-            let link = seen_name(index, &f.path, placement, max);
+            let path = input_path(&f.path);
+            let link = seen_name(index, path, placement, max);
             InputRecord {
                 id: f.id.clone(),
                 index,
                 stem: input_stem(&link),
                 link,
-                name: file_name(&f.path),
-                path: f.path.clone(),
+                name: file_name(path),
+                path: path.to_string(),
             }
         })
         .collect()

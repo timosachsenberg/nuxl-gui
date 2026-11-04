@@ -34,4 +34,13 @@ describe('the idXML exports', () => {
     await expect(exportIdXML(result(['a.mzML']), 3, inputs(['1__a']))).rejects.toThrow('The search has no input 4.')
     await expect(exportIdXML(result(['a.mzML']), 0)).rejects.toThrow("The search's inputs.json cannot be read (no folder).")
   })
+
+  it('name the idXML of a Thermo .raw or a Bruker .d input without its extension', async () => {
+    await exportIdXML(result(['run.raw', 'tims.d']), 0, inputs(['1__run', '2__tims']))
+    await exportIdXML(result(['run.raw', 'tims.d']), 1, inputs(['1__run', '2__tims']))
+    expect(saved).toEqual([
+      ['s1', 'nuxl/1__run.idXML', 'run.idXML'],
+      ['s1', 'nuxl/2__tims.idXML', 'tims.idXML'],
+    ])
+  })
 })

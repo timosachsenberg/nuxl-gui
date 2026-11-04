@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The shared-library closure of OpenNuXL and PercolatorAdapter on macOS and Windows, for bundle-nuxl.sh.
+"""The shared-library closure of the bundled tools (OpenNuXL, PercolatorAdapter, FileConverter) on macOS and
+Windows, for bundle-nuxl.sh.
 
     bundle_closure.py macho <exe>... <out> [--search DIR]... [--install-path PATH]
     bundle_closure.py macho-verify <out>
@@ -30,7 +31,8 @@ cannot exist (see bundle-nuxl.sh).
 The verify commands check a bundle (also one inside a package): macho-verify that every reference is
 the system's or @rpath/<a bundled dylib>, the LC_RPATHs are the two above, the signatures are valid,
 and prints the newest minimum macOS among the files; pe-verify that every import is bundled or the
-system's.
+system's. Both look at bin/ and lib/ only: the bundle's dotnet/ (the .NET runtime, as Microsoft built and signed
+it) and share/ (with the Thermo bridge's managed assemblies) are not native code of the build and stay as they are.
 """
 
 import argparse

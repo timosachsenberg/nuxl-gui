@@ -23,12 +23,15 @@ import { errorText } from './format/error'
 /** The OpenNuXL tool the app runs: its version and where it is. */
 export type ToolInfo = { version: string; path: string }
 
-/** A file the user chose, by path (never read by the page; the shim reads it where it is). */
+/**
+ * A file the user chose, by path (never read by the page; the shim reads it where it is). A Bruker .d is a folder: its
+ * size is that of its analysis.* files.
+ */
 export type InputFile = { path: string; name: string; size: number }
 
 /** What New search shows of a file (`inspect_files`): sizes and counts, never contents. */
 export type FileFacts = InputFile & {
-  /** The spectra of an mzML's header (null: not said). */
+  /** The spectra of an mzML's header (null: not said; always for a .raw or .d, which the shim does not count). */
   spectra: number | null
   /** The entries of a FASTA and the residues of their sequences. */
   proteins: number | null
@@ -37,7 +40,8 @@ export type FileFacts = InputFile & {
   error: string | null
   /**
    * Why OpenNuXL cannot search the file, which is there (src-tauri/src/content.rs): an mzML that is not one, is cut off
-   * or has no spectra; a FASTA without entries, with an accession twice, a protein too long. Sentences, the file named.
+   * or has no spectra; a .d that is not a timsTOF folder (no analysis.tdf or analysis.tsf); a .raw that is a folder
+   * (Waters); a FASTA without entries, with an accession twice, a protein too long. Sentences, the file named.
    */
   problem: string | null
   /** What the search treats specially (a FASTA's entries listed twice, which it searches once): sentences, not blocking. */
@@ -200,13 +204,23 @@ export function exampleFiles(): Promise<{ spectra: string[]; database: string }>
   return invoke('example_files')
 }
 
-/** The system's open dialog for spectra (several) or a database; the chosen paths ([] if cancelled). */
-export function chooseFiles(kind: 'spectra' | 'database'): Promise<string[]> {
+/**
+ * The system's open dialog: spectra files (several: mzML, Thermo .raw), Bruker timsTOF .d folders (several), or a
+ * database; the chosen paths ([] if cancelled). The .d folders have a dialog of their own: a file dialog cannot pick a
+ * folder on Windows and Linux, and one dialog cannot pick files and folders together.
+ */
+export function chooseFiles(kind: 'spectra' | 'timsFolders' | 'database'): Promise<string[]> {
   return oneDialog<string[]>([], async () => {
     const chosen = await open(
       kind === 'spectra'
-        ? { multiple: true, title: 'Add mzML files', filters: [{ name: 'mzML', extensions: ['mzML', 'mzml'] }] }
-        : { multiple: false, title: 'Choose a FASTA database', filters: [{ name: 'FASTA', extensions: ['fasta', 'fa', 'faa'] }] },
+        ? {
+            multiple: true,
+            title: 'Add spectra files',
+            filters: [{ name: 'Spectra (mzML, Thermo .raw)', extensions: ['mzML', 'mzml', 'MZML', 'raw', 'RAW'] }],
+          }
+        : kind === 'timsFolders'
+          ? { directory: true, multiple: true, title: 'Add Bruker timsTOF .d folders' }
+          : { multiple: false, title: 'Choose a FASTA database', filters: [{ name: 'FASTA', extensions: ['fasta', 'fa', 'faa'] }] },
     )
     if (chosen === null) return []
     return Array.isArray(chosen) ? chosen : [chosen]
@@ -215,7 +229,8 @@ export function chooseFiles(kind: 'spectra' | 'database'): Promise<string[]> {
 
 /**
  * Files dragged from the file manager onto the window: `over` while they are above it (true) or have
- * left (false), `drop` with their paths. Returns the way to stop listening.
+ * left (false), `drop` with their paths (files and folders, such as a .d, as the file manager gives them). Returns the
+ * way to stop listening.
  */
 export async function onFileDrop(handlers: { over: (on: boolean) => void; drop: (paths: string[]) => void }): Promise<() => void> {
   if (!isDesktop()) return () => {}

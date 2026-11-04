@@ -1,6 +1,7 @@
 <script lang="ts">
-  // The Spectra card before any file is added: add or drop mzML files, or try the example. Files are
-  // chosen in the system's dialog (their paths; nothing is copied).
+  // The Spectra card before any file is added: add or drop mzML or Thermo .raw files and Bruker timsTOF .d folders, or
+  // try the example. Files are chosen in the system's dialog (their paths; nothing is copied); the .d folders in a
+  // folder dialog of their own (a file dialog cannot pick them on Windows and Linux).
   import { Button } from '$lib/components/ui/button'
   import * as Card from '$lib/components/ui/card'
   import { chooseFiles } from '$lib/desktop'
@@ -9,9 +10,9 @@
 
   let { dragging = false }: { dragging?: boolean } = $props()
 
-  async function add() {
-    const paths = await chooseFiles('spectra')
-    if (paths.length > 0) await form.addFiles(paths)
+  async function add(kind: 'spectra' | 'timsFolders') {
+    const paths = await chooseFiles(kind)
+    if (paths.length > 0) await form.addFiles(paths, { folders: kind === 'timsFolders' })
   }
 </script>
 
@@ -25,14 +26,15 @@
         ? 'border-foreground/40 bg-muted/60'
         : 'border-border bg-muted/30'}">
       <div class="min-w-0 flex-1">
-        <p class="font-medium">Drop mzML files here, or add them</p>
+        <p class="font-medium">Drop spectra here, or add them</p>
         <p class="text-xs text-muted-foreground">
           One file, or a whole experiment with conditions, replicates and fractions; OpenNuXL searches each file on its
-          own. Plain mzML only. A FASTA file dropped here becomes the database.
+          own. mzML, Thermo .raw or Bruker timsTOF .d folders. A FASTA file dropped here becomes the database.
         </p>
       </div>
       <div class="flex items-center gap-2">
-        <Button size="sm" disabled={form.adding > 0} onclick={add}>Add files</Button>
+        <Button size="sm" disabled={form.adding > 0} onclick={() => add('spectra')}>Add files</Button>
+        <Button variant="outline" size="sm" disabled={form.adding > 0} onclick={() => add('timsFolders')}>Add .d folders</Button>
         <Button variant="outline" size="sm" disabled={form.busy} onclick={() => form.loadExample()}>
           {form.exampleLoading ? 'Loading the example…' : 'Try the example'}
         </Button>

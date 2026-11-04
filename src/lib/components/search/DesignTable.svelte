@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The Spectra card: the mzML files and, from two files on, the experimental design (File ·
+  // The Spectra card: the spectra (mzML, Thermo .raw, Bruker timsTOF .d) and, from two files on, the experimental design (File ·
   // Condition · Replicate · Fraction; Advanced: Tech. replicate, Fraction group, Sample). Assumed values
   // are greyed; notices go below the table, the summary above it.
   import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert'
@@ -31,9 +31,10 @@
   const multi = $derived(form.files.length >= 2)
   const duplicate = $derived(design.notices.find((n) => n.kind === 'duplicateFile') ?? null)
 
-  async function add() {
-    const paths = await chooseFiles('spectra')
-    if (paths.length > 0) await form.addFiles(paths)
+  /** The system's dialog for spectra files, or for .d folders (a dialog of their own: a file dialog cannot pick them). */
+  async function add(kind: 'spectra' | 'timsFolders') {
+    const paths = await chooseFiles(kind)
+    if (paths.length > 0) await form.addFiles(paths, { folders: kind === 'timsFolders' })
   }
 
   /** The folder of a path (shown beside the name: two files of one name stay apart). */
@@ -134,7 +135,9 @@
       {/if}
       <Button variant="ghost" size="sm" class={headerButton + ' text-muted-foreground'} disabled={form.busy} onclick={() => form.removeAllFiles()}
         >Remove all</Button>
-      <Button variant="outline" size="sm" class={headerButton} disabled={form.adding > 0} onclick={add}>Add files</Button>
+      <Button variant="outline" size="sm" class={headerButton} disabled={form.adding > 0} onclick={() => add('timsFolders')}
+        >Add .d folders</Button>
+      <Button variant="outline" size="sm" class={headerButton} disabled={form.adding > 0} onclick={() => add('spectra')}>Add files</Button>
     </div>
     <input bind:this={designInput} type="file" accept=".tsv,.txt" hidden onchange={(e) => loadDesign(e.currentTarget)} />
   </Card.Header>

@@ -696,3 +696,99 @@ fn the_bundled_example_is_opennuxls_test_run_and_its_target_proteins() {
         None
     );
 }
+
+/// A Thermo .raw shows its size, a Bruker timsTOF .d folder the size of its analysis.* files (with or without a
+/// trailing separator); neither is read, so neither has a spectrum count.
+#[test]
+fn a_raw_file_and_a_d_folder_show_their_sizes() {
+    let tmp = TempDir::new("inspect-vendor");
+    let raw = tmp.write("run.RAW", "0123456789");
+    let facts = inspect(raw.to_str().unwrap());
+    assert_eq!((facts.size, facts.spectra), (10, None));
+    assert_eq!((facts.error, facts.problem), (None, None));
+    tmp.write("run.d/analysis.tdf", "12345");
+    tmp.write("run.d/analysis.tdf_bin", "1234567");
+    tmp.write("run.d/chromatography-data.sqlite", "not counted");
+    let d = tmp.path().join("run.d");
+    for path in [
+        d.to_string_lossy().into_owned(),
+        format!("{}{}", d.display(), std::path::MAIN_SEPARATOR),
+    ] {
+        let facts = inspect(&path);
+        assert_eq!(facts.path, path, "as given");
+        assert_eq!(facts.name, "run.d");
+        assert_eq!((facts.size, facts.spectra), (12, None), "{path}");
+        assert_eq!((facts.error, facts.problem), (None, None), "{path}");
+    }
+    // TSF data
+    tmp.write("tsf.d/analysis.tsf", "1");
+    tmp.write("tsf.d/analysis.tsf_bin", "1");
+    let facts = inspect(tmp.path().join("tsf.d").to_str().unwrap());
+    assert_eq!((facts.size, facts.problem), (2, None));
+}
+
+/// What OpenNuXL cannot search of vendor data has a problem that says what to do.
+#[test]
+fn vendor_data_that_opennuxl_cannot_search_has_a_problem() {
+    let tmp = TempDir::new("inspect-vendor");
+    let problem = |path: &Path| {
+        let facts = inspect(path.to_str().unwrap());
+        assert_eq!(facts.error, None, "{}", path.display());
+        facts
+            .problem
+            .unwrap_or_else(|| panic!("{}: no problem", path.display()))
+    };
+    tmp.write("agilent.d/AcqData/MSScan.bin", "x");
+    assert_eq!(
+        problem(&tmp.path().join("agilent.d")),
+        "agilent.d is not a Bruker timsTOF .d folder (no analysis.tdf or analysis.tsf)."
+    );
+    tmp.write("half.d/analysis.tdf", "x");
+    assert!(problem(&tmp.path().join("half.d")).contains("analysis.tdf_bin"));
+    assert!(problem(&tmp.write("run.d.zip", "PK")).contains("unzip it first"));
+    assert!(problem(&tmp.write("file.d", "x")).contains("is a folder"));
+    tmp.write("waters.raw/_FUNC001.DAT", "x");
+    assert!(problem(&tmp.path().join("waters.raw")).contains("Waters"));
+    assert_eq!(problem(&tmp.write("empty.raw", "")), "empty.raw is empty.");
+    // anything else is not looked up
+    let facts = inspect(tmp.write("run.wiff", "x").to_str().unwrap());
+    assert!(
+        facts
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("a Thermo .raw file or a Bruker timsTOF .d folder")),
+        "{facts:?}"
+    );
+}
+
+/// The spectra converted from a .raw input are a file of the search folder, served as any; the .raw itself (by
+/// its link or its path) is never read.
+#[cfg(unix)]
+#[test]
+fn the_converted_spectra_are_served_and_the_vendor_input_is_not() {
+    let (tmp, searches) = search_with("/nowhere/db.fasta");
+    let raw = tmp.write("user/b.raw", "vendor bytes");
+    let folder = searches.join("1-0");
+    link(&raw, &folder.join("1__b.raw"));
+    fs::write(folder.join("nuxl/1__b.spectra.mzML"), "<indexedmzML/>").unwrap();
+    let records = serde_json::json!([
+        { "id": "f0", "index": 0, "link": "1__b.raw", "stem": "1__b", "name": "b.raw", "path": raw },
+    ]);
+    fs::write(folder.join("inputs.json"), records.to_string()).unwrap();
+    assert_eq!(
+        read_search_file(
+            &searches,
+            "1-0",
+            "nuxl/1__b.spectra.mzML",
+            ByteRange::Tail(4)
+        )
+        .unwrap(),
+        b"ML/>"
+    );
+    for name in ["1__b.raw", raw.to_str().unwrap()] {
+        assert!(
+            refused(read_search_file(&searches, "1-0", name, ByteRange::Tail(4))),
+            "{name}"
+        );
+    }
+}

@@ -49,7 +49,7 @@
       "icons/icon.png"
     ],
     "shortDescription": "NuXL: protein-nucleic acid cross-links identified with OpenNuXL of OpenMS",
-    "longDescription": "NuXL identifies protein-RNA and protein-DNA cross-links in MS/MS spectra (mzML) against a protein database (FASTA) with OpenNuXL of OpenMS, rescores with Percolator, and shows the cross-links, peptides and proteins with their adducts, cross-linked residues and annotated spectra. Everything runs on this computer.",
+    "longDescription": "NuXL identifies protein-RNA and protein-DNA cross-links in MS/MS spectra (mzML, Thermo .raw or Bruker timsTOF .d) against a protein database (FASTA) with OpenNuXL of OpenMS, rescores with Percolator, and shows the cross-links, peptides and proteins with their adducts, cross-linked residues and annotated spectra. Everything runs on this computer.",
     "publisher": "OpenMS",
     "homepage": "https://openms.de",
     "linux": {

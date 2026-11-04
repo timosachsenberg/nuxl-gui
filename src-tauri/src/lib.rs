@@ -1,8 +1,9 @@
 //! NuXL desktop: the Tauri shell around OpenNuXL of OpenMS (protein–nucleic acid cross-links).
 //!
-//! The shim (`tool`, `args`, `progress`, `run`) runs the tool for a search request, once per input file and
-//! one after the other (`docs/design.md`), and reports its progress; the commands and events below are what the
-//! front end sees:
+//! The shim (`tool`, `args`, `progress`, `run`) runs the tool for a search request, once per input (an mzML, a
+//! Thermo .raw file or a Bruker timsTOF .d folder) and one after the other (`docs/design.md`), converts the spectra
+//! of a .raw or .d input to mzML after its run (FileConverter) for the PSM view, and reports its progress; the
+//! commands and events below are what the front end sees:
 //!
 //! - `tool_info` -> `{ version, path }`
 //! - `start_search(request)` -> `{ searchId }`; `cancel_search(searchId)`
@@ -12,8 +13,10 @@
 //! - `read_search_file(searchId, name, tail?, offset?, length?)` -> the bytes of a file of the search's folder
 //!   (with `tail`: its last `tail` bytes; with `offset` and `length`: those bytes), of the database its
 //!   database.json records, or, by `tail` or `offset` and `length` only, of an input's mzML, named by its link
-//!   (`<n>__<name>`) or its path in inputs.json (`files`; rejects `{ notFound, message }`)
+//!   (`<n>__<name>`) or its path in inputs.json (`files`; rejects `{ notFound, message }`). The spectra of a .raw
+//!   or .d input are the folder's `nuxl/<stem>.spectra.mzML` (its outputs.json's `spectra`)
 //! - `inspect_files(paths)` -> `[{ path, name, size, spectra?, proteins?, residues?, error?, problem?, warnings }]`
+//!   (mzML, .raw and .d inputs, FASTA files)
 //! - `cpu_count()` -> the cores the search's threads may use
 //! - `example_files()` -> `{ spectra: [path], database }`
 //! - `save_text(name, contents)` and `save_search_file(searchId, name, suggested)`: a save dialog of
@@ -529,24 +532,33 @@ fn answer_close(
 /// The flag of the packaged app's start test (CI: `native/scripts/start-test.sh`). The app starts as
 /// usual; once its page has loaded it prints one line of JSON, `{"page": <url>, "resources": <the
 /// resource folder the app uses>, "tauriResources": <Tauri's, or why there is none>, "tool":
-/// <tool_info>, "percolatorAdapter": <whether PercolatorAdapter is beside the tool>}` (or `"error"` in place of
-/// `"tool"`), and exits: 0, or 1 when the tool cannot be used (or has no PercolatorAdapter beside it). A page that
-/// has not loaded after [`SMOKE_TIMEOUT`] ends the app with 2. It reads nothing and writes nothing else.
+/// <tool_info>, "percolatorAdapter": <whether PercolatorAdapter is beside the tool>, "fileConverter": <whether
+/// FileConverter is beside it>, "dotnet": <whether the bundle has its .NET runtime beside bin/>, "thermoBridge":
+/// <whether it has the Thermo bridge's managed part in share/OpenMS>}` (or `"error"` in place of `"tool"`), and
+/// exits: 0, or 1 when the tool cannot be used (or has no PercolatorAdapter or FileConverter beside it). A page
+/// that has not loaded after [`SMOKE_TIMEOUT`] ends the app with 2. It reads nothing and writes nothing else.
 pub const SMOKE_TEST: &str = "--smoke-test";
 const SMOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// What `--smoke-test` reports, and the exit code.
 fn smoke_report(app: &AppHandle, page: &str) -> (i32, String) {
-    let tool = tool::resolve(resource_dir(app).as_deref())
-        .and_then(|path| Ok((tool::probe(&path)?, tool::has_percolator_adapter(&path))));
-    let (code, key, value, adapter) = match tool {
-        Ok((info, adapter)) => (
-            if adapter { 0 } else { 1 },
+    let tool = tool::resolve(resource_dir(app).as_deref()).and_then(|path| {
+        let siblings = [
+            tool::has_percolator_adapter(&path),
+            tool::file_converter(&path).is_some(),
+            tool::bundled_dotnet(&path).is_some(),
+            tool::bundled_thermo_bridge(&path).is_some(),
+        ];
+        Ok((tool::probe(&path)?, siblings))
+    });
+    let (code, key, value, [adapter, converter, dotnet, bridge]) = match tool {
+        Ok((info, siblings)) => (
+            if siblings[0] && siblings[1] { 0 } else { 1 },
             "tool",
             serde_json::to_value(info).unwrap_or_default(),
-            adapter,
+            siblings,
         ),
-        Err(e) => (1, "error", serde_json::Value::String(e), false),
+        Err(e) => (1, "error", serde_json::Value::String(e), [false; 4]),
     };
     let resources = resource_dir(app).map(|dir| dir.to_string_lossy().into_owned());
     let tauri_resources = match app.path().resource_dir() {
@@ -559,6 +571,9 @@ fn smoke_report(app: &AppHandle, page: &str) -> (i32, String) {
         "tauriResources": tauri_resources,
         key: value,
         "percolatorAdapter": adapter,
+        "fileConverter": converter,
+        "dotnet": dotnet,
+        "thermoBridge": bridge,
     })
     .to_string();
     (code, line)

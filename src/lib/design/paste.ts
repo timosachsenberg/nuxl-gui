@@ -12,15 +12,16 @@ export type DesignUpdate = { index: number; fields: DesignFields }
 
 type Field = keyof DesignFields | 'file'
 
-/** The file name without folders. */
+/** The file or folder name without the folders it is in (a trailing separator ignored: `x/run.d/` is `run.d`). */
 function baseName(path: string): string {
-  return path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
+  const p = path.replace(/(.)[\\/]+$/, '$1')
+  return p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1)
 }
 
 /**
  * The row of `fileNames` each of `names` refers to (-1: none): the same name, else the same stem in any
- * case (a design may list `run.raw` for `run.mzML`). Folders are ignored. Each file goes to one name only,
- * in order.
+ * case (a design may list `run.raw` for `run.mzML`, or `run.d` for `run.mzML`). The folders a name is in are
+ * ignored; a Bruker `.d` folder is a name like a file's. Each file goes to one name only, in order.
  */
 export function matchFiles(names: string[], fileNames: string[]): number[] {
   const taken = new Set<number>()
@@ -32,7 +33,7 @@ export function matchFiles(names: string[], fileNames: string[]): number[] {
   const exact = names.map((n) => find((f) => f === baseName(n)))
   return exact.map((i, k) => {
     if (i >= 0) return i
-    const stem = fileStem(names[k]).toLowerCase()
+    const stem = fileStem(baseName(names[k])).toLowerCase()
     return find((f) => fileStem(f).toLowerCase() === stem)
   })
 }

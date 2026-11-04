@@ -11,7 +11,7 @@
 //   AD-CO-H2O1+  YTF  QQ-H3N1+        an internal fragment (its residues; '-CO': a-type), with losses
 //
 // The intensities are relative (NuXL's normalized spectrum), the m/z the peaks'. The PSM view shows these peaks when
-// the input mzML cannot be read, and their labels on the observed peaks.
+// the input mzML (or the converted spectra of a .raw or .d) cannot be read, and their labels on the observed peaks.
 
 /** A peak of NuXL's annotation. */
 export interface NuxlPeak {

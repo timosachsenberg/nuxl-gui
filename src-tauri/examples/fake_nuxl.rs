@@ -17,11 +17,19 @@
 //!             -percolator_backend none, as OpenNuXL prints it), no _perc_ files
 //!   <other>   searches the input and exits 0
 //!
-//! Beside -in it writes OpenNuXL's debug table `<in>.ambiguous_masses.csv` (every run that gets to the nucleotide
-//! tags). In the search folder (the parent of `<out>`'s folder) it appends a line to inputs.txt (the -in path and the
-//! file it resolves to) and leaves tool.pid and, for hang and stubborn, children.pid; beside `<out>` it leaves
-//! `<stem>.argv.txt` (one argument per line). `--help` prints OpenMS' version line (to stderr, as TOPPBase
-//! does); `--sleep` (the children) sleeps five minutes.
+//! An input may be an mzML, a Thermo `.raw` (a file) or a Bruker `.d` (a folder): its spectra are read with the
+//! reader's progress label (`loading mzML`, `Loading Thermo RAW file`, `Loading DDA-PASEF data`). Beside -in it
+//! writes OpenNuXL's debug table `<in>.ambiguous_masses.csv` (every run that gets to the nucleotide tags). In the
+//! search folder (the parent of `<out>`'s folder) it appends a line to inputs.txt (the -in path and the file it
+//! resolves to) and leaves tool.pid and, for hang and stubborn, children.pid; beside `<out>` it leaves
+//! `<stem>.argv.txt` (one argument per line) and `<stem>.env.txt` (its `DOTNET_*` and `OPENMS_*` variables,
+//! sorted). `--help` prints OpenMS' version line (to stderr, as TOPPBase does); `--sleep` (the children) sleeps
+//! five minutes.
+//!
+//! Started as `FileConverter` (a copy of this executable of that name beside the fake OpenNuXL, where the shim
+//! looks for it) it is the stand-in for OpenMS' FileConverter of `tests/fake-nuxl.sh`: it writes a copy of
+//! `src/lib/results/fixtures/spectra/OpenNuXL_1_input.indexed.mzML` to `-out`, with the modes `convfail` (also
+//! with `FAKE_FILECONVERTER_FAIL=1`), `convhang` and `convnone`.
 
 use std::fs;
 use std::io::Write;
@@ -79,6 +87,133 @@ fn progress(label: &str) {
     out(&format!("Progress of '{label}':\n"));
 }
 
+/// The label of the progress of reading the spectra of `input`, as OpenMS' reader of its kind prints it.
+fn loading_label(input: &str) -> &'static str {
+    let lower = input.to_ascii_lowercase();
+    if lower.ends_with(".raw") {
+        "Loading Thermo RAW file"
+    } else if lower.ends_with(".d") {
+        "Loading DDA-PASEF data"
+    } else {
+        "loading mzML"
+    }
+}
+
+/// The variables of .NET and OpenMS of this process, sorted, one `NAME=value` per line.
+fn tool_env() -> String {
+    let mut vars: Vec<String> = std::env::vars_os()
+        .map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                v.to_string_lossy().into_owned(),
+            )
+        })
+        .filter(|(k, _)| k.starts_with("DOTNET_") || k.starts_with("OPENMS_"))
+        .map(|(k, v)| format!("{k}={v}\n"))
+        .collect();
+    vars.sort();
+    vars.concat()
+}
+
+/// Whether this executable was started as FileConverter (by the name it was started under, or its own).
+fn is_file_converter() -> bool {
+    let named = |path: &Path| {
+        path.file_stem()
+            .is_some_and(|stem| stem.eq_ignore_ascii_case("FileConverter"))
+    };
+    std::env::args_os()
+        .next()
+        .is_some_and(|arg| named(Path::new(&arg)))
+        || std::env::current_exe().is_ok_and(|exe| named(&exe))
+}
+
+/// The stand-in for FileConverter (see the module docs).
+fn file_converter(args: &[String]) -> ! {
+    let value = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|at| args.get(at + 1))
+            .cloned()
+            .unwrap_or_default()
+    };
+    let (input, output) = (value("-in"), value("-out"));
+    if output.is_empty() {
+        eprintln!("Error: The required parameter '-out' was not given or is empty!");
+        exit(2);
+    }
+    let dir = Path::new(&output).parent().unwrap().to_path_buf();
+    let name = Path::new(&output)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let stem = name.strip_suffix(".mzML").unwrap_or(&name);
+    let stem = stem.strip_suffix(".spectra.tmp").unwrap_or(stem);
+    fs::write(
+        dir.join(format!("{stem}.FileConverter.argv.txt")),
+        args.iter().map(|a| format!("{a}\n")).collect::<String>(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join(format!("{stem}.FileConverter.env.txt")),
+        tool_env(),
+    )
+    .unwrap();
+    let folder = dir.parent().unwrap();
+    fs::write(
+        folder.join("converter.pid"),
+        format!("{}\n", std::process::id()),
+    )
+    .unwrap();
+    if !Path::new(&input).exists() {
+        eprintln!("Error: File not found (the file '{input}' could not be found)");
+        exit(6);
+    }
+    let input_name = Path::new(&input)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let input_name = input_name
+        .split_once("__")
+        .map_or(input_name.as_str(), |(_, rest)| rest);
+    let mode = input_name.split('.').next().unwrap_or("");
+    progress(loading_label(&input));
+    if mode == "convfail" || std::env::var_os("FAKE_FILECONVERTER_FAIL").is_some_and(|v| v == "1") {
+        eprintln!("Error: Unable to read file (the fake FileConverter cannot read {input})");
+        exit(6);
+    }
+    match mode {
+        "convhang" => {
+            let me = std::env::current_exe().unwrap();
+            let mut child = Command::new(&me).arg("--sleep").spawn().unwrap();
+            fs::write(
+                folder.join("converter-children.pid"),
+                format!("{}\n", child.id()),
+            )
+            .unwrap();
+            let _ = child.wait();
+            exit(0);
+        }
+        "convnone" => exit(0),
+        _ => {}
+    }
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let spectra = [
+        fixtures.join("src/lib/results/fixtures/spectra/OpenNuXL_1_input.indexed.mzML"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/example/OpenNuXL_1_input.mzML"),
+    ]
+    .into_iter()
+    .find(|p| p.is_file())
+    .expect("the example spectra of the repository");
+    if let Err(e) = fs::copy(&spectra, &output) {
+        eprintln!("Error: Unable to write file (the file '{output}' could not be created: {e})");
+        exit(12);
+    }
+    done_line();
+    exit(0);
+}
+
 fn done_line() {
     out("\r-- done [took 0.01 s (CPU), 0.01 s (Wall)] -- \n");
 }
@@ -114,6 +249,9 @@ fn main() {
     if args.first().map(String::as_str) == Some("--sleep") {
         std::thread::sleep(Duration::from_secs(300));
         exit(0);
+    }
+    if is_file_converter() {
+        file_converter(&args);
     }
     if args.iter().any(|a| a == "--help") {
         eprintln!("OpenNuXL -- a stand-in for the shim's tests");
@@ -168,6 +306,7 @@ fn main() {
         args.iter().map(|a| format!("{a}\n")).collect::<String>(),
     )
     .unwrap();
+    fs::write(outputs.join(format!("{stem}.env.txt")), tool_env()).unwrap();
     fs::write(folder.join("tool.pid"), format!("{}\n", std::process::id())).unwrap();
     let Ok(real) = fs::canonicalize(&input) else {
         eprintln!("Error: File not found (the file '{input}' could not be found)");
@@ -189,13 +328,14 @@ fn main() {
         .split_once("__")
         .map_or(name.as_str(), |(_, rest)| rest);
     let mode = name.split('.').next().unwrap_or("");
+    let loading = loading_label(&input);
 
     match mode {
         "hang" | "stubborn" => {
             if mode == "stubborn" {
                 ignore_sigterm();
             }
-            progress("loading mzML");
+            progress(loading);
             let me = std::env::current_exe().unwrap();
             let mut children = Vec::new();
             let mut pids = String::new();
@@ -212,7 +352,7 @@ fn main() {
         }
         "crash" => {
             out("Running autotune...\nIDFilter excludes 0 spectra.\n");
-            progress("loading mzML");
+            progress(loading);
             eprintln!("Schema error: Trying to register schema with name Abs");
             eprintln!("Error: Unable to read file (the input broke {input})");
             exit(3);
@@ -224,7 +364,7 @@ fn main() {
             exit(12);
         }
         "segv" => {
-            progress("loading mzML");
+            progress(loading);
             eprintln!("Reading {input} ...");
             crash();
         }
@@ -234,7 +374,7 @@ fn main() {
     out("Running autotune...\n");
     out("autotune: too few non-cross-linked peptides found. Will keep parameters as-is.\n");
     out("IDFilter excludes 0 spectra.\n");
-    progress("loading mzML");
+    progress(loading);
     done_line();
     for step in [
         "Filtering spectra...",

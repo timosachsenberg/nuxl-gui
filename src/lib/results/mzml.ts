@@ -1,7 +1,7 @@
 // The peaks of one spectrum of an mzML file, read by byte range (the search folder's `read_search_file` serves an
-// input mzML only so, never whole): an indexedmzML by its index (the tail's <indexListOffset>, the index's
-// <offset idRef="...">), else by scanning the file once in chunks for its <spectrum> elements (at most
-// MAX_SCANNED bytes), and then that <spectrum> element alone. Its binary data arrays are decoded as mzML 1.1 has them
+// input mzML, or the mzML of a .raw/.d input's spectra the shim wrote, only so, never whole): an indexedmzML by its
+// index (the tail's <indexListOffset>, the index's <offset idRef="...">), else by scanning the file once in chunks for
+// its <spectrum> elements (at most MAX_SCANNED bytes), and then that <spectrum> element alone. Its binary data arrays are decoded as mzML 1.1 has them
 // (MzMLHandler): base64, zlib or no compression (MS:1000574, MS:1000576), zstd as OpenMS develop writes it (MS:1003780,
 // byte-shuffled MS:1003781, dictionary-encoded MS:1003782; ZstdCompression.cpp), 32- or 64-bit floats (MS:1000521,
 // MS:1000523), the m/z and intensity arrays by their CV terms (MS:1000514, MS:1000515). MS-Numpress (alone or followed

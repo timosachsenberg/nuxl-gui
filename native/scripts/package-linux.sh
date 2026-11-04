@@ -1,5 +1,6 @@
 #!/bin/bash
-# Builds the app's Linux packages, the .deb and the AppImage, with the bundled OpenNuXL in them.
+# Builds the app's Linux packages, the .deb and the AppImage, with the bundled OpenNuXL (and PercolatorAdapter,
+# FileConverter, the .NET runtime of the .raw reader: bundle-nuxl.sh) in them.
 #
 #   package-linux.sh        (src-tauri/resources/nuxl has to be filled first: bundle-nuxl.sh)
 #
@@ -41,7 +42,8 @@ TOOLS=${XDG_CACHE_HOME:-$HOME/.cache}/tauri
 NUXL=$ROOT/src-tauri/resources/nuxl
 
 die() { echo "error: $*" >&2; exit 1; }
-[ -x "$NUXL/bin/OpenNuXL" ] && [ -x "$NUXL/bin/PercolatorAdapter" ] && [ -f "$NUXL/build.json" ] \
+[ -x "$NUXL/bin/OpenNuXL" ] && [ -x "$NUXL/bin/PercolatorAdapter" ] && [ -x "$NUXL/bin/FileConverter" ] \
+  && [ -d "$NUXL/dotnet/host/fxr" ] && [ -f "$NUXL/build.json" ] \
   || die "src-tauri/resources/nuxl holds no bundled OpenNuXL: run native/scripts/bundle-nuxl.sh <openms-build> src-tauri/resources/nuxl"
 sysroot_mode=false
 case "$(pkg-config --variable=libdir webkit2gtk-4.1 2>/dev/null)" in
@@ -151,10 +153,17 @@ for notices in "$resources/notices/THIRD-PARTY-NOTICES.txt" "$work/deb/usr/lib/$
   [ -s "$notices" ] || die "$notices is missing"
 done
 [ -f "$resources/nuxl/share/OpenMS/NUXL/nuxl_presets.json" ] || die "OpenNuXL's presets are missing"
-for exe in "$resources/nuxl/bin/OpenNuXL" "$resources/nuxl/bin/PercolatorAdapter" \
-  "$work/deb/usr/lib/$product/resources/nuxl/bin/OpenNuXL" "$work/deb/usr/lib/$product/resources/nuxl/bin/PercolatorAdapter"; do
-  [ -x "$exe" ] || die "$exe is missing or not executable"
-  readelf -d "$exe" | grep -q 'RPATH.*\[\$ORIGIN/\.\./lib\]' || die "$exe lost its RPATH \$ORIGIN/../lib"
+for nuxl in "$resources/nuxl" "$work/deb/usr/lib/$product/resources/nuxl"; do
+  for exe in "$nuxl/bin/OpenNuXL" "$nuxl/bin/PercolatorAdapter" "$nuxl/bin/FileConverter"; do
+    [ -x "$exe" ] || die "$exe is missing or not executable"
+    readelf -d "$exe" | grep -q 'RPATH.*\[\$ORIGIN/\.\./lib\]' || die "$exe lost its RPATH \$ORIGIN/../lib"
+  done
+  # the .raw reader: the Thermo bridge's managed half and the .NET runtime that hosts it, the runtime's files as
+  # bundled (the AppImage gets them after linuxdeploy ran; the .deb as Tauri copied them)
+  [ -f "$nuxl/share/OpenMS/openms_thermo_bridge/managed/ThermoWrapperManaged.dll" ] \
+    || die "$nuxl has no share/OpenMS/openms_thermo_bridge/managed/ThermoWrapperManaged.dll"
+  diff <(cd "$NUXL/dotnet" && find . -type f -exec cksum {} + | sort) <(cd "$nuxl/dotnet" && find . -type f -exec cksum {} + | sort) >/dev/null \
+    || die "$nuxl/dotnet is not the bundle's .NET runtime"
 done
 # glibc is the system's (bundle-nuxl.sh's exclude list): neither its loader (ld-linux-x86-64.so.2,
 # ld-linux-aarch64.so.1) nor libc may be in the bundle
@@ -168,5 +177,5 @@ echo "packages:"
 for f in "$appimage" "$deb"; do
   echo "  $(du -h "$f" | cut -f1)	$(basename "$f")"
 done
-echo "  $(du -sh "$appdir" | cut -f1)	AppDir (unpacked AppImage), of which $(du -sh "$resources/nuxl" | cut -f1) OpenNuXL"
+echo "  $(du -sh "$appdir" | cut -f1)	AppDir (unpacked AppImage), of which $(du -sh "$resources/nuxl" | cut -f1) OpenNuXL ($(du -sh "$resources/nuxl/dotnet" | cut -f1) of it the .NET runtime)"
 echo "  $(dpkg-deb -f "$deb" Installed-Size) KiB	installed size of the .deb $(dpkg-deb -f "$deb" Package) ($(dpkg-deb -f "$deb" Depends))"

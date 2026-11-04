@@ -16,7 +16,7 @@
 //! | (the run starts: `run.rs`, [`ProgressTracker::start_run`])              | `Searching <name> (k of n)...`              | 0            |
 //! | `Running autotune...` (filters `autotune`, `idfilter`)                  | `Autotune: <name> (k of n)...`              | 0.02         |
 //! | `IDFilter excludes <n> spectra.` (always; the autotune is over)         | (none)                                      |              |
-//! | `Progress of 'loading mzML':` (before the spectra are prepared)         | `Reading the spectra of <name> (k of n)...` | 0.12         |
+//! | `Progress of 'loading mzML':`, `'Loading Thermo RAW file'`, `'Loading DDA-PASEF data'`, `'Loading frames'` (before the spectra are prepared) | `Reading the spectra of <name> (k of n)...` | 0.12 |
 //! | `Progress of 'Filtering spectra...'`, `'Calculate Nucleotide Tags...'`, `'Calculate intensity ranks...'`, `'Calculate AA Tags...'`, `'Mapping precursors to scan...'`, `'Indexing spectra...'` | `Preparing the spectra of <name> (k of n)...` | 0.13 to 0.18 |
 //! | `Progress of 'Load database from FASTA file...'`                        | `Reading the database (k of n)...`          | 0.19         |
 //! | `Progress of 'Generating decoys...'`                                    | `Generating decoys (k of n)...`             | 0.20         |
@@ -25,6 +25,7 @@
 //! | `Calculating peptide and XL q-values.`                                  | `FDR: <name> (k of n)...`                   | 0.90         |
 //! | `Running percolator.`                                                   | `Percolator: <name> (k of n)...`            | 0.92         |
 //! | `Calculating peptide and XL q-values for percolator results.`           | `FDR: <name> (k of n)...`                   | 0.98         |
+//! | (a `.raw` or `.d` input's spectra are converted after the run: `run.rs`, [`ProgressTracker::start_conversion`]) | `Preparing the spectra of <name> for the PSM view (k of n)...` | 0.99 |
 //!
 //! `<name>` is the user's file name (the shim searches links named `<n>__<name>`; the tracker is given the
 //! original names). The scoring of the database is most of a run (the iPRG-sized runs of OpenNuXL's users spend
@@ -32,7 +33,11 @@
 //! other steps are estimates of where in a run they sit, not measurements. The autotune is a whole search of
 //! the run without cross-links (SimpleSearchEngine, which prints nothing), hence its tenth.
 //!
-//! The autotune's filter step `spectrumclusterfilter` loads the mzML too (`Progress of 'loading mzML':`, between
+//! OpenNuXL reads its input through OpenMS' FileHandler, whose readers name their loads: `loading mzML` (MzMLFile),
+//! `Loading Thermo RAW file` (ThermoRawFile, a `.raw`), `Loading DDA-PASEF data` (BrukerTimsFile, the MS2 spectra of
+//! a timsTOF `.d` of TDF data) or `Loading frames` (a `.d` of TSF data). Each is the reading of the spectra.
+//!
+//! The autotune's filter step `spectrumclusterfilter` loads the spectra too (`Progress of 'loading mzML':`, between
 //! `Running autotune...` and `IDFilter excludes`): that load is the autotune's, and moves nothing.
 //!
 //! A line that is not in the table gives no event; the fraction never goes back, so a step that comes again
@@ -52,6 +57,16 @@ const POST_PROCESSING: [f64; 3] = [0.80, 0.82, 0.86];
 const FDR: f64 = 0.90;
 const PERCOLATOR: f64 = 0.92;
 const PERCOLATOR_FDR: f64 = 0.98;
+const CONVERTING: f64 = 0.99;
+
+/// The labels of the readers' loads of the spectra (OpenMS' FileHandler: MzMLFile, ThermoRawFile, BrukerTimsFile of
+/// TDF data, of TSF data).
+const LOADING: [&str; 4] = [
+    "loading mzML",
+    "Loading Thermo RAW file",
+    "Loading DDA-PASEF data",
+    "Loading frames",
+];
 
 /// The steps of the spectra's preparation (OpenNuXL's labels), in their order.
 const PREPARING: [&str; 6] = [
@@ -86,6 +101,8 @@ enum Stage {
     PostProcessing,
     Fdr,
     Percolator,
+    /// The shim's conversion of the spectra after the run (FileConverter), which follows no line of OpenNuXL.
+    Converting,
 }
 
 #[derive(Debug)]
@@ -213,6 +230,25 @@ impl ProgressTracker {
             .expect("the start of a run is reported")
     }
 
+    /// The spectra of input `file` are converted after its run (`run.rs`: FileConverter, for a `.raw` or `.d`):
+    /// `Preparing the spectra of <name> for the PSM view (k of n)...` near the end of the run's part. A line fed
+    /// after it moves nothing.
+    pub fn start_conversion(&mut self, file: usize) -> ProgressUpdate {
+        self.count = self.count.max(file + 1);
+        self.current = Some(file);
+        self.stage = Stage::Converting;
+        let name = self.names.get(file).map(String::as_str).unwrap_or("");
+        let label = format!(
+            "Preparing the spectra of {name} for the PSM view ({} of {})...",
+            file + 1,
+            self.count
+        );
+        let at = self.run_at(CONVERTING);
+        self.last = None;
+        self.report_at(label, file as i32, at)
+            .expect("the start of a conversion is reported")
+    }
+
     /// One line of the current run's stdout (its line end, `\n` or `\r`, removed); the progress it marks, if any.
     pub fn feed(&mut self, line: &str) -> Option<ProgressUpdate> {
         self.current?;
@@ -266,7 +302,7 @@ impl ProgressTracker {
 
     /// A step with a progress of its own (`Progress of '<label>':`).
     fn progress_started(&mut self, label: &str) -> Option<ProgressUpdate> {
-        if label.starts_with("loading mzML") {
+        if LOADING.iter().any(|l| label.starts_with(l)) {
             // the spectra are read before they are prepared, and again for the post-processing (moves nothing);
             // the autotune's spectrumclusterfilter reads them too (its own step)
             if self.stage > Stage::Spectra || self.autotuning {
@@ -569,6 +605,71 @@ mod tests {
             .iter()
             .any(|l| l.starts_with("Autotune") || l.starts_with("Generating")));
         assert_monotone(&steps);
+    }
+
+    /// OpenMS' readers of a Thermo .raw and a Bruker timsTOF .d (TDF, TSF) name their loads of the spectra: each is
+    /// the reading of the spectra, as `loading mzML` is; the autotune's own load of them is the autotune's.
+    #[test]
+    fn the_native_readers_loads_are_the_reading_of_the_spectra() {
+        for (name, load) in [
+            ("run.raw", "Loading Thermo RAW file"),
+            ("run.d", "Loading DDA-PASEF data"),
+            ("tsf.d", "Loading frames"),
+        ] {
+            let lines: Vec<String> = run_lines(false)
+                .into_iter()
+                .map(|l| l.replace("loading mzML", load))
+                .collect();
+            let steps = steps(&[name], &[lines]);
+            let reading: Vec<&Step> = steps
+                .iter()
+                .filter(|s| s.0.starts_with("Reading the spectra"))
+                .collect();
+            assert_eq!(reading.len(), 1, "{steps:?}");
+            assert_eq!(
+                reading[0].0,
+                format!("Reading the spectra of {name} (1 of 1)...")
+            );
+            assert!((reading[0].2 - READING).abs() < 1e-9);
+            assert_monotone(&steps);
+            // the autotune's load (spectrumclusterfilter) moves nothing
+            let mut tracker = ProgressTracker::new(vec![name.to_string()]);
+            tracker.start_run(0);
+            tracker.feed("Running autotune...");
+            assert!(tracker.feed(&format!("Progress of '{load}':")).is_none());
+        }
+    }
+
+    /// The conversion of a run's spectra (after the run) is near the end of the run's part, with its own label;
+    /// OpenNuXL's lines after it move nothing, and the next run starts at its part.
+    #[test]
+    fn the_conversion_of_the_spectra_ends_the_runs_part() {
+        let mut tracker = ProgressTracker::new(vec!["a.raw".into(), "b.d".into()]);
+        tracker.start_run(0);
+        for line in run_lines(true) {
+            tracker.feed(&line);
+        }
+        let before = tracker.fraction;
+        let p = tracker.start_conversion(0);
+        assert_eq!(
+            p.label,
+            "Preparing the spectra of a.raw for the PSM view (1 of 2)..."
+        );
+        assert_eq!(p.file, 0);
+        assert!(
+            (p.fraction - CONVERTING / 2.0).abs() < 1e-9 && p.fraction >= before,
+            "{p:?}"
+        );
+        assert!(tracker
+            .feed("Progress of 'Loading Thermo RAW file':")
+            .is_none());
+        assert!(tracker.feed("50.00 %").is_none());
+        assert_eq!(tracker.label(), p.label);
+        let next = tracker.start_run(1);
+        assert_eq!(next.label, "Searching b.d (2 of 2)...");
+        assert!((next.fraction - 0.5).abs() < 1e-9);
+        let q = tracker.start_conversion(1);
+        assert!(q.fraction < 1.0 && q.fraction > next.fraction, "{q:?}");
     }
 
     #[test]

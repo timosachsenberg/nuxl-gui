@@ -175,6 +175,13 @@ describe('spectrumLabel', () => {
     expect(spectrumLabel('merged=3 frame=5')).toBe('merged=3 frame=5')
     expect(spectrumLabel('scan=12a')).toBe('scan=12a')
   })
+
+  it("shows a Bruker timsTOF ID's precursor: its scan= is a mobility scan of the frame, which precursors share", () => {
+    expect(spectrumLabel('frame=104 scan=201 precursor=1020')).toBe('1020')
+    expect(spectrumLabel('frame=104 scan=200 precursor=1019')).toBe('1019')
+    // (precursor= alone, without a frame, is no timsTOF ID)
+    expect(spectrumLabel('precursor=7 scan=3')).toBe('3')
+  })
 })
 
 describe('spectrumName', () => {
@@ -183,6 +190,9 @@ describe('spectrumName', () => {
     expect(spectrumName('spectrum=19')).toBe('spectrum 19')
     expect(spectrumName('index=0')).toBe('index 0')
     expect(spectrumName('merged=3 frame=5')).toBe('spectrum merged=3 frame=5')
+    // Bruker timsTOF: by its precursor; a window without one by its frame and scan
+    expect(spectrumName('frame=104 scan=201 precursor=1020')).toBe('precursor 1020')
+    expect(spectrumName('frame=5 scan=12')).toBe('frame 5, scan 12')
     expect(spectrumName('')).toBe('spectrum not referenced')
   })
 })
@@ -193,6 +203,7 @@ describe('scanNumber', () => {
     expect(scanNumber('spectrum=0')).toBe(0)
     expect(scanNumber('index=17')).toBe(17)
     expect(scanNumber('merged=3 frame=5')).toBeNull()
+    expect(scanNumber('frame=104 scan=201 precursor=1020')).toBe(1020)
     expect(scanNumber('scan=12a')).toBeNull()
     expect(scanNumber('')).toBeNull()
   })

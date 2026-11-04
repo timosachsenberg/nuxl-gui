@@ -23,6 +23,12 @@ export interface RunOutputs {
   seconds: number
   /** the search's cutoffs (fractions): the peptide PSMs and the cross-link PSMs are filtered at these */
   fdr: { peptide: number; xl: number }
+  /**
+   * the spectra of a Thermo .raw or Bruker .d input as mzML (the shim's FileConverter run after the search,
+   * `nuxl/<stem>.spectra.mzML`, relative to the search folder), which the PSM view reads instead of the input; null:
+   * an mzML input (absent in its outputs.json), or a .raw/.d whose spectra could not be converted
+   */
+  spectra: string | null
 }
 
 const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)
@@ -53,6 +59,7 @@ export function parseOutputs(json: string): RunOutputs {
     notes: Array.isArray(r.notes) ? r.notes.filter((n): n is string => typeof n === 'string') : [],
     seconds: typeof r.seconds === 'number' ? r.seconds : NaN,
     fdr: { peptide: fraction(fdr.peptide, 'peptide'), xl: fraction(fdr.xl, 'xl') },
+    spectra: text(r.spectra),
   }
 }
 

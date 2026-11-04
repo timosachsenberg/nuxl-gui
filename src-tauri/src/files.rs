@@ -7,17 +7,20 @@
 //!   (no `..`, `.`, empty parts, other absolute paths) and the file's canonical path must lie inside
 //!   the canonical folder, so no symlink leads out of it: the shim's input links (`<n>__<name>`, to the
 //!   user's files) are not readable as the search's own files. A file that does not exist rejects with
-//!   `{ notFound: true, message }`, which the results reader takes for a missing output.
+//!   `{ notFound: true, message }`, which the results reader takes for a missing output. The spectra of a `.raw`
+//!   or `.d` input that the shim converted after its run (`nuxl/<stem>.spectra.mzML`) are such a file of the
+//!   folder; the vendor input itself is never read.
 //! - [`inspect`]: what the New search page shows of an input it was given by path (size, the spectrum
 //!   count of an mzML's header, the proteins and residues of a FASTA, and what in them OpenNuXL cannot search:
 //!   `content`): numbers and short messages, never contents, and only of absolute paths with the suffixes
-//!   the shim takes (`.mzML`, `.fasta`, `.fa`, `.faa`; `.mzML.gz` to say that it has to be unpacked); any other
-//!   path is refused before the disk is asked.
+//!   the shim takes (`.mzML`, `.raw`, `.d`, `.fasta`, `.fa`, `.faa`; `.mzML.gz` and `.d.zip` to say that they have
+//!   to be unpacked); any other path is refused before the disk is asked. Of a Thermo `.raw` it tells the size, of
+//!   a Bruker `.d` folder the size of its `analysis.*` files, and whether it is timsTOF data at all.
 //! - [`example_files`]: the bundled example, OpenMS' OpenNuXL test run and its FASTA.
 
 use crate::args::{
-    is_compressed_mzml, is_fasta_file, is_input_link, is_spectrum_file, InputRecord,
-    DATABASE_RECORD,
+    bruker_problem, input_kind, input_path, is_compressed_mzml, is_fasta_file, is_input_link,
+    is_mzml_file, is_zipped_bruker, InputKind, InputRecord, DATABASE_RECORD, INPUT_KINDS,
 };
 use crate::content;
 use serde::Serialize;
@@ -237,7 +240,8 @@ fn input_records(folder: &Path) -> Option<Vec<InputRecord>> {
 /// The user's file of an input of the search `folder` (canonical), when `name` names one: the name of its link
 /// (`<n>__<name>`, or on Windows the file's own name when it was searched by its own path), or the absolute path
 /// `inputs.json` records for it. `Ok(None)`: `name` is no input. Refused for an imported search (its records
-/// name files of another computer, or would be an attempt to name one of this) and for anything but an `.mzML`.
+/// name files of another computer, or would be an attempt to name one of this) and for anything but an `.mzML` (a
+/// `.raw` or `.d` is read through the spectra converted from it, a file of the folder).
 /// The file is the one at the recorded path now: moved or deleted, it is `not_found` (the PSM view then shows
 /// the annotated peaks only).
 pub fn input_file(
@@ -247,7 +251,7 @@ pub fn input_file(
 ) -> Result<Option<PathBuf>, ReadError> {
     let absolute = Path::new(name).is_absolute();
     // (a link name of an input, or an absolute path: only those can be inputs)
-    if !absolute && !is_spectrum_file(name) {
+    if !absolute && !is_mzml_file(name) {
         return Ok(None);
     }
     let Some(records) = input_records(folder) else {
@@ -265,7 +269,7 @@ pub fn input_file(
              own folder."
         )));
     }
-    if !Path::new(&record.path).is_absolute() || !is_spectrum_file(&record.path) {
+    if !Path::new(&record.path).is_absolute() || !is_mzml_file(&record.path) {
         return Err(ReadError::refused(format!(
             "{name} is not an input of the search {search_id} that can be read."
         )));
@@ -344,34 +348,38 @@ pub fn recorded_database(folder: &Path) -> Option<String> {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FileFacts {
-    /// As given.
+    /// As given (also with a trailing separator).
     pub path: String,
     pub name: String,
-    /// Bytes (0 with an error).
+    /// Bytes (0 with an error); of a Bruker `.d` folder the sum of its `analysis.*` files.
     pub size: u64,
-    /// The `count` of an mzML's `<spectrumList>` (all spectra); None if the header does not say.
+    /// The `count` of an mzML's `<spectrumList>` (all spectra); None if the header does not say, and for a `.raw`
+    /// or `.d` (not read).
     pub spectra: Option<u64>,
     /// The entries of a FASTA file and the residues (letters) of their sequences.
     pub proteins: Option<u64>,
     pub residues: Option<u64>,
-    /// Why the file cannot be used (not absolute, missing, a folder, unreadable).
+    /// Why the file cannot be used (not absolute, missing, a folder where a file belongs, unreadable).
     pub error: Option<String>,
     /// Why OpenNuXL cannot search the file, which is there and readable (`content`): an mzML that is not one,
-    /// is compressed, is cut off or has no spectra; a FASTA without entries, with an accession twice, ... New
-    /// search does not start with it. Sentences, the file named.
+    /// is compressed, is cut off or has no spectra; a `.d.zip` (unzip it first), a `.d` that is no timsTOF data, a
+    /// `.raw` folder (Waters); a FASTA without entries, with an accession twice, ... New search does not start
+    /// with it. Sentences, the file named.
     pub problem: Option<String>,
     /// What may surprise (an entry listed twice): shown, not blocking.
     pub warnings: Vec<String>,
 }
 
-/// The facts of the file at `path` (an absolute path). Never fails: what goes wrong is in `error`.
-pub fn inspect(path: &str) -> FileFacts {
+/// The facts of the file at `path` (an absolute path; of a `.d` folder, without trailing separators). Never fails:
+/// what goes wrong is in `error`.
+pub fn inspect(given: &str) -> FileFacts {
+    let path = input_path(given);
     let name = Path::new(path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let mut facts = FileFacts {
-        path: path.to_string(),
+        path: given.to_string(),
         name: name.clone(),
         size: 0,
         spectra: None,
@@ -387,13 +395,22 @@ pub fn inspect(path: &str) -> FileFacts {
     }
     // only what a search takes, before anything is asked of the disk: other files (a key, a document)
     // are not even looked up, so the page learns nothing of them
-    if !is_spectrum_file(&name) && !is_compressed_mzml(&name) && !is_fasta_file(&name) {
+    let kind = input_kind(&name);
+    if kind.is_none()
+        && !is_compressed_mzml(&name)
+        && !is_zipped_bruker(&name)
+        && !is_fasta_file(&name)
+    {
         facts.error = Some(format!(
-            "{path} is not an mzML file (.mzML) or a FASTA file (.fasta, .fa, .faa)."
+            "{path} is not {INPUT_KINDS}, or a FASTA file (.fasta, .fa, .faa)."
         ));
         return facts;
     }
     let meta = match fs::metadata(path) {
+        Ok(meta) if meta.is_dir() && matches!(kind, Some(InputKind::BrukerD | InputKind::Raw)) => {
+            vendor_folder(&mut facts, path, kind);
+            return facts;
+        }
         Ok(meta) if meta.is_file() => meta,
         Ok(_) => {
             facts.error = Some(format!("{path} is not a file."));
@@ -406,6 +423,28 @@ pub fn inspect(path: &str) -> FileFacts {
     };
     facts.size = meta.len();
     let file = Path::new(path);
+    match kind {
+        Some(InputKind::BrukerD) => {
+            facts.problem = Some(format!(
+                "{name} is a file: a Bruker timsTOF .d is a folder (with analysis.tdf). Add the folder."
+            ));
+            return facts;
+        }
+        Some(InputKind::Raw) => {
+            // (read by OpenNuXL itself, through Thermo's reader: nothing of it is read here)
+            if facts.size == 0 {
+                facts.problem = Some(format!("{name} is empty."));
+            }
+            return facts;
+        }
+        _ => {}
+    }
+    if is_zipped_bruker(&name) {
+        facts.problem = Some(format!(
+            "{name} is a zipped Bruker .d folder: unzip it first and add the .d folder."
+        ));
+        return facts;
+    }
     if is_compressed_mzml(&name) {
         // (not read: the search cannot take it as it is)
         facts.problem = Some(format!(
@@ -431,6 +470,36 @@ pub fn inspect(path: &str) -> FileFacts {
         facts.error = Some(format!("{path} cannot be read ({e})."));
     }
     facts
+}
+
+/// The facts of a folder named as a vendor input (`.d`, `.raw`): a Bruker timsTOF `.d` is searched (its size is
+/// that of its `analysis.*` files, the data; nothing of them is read); a `.raw` folder is Waters data, which
+/// OpenNuXL does not read, and a `.d` without timsTOF data (Agilent, Waters, another folder) neither.
+fn vendor_folder(facts: &mut FileFacts, path: &str, kind: Option<InputKind>) {
+    if kind == Some(InputKind::Raw) {
+        facts.problem = Some(format!(
+            "{} is a folder, not a Thermo .raw file: Waters .raw folders cannot be searched (convert them to mzML \
+             first).",
+            facts.name
+        ));
+        return;
+    }
+    if let Some(problem) = bruker_problem(path) {
+        facts.problem = Some(problem);
+        return;
+    }
+    match fs::read_dir(path) {
+        Ok(entries) => {
+            facts.size = entries
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with("analysis."))
+                .filter_map(|e| fs::metadata(e.path()).ok())
+                .filter(|m| m.is_file())
+                .map(|m| m.len())
+                .sum();
+        }
+        Err(e) => facts.error = Some(format!("{path} cannot be read ({e}).")),
+    }
 }
 
 /// [`inspect`] of each path, in the order given, several at once.

@@ -88,7 +88,7 @@
       onSelect={() => guard(() => view.spectrumExporter?.())}>Spectrum (SVG)</DropdownMenu.Item>
     <DropdownMenu.Item
       disabled={view.exporting}
-      title="Saves the search's results as one file that you can open in NuXL desktop elsewhere. It contains OpenNuXL's outputs, which name folders on this computer, such as those of the database and the search. The mzML files and the log are not included."
+      title="Saves the search's results as one file that you can open in NuXL desktop elsewhere. It contains OpenNuXL's outputs, which name folders on this computer, such as those of the database and the search. The spectra files (mzML, .raw, .d), the spectra converted from .raw and .d files and the log are not included: there, the PSM view shows the annotated peaks only."
       onSelect={project}>Project (.nuxl)</DropdownMenu.Item>
     <DropdownMenu.Separator />
     {#each idXMLFiles(view.result) as f (f.input)}

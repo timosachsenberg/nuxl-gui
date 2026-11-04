@@ -1,7 +1,7 @@
 <script lang="ts">
   // New search (mockup 1): spectra with the experimental design, the protein database, the search
-  // settings and rescoring, with a sticky footer to start the search. mzML and FASTA files can be
-  // dropped anywhere on the window (from the file manager: their paths, desktop.ts).
+  // settings and rescoring, with a sticky footer to start the search. mzML, Thermo .raw and FASTA files
+  // and Bruker timsTOF .d folders can be dropped anywhere on the window (from the file manager: their paths, desktop.ts).
   import DatabaseCard from '$lib/components/search/DatabaseCard.svelte'
   import DesignTable from '$lib/components/search/DesignTable.svelte'
   import EmptyState from '$lib/components/search/EmptyState.svelte'

@@ -37,6 +37,11 @@
 //            fast), taken as it is (no LINEAR): realistic precursor errors (OpenNuXL_6 searched with a tolerance of
 //            1e9 ppm) for the screenshots of docs/screens (e2e/screens.shot.ts; the fake serves it with
 //            FAKE_NUXL_RESULTS=screens). Every top hit is a cross-link, so its peptides file holds no PSM.
+//   vendor   two inputs that are not mzML: a Bruker timsTOF folder run.d (OpenNuXL_6, its native IDs Bruker's
+//            'frame=F scan=S precursor=P', where S is not unique) whose spectra the shim converted (outputs.json
+//            `spectra`: nuxl/1__run.spectra.mzML, the example's spectra under those IDs as FileConverter writes them:
+//            MS2 only, indexed, in another order than the native IDs), and a Thermo thermo.raw (OpenNuXL_1, IDs
+//            'controllerType=0 controllerNumber=1 scan=N') whose conversion failed (`spectra` null).
 // And spectra/OpenNuXL_1_input.indexed.mzML: the example's mzML as an indexedmzML, its arrays zlib-compressed (the
 // reader's spectrum load by the index; the plain file is read by scanning).
 
@@ -209,11 +214,14 @@ function databaseFasta() {
 
 function input(index, name) {
   const link = `${index + 1}__${name}`
-  return { id: `f${index}`, index, link, stem: link.replace(/\.mzML$/i, ''), name, path: `/data/${name}` }
+  // (the shim's input_stem: the link without .mzML, .raw or .d)
+  return { id: `f${index}`, index, link, stem: link.replace(/\.(mzML|raw|d)$/i, ''), name, path: `/data/${name}` }
 }
 
-function outputs(stem, index, { percolator = false, notes = [], seconds = 1.5 } = {}) {
+function outputs(stem, index, { percolator = false, notes = [], seconds = 1.5, spectra } = {}) {
   return {
+    // (only for a .raw or .d input: the shim's mzML of its spectra, or null when it could not be written)
+    ...(spectra !== undefined ? { spectra } : {}),
     input: index,
     all: `nuxl/${stem}.idXML`,
     xls: `nuxl/${stem}_1.0000_XLs.idXML`,
@@ -242,6 +250,7 @@ function writeFolder(name, records, runs) {
     writeFileSync(join(dir, 'nuxl', `${stem}.outputs.json`), JSON.stringify(out, null, 2) + '\n')
     writeFileSync(join(dir, out.xls), run.xls)
     writeFileSync(join(dir, out.peptides), run.peptides)
+    if (run.spectra) writeFileSync(join(dir, out.spectra), run.spectra)
   }
   console.log(`${name}: ${records.length} input(s)`)
 }
@@ -269,6 +278,12 @@ writeFolder('empty', [input(0, 'a.mzML'), input(1, 'b.mzML')], [
 
 //------------------------------------------------------------------------------
 // The indexed mzML
+
+/** The filtered files `run` with their native IDs `spectrum=N` as `id(N)` gives them. */
+function renamed(run, id) {
+  const rename = (text) => text.replace(/spectrum_reference="spectrum=(\d+)"/g, (_, n) => `spectrum_reference="${id(Number(n))}"`)
+  return { ...run, xls: rename(run.xls), peptides: rename(run.peptides) }
+}
 
 /** The mzML `text` with its binary arrays zlib-compressed, wrapped as indexedmzML with the spectrum offsets. */
 function indexedMzml(text) {
@@ -301,3 +316,41 @@ function indexedMzml(text) {
 mkdirSync(join(fixtures, 'spectra'), { recursive: true })
 writeFileSync(join(fixtures, 'spectra', 'OpenNuXL_1_input.indexed.mzML'), indexedMzml(readFileSync(join(example, 'OpenNuXL_1_input.mzML'), 'latin1')))
 console.log('spectra/OpenNuXL_1_input.indexed.mzML')
+
+//------------------------------------------------------------------------------
+// The inputs that are not mzML
+
+/** A Bruker timsTOF native ID of the example's spectrum n: frames of several precursors, mobility scans that repeat. */
+const brukerId = (n) => `frame=${100 + Math.floor(n / 4)} scan=${200 + (n % 2)} precursor=${1001 + n}`
+const thermoId = (n) => `controllerType=0 controllerNumber=1 scan=${n + 1}`
+
+/**
+ * The example's mzML as FileConverter writes a timsTOF folder's MS2 spectra: the native IDs `id(n)`, the spectra in
+ * reverse order (their `index` another than in the input), indexedmzML with zlib-compressed arrays.
+ */
+function convertedMzml(id) {
+  const text = readFileSync(join(example, 'OpenNuXL_1_input.mzML'), 'latin1')
+  const start = text.indexOf('<spectrum ')
+  const end = text.lastIndexOf('</spectrum>') + '</spectrum>'.length
+  const spectra = text.slice(start, end).match(/<spectrum [\s\S]*?<\/spectrum>/g)
+  const reversed = spectra
+    .reverse()
+    .map((s, k) => s.replace(/<spectrum id="spectrum=(\d+)" index="\d+"/, (_, n) => `<spectrum id="${id(Number(n))}" index="${k}"`))
+    .join('\n\t\t\t')
+  return indexedMzml(text.slice(0, start) + reversed + text.slice(end))
+}
+
+writeFolder(
+  'vendor',
+  [input(0, 'run.d'), input(1, 'thermo.raw')],
+  [
+    { ...renamed(six, brukerId), spectra: convertedMzml(brukerId), outputs: { notes: [TOO_FEW], spectra: 'nuxl/1__run.spectra.mzML' } },
+    {
+      ...renamed(one, thermoId),
+      outputs: {
+        notes: [TOO_FEW, 'The PSM view shows the annotated peaks only: the spectra of thermo.raw could not be converted (FileConverter ended with exit code 1).'],
+        spectra: null,
+      },
+    },
+  ],
+)

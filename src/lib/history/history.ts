@@ -359,6 +359,16 @@ export const LEVEL = 1
 export const LEFT_OUT: ReadonlySet<string> = new Set(['database.fasta', 'database.json', 'nuxl.log'])
 
 /**
+ * Whether a project leaves out the folder's file `name`: `LEFT_OUT`, and the spectra the shim converted from a .raw or
+ * .d input for the PSM view (`nuxl/<stem>.spectra.mzML`, or its `.spectra.tmp.mzML` while it is written): about as
+ * large as the input, they would make most projects too large (a zip without zip64, read whole when opened). An
+ * opened project's PSM view then shows the annotated peaks, and says why. As `project.rs` (`is_converted_spectra`).
+ */
+export function leftOut(name: string): boolean {
+  return LEFT_OUT.has(name) || /^nuxl\/[^/]+\.spectra(\.tmp)?\.mzML$/.test(name)
+}
+
+/**
  * `inputs.json` as a project holds it: the files by name only, not the paths of this computer.
  * (The reader takes the names of the searched files from it.)
  */
@@ -395,7 +405,7 @@ export async function exportProject(
   if (!listed.some((f) => f.name === RECORD_FILE)) {
     throw new ProjectError(`The search is not saved to History (it has no ${RECORD_FILE}), so there is no project to make.`)
   }
-  const kept = listed.filter((f) => !LEFT_OUT.has(f.name))
+  const kept = listed.filter((f) => !leftOut(f.name))
   // what the project would hold, before anything is read: within what a project opens with (MAX_UNPACKED)
   // and what a zip without zip64 can hold (MAX_ZIP; the app writes no zip64)
   const total = kept.reduce((n, f) => n + f.size, 0)

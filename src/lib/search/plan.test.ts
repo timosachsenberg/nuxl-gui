@@ -221,7 +221,7 @@ describe('the footer', () => {
 
   test('says what is missing, and why the search cannot start', async () => {
     expect(searchPlan.line).toBe('No spectra yet')
-    expect(searchPlan.problem).toBe('Add mzML files to start.')
+    expect(searchPlan.problem).toBe('Add spectra (mzML, .raw or .d) to start.')
     await form.addFiles(['/r/run.mzML'])
     expect(searchPlan.line).toBe('1 file · no database yet')
     expect(searchPlan.problem).toBe('Choose a FASTA database to start.')
@@ -330,8 +330,8 @@ describe('the footer', () => {
   test('the example stays the example when nothing joins; Undo keeps a tolerance set after the removal', async () => {
     await form.loadExample()
     await settle()
-    // a vendor file only, or an mzML that cannot be read: no row joins, the example's settings stay
-    await form.addFiles(['/r/run.raw'])
+    // a file that is no spectra, or an mzML that cannot be read: no row joins, the example's settings stay
+    await form.addFiles(['/r/notes.txt'])
     expect(form.value('precursor:mass_tolerance')).toBe(10)
     const facts = vi.mocked((await import('../desktop')).inspectFiles)
     facts.mockImplementationOnce(async (paths: string[]) =>
@@ -381,12 +381,60 @@ describe('the footer', () => {
     expect(form.removed).toBeNull()
   })
 
-  test('files that are not plain mzML or FASTA are reported, not added: compressed mzML and raw files say what to do', async () => {
-    await form.addFiles(['/r/run.raw', '/r/run.mzML', '/r/other.mzML.gz', '/r/notes.txt'])
-    expect(form.files.map((r) => r.file.name)).toEqual(['run.mzML'])
-    expect(form.notices).toHaveLength(3)
+  test('files that are not spectra or FASTA are reported, not added: compressed mzML and zipped .d folders say what to do', async () => {
+    await form.addFiles(['/r/run.raw', '/r/run.mzML', '/r/other.mzML.gz', '/r/tims.d.zip', '/r/notes.txt', '/r/plain folder/'])
+    expect(form.files.map((r) => r.file.name)).toEqual(['run.raw', 'run.mzML'])
+    expect(form.notices).toHaveLength(4)
     expect(form.notices[0]).toMatch(/^other\.mzML\.gz is compressed\. OpenNuXL reads plain mzML only/)
-    expect(form.notices[1]).toMatch(/^run\.raw: Thermo raw files cannot be searched directly\./)
-    expect(form.notices[2]).toMatch(/^Not an mzML file: notes\.txt\./)
+    expect(form.notices[1]).toBe('tims.d.zip is a zipped Bruker .d folder: unzip it first, then add the .d folder.')
+    expect(form.notices[2]).toMatch(/^Not a spectra file: notes\.txt\. NuXL searches mzML, Thermo \.raw or Bruker timsTOF \.d/)
+    // a folder (trailing separator) that is no .d: what to choose instead, not msconvert
+    expect(form.notices[3]).toBe(
+      'plain folder is not a Bruker timsTOF .d folder: choose the .d folders themselves (e.g. run.d), not the folder that holds them.',
+    )
+  })
+
+  test('a folder from the .d folder dialog that is no .d (the folder of the runs) says to choose the .d folders', async () => {
+    await form.addFiles(['/data/experiment', '/data/other'], { folders: true })
+    expect(form.files).toHaveLength(0)
+    expect(form.notices).toEqual([
+      'experiment and other are not Bruker timsTOF .d folders: choose the .d folders themselves (e.g. run.d), not the folder that holds them.',
+    ])
+  })
+
+  test('Thermo .raw files and Bruker .d folders join as spectra, a folder however it came, once', async () => {
+    const inspect = vi.mocked((await import('../desktop')).inspectFiles)
+    inspect.mockClear()
+    // a .d with a trailing separator (a folder dialog, a drop), a file of a .d (a file manager that opened it), the
+    // same .d again, either separator
+    // the files of one .d (analysis.tdf and analysis.tdf_bin, the folder's other files with "select all") are one input
+    await form.addFiles([
+      '/r/run.raw',
+      '/r/tims.d/',
+      'C:\\data\\B.D\\',
+      '/r/other.d/analysis.tdf',
+      '/r/other.d/analysis.tdf_bin',
+      '/r/other.d/SampleInfo.xml',
+      '/r/other.d/chromatography-data.sqlite',
+      '/r/tims.d',
+    ])
+    // (the names are the shim's: the mock's split on '/')
+    expect(form.files.map((r) => r.file.path)).toEqual(['/r/run.raw', '/r/tims.d', 'C:\\data\\B.D', '/r/other.d'])
+    expect(inspect.mock.calls).toEqual([[['/r/run.raw', '/r/tims.d', 'C:\\data\\B.D', '/r/other.d']]])
+    expect(form.notices).toEqual([
+      'tims.d is in the list already, so it was not added again: one file is searched once.',
+    ])
+    await form.addFiles(['/r/tims.d\\'])
+    expect(form.files).toHaveLength(4)
+    // a .d in the table, by a file of it: in the list already
+    form.notices = []
+    await form.addFiles(['/r/other.d/analysis.tdf'])
+    expect(form.files).toHaveLength(4)
+    expect(form.notices).toEqual(['other.d is in the list already, so it was not added again: one file is searched once.'])
+    // a file of a folder that is no .d is not the folder
+    form.notices = []
+    await form.addFiles(['/r/plain/analysis.tdf'])
+    expect(form.files).toHaveLength(4)
+    expect(form.notices[0]).toMatch(/^Not a spectra file: analysis\.tdf\./)
   })
 })

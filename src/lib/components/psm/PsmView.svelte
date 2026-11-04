@@ -4,12 +4,12 @@
   // (SVG)"; the peptide with
   // its fragment ladder; whether the PSM is a cross-link, its adduct and cross-linked residue, its FDR group and q-value
   // at that group's FDR; the spectrum with NuXL's own annotation (the hit's fragment_annotation: shifted ions, marker
-  // ions, precursor, immonium and internal ions) on the observed peaks read from the input mzML, or, when they cannot be
-  // read, on the peaks NuXL annotated; mirrored against the theoretical b/y spectrum of the linear peptide
-  // (psm/annotate.ts), with ion, charge, shift and loss toggles; the ion table, the fragment mass errors of the
-  // annotated ions shown, each against its m/z as OpenNuXL computes it (psm/nuxl-theoretical.ts; a strip that can be
-  // collapsed, remembered in displaySettings.massErrors) and the PSM's features
-  // (NuXL's scores). The logic is in nuxl-psm.ts.
+  // ions, precursor, immonium and internal ions) on the observed peaks read from the input mzML (of a .raw or .d, the mzML
+  // of its spectra the search wrote), or, when they cannot be read, on the peaks NuXL annotated; mirrored against the
+  // theoretical b/y spectrum of the linear peptide (psm/annotate.ts), with ion, charge, shift and loss toggles; the ion
+  // table, the fragment mass errors of the annotated ions shown, each against its m/z as OpenNuXL computes it
+  // (psm/nuxl-theoretical.ts; a strip that can be collapsed, remembered in displaySettings.massErrors) and the PSM's
+  // features (NuXL's scores). The logic is in nuxl-psm.ts.
   // The toolbar's "Measure" and "Label" (one at a time) are the tools of pyopenms-viewer and openms-viewer on the
   // observed peaks (SpectrumMirror, psm/measure.ts): Δm/z between two peaks, with what it may be (a residue of the
   // search, a nucleotide or fragment adduct of its, for a cross-link a residue it may be on with a fragment adduct), and
@@ -122,7 +122,7 @@
   const parameters = $derived(view.result.settings.parameters)
   const defaults = defaultsOf(NUXL_PARAMETERS)
   const tolerance = $derived(fragmentTolerance(parameters, defaults))
-  // the peaks of the PSM: read from its input mzML when it is opened
+  // the peaks of the PSM: read from its input mzML (a .raw/.d's converted spectra) when it is opened
   const source = $derived(view.result.outcome.spectra)
   // (raw: the spectra are large typed arrays, and `source` is compared by identity)
   let loaded = $state.raw<{ row: number; source: PsmSpectra; data: LoadedSpectra | null; error: string | null } | null>(null)

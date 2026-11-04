@@ -42,6 +42,19 @@ describe('describeFailure', () => {
     expect(f.detail).toBe(parseError)
   })
 
+  it("names the conversion of a .raw or .d's spectra after its run, and gives no mzML hint for them", () => {
+    const vendor = ['a.mzML', 'b.raw', 'c.d']
+    const converting = describeFailure({ label: 'Preparing the spectra of b.raw for the PSM view (2 of 3)...', file: 1, files: vendor, silentMs: 0 }, 'x')
+    expect(converting.context).toBe('While preparing the spectra of file 2 of 3 (b.raw) for the PSM view')
+    // OpenNuXL's own filtering step of that name is part of the search
+    const filtering = describeFailure({ label: 'Preparing the spectra of b.raw (2 of 3)...', file: 1, files: vendor, silentMs: 0 }, 'x')
+    expect(filtering.context).toBe('While searching file 2 of 3 (b.raw)')
+    const of = (file: number) => describeFailure({ label: 'Searching...', file, files: vendor, silentMs: 0 }, parseError).summary
+    expect(of(0)).toBe('Parse Error. The file may be incomplete or not valid mzML.')
+    expect(of(1)).toBe('Parse Error. The file may be incomplete or not a valid Thermo .raw file.')
+    expect(of(2)).toBe('Parse Error. The folder may be incomplete or not a valid Bruker timsTOF .d folder.')
+  })
+
   it('says only the file for a one-file search', () => {
     const f = describeFailure({ label: 'Post-processing PSMs...', file: 0, files: ['run.mzML'], silentMs: 0 }, 'x')
     expect(f.context).toBe('While searching run.mzML')
