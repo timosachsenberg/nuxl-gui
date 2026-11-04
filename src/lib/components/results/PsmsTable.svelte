@@ -2,8 +2,9 @@
   // The PSMs of the open result (the best hit of each spectrum), cross-links and peptides. A cross-link has the
   // "XL" badge in its Adduct column (after the peptide when that column is not there, as in the list beside the
   // PSM view), its adduct in monospace (its mass in the tooltip) and its cross-linked residue ("K9"). A row opens
-  // the PSM view (`onOpen`); while it is open, the table is the list beside it (`compact`): peptide, charge,
-  // sample, q-value and precursor error, as in the mockup. A decoy PSM is marked after the peptide.
+  // the PSM view (`onOpen`); while it is open, the table stands under its spectrum (`follow`: the arrow keys go
+  // through the PSMs, the view showing each). `compact` makes it a narrow list (peptide, charge, sample, q-value
+  // and precursor error). A decoy PSM is marked after the peptide.
   import PeptideSequence from '$lib/components/PeptideSequence.svelte'
   import { adductLabel, peptideView } from '$lib/format/peptide'
   import { siteName } from '$lib/results/columns'
@@ -20,7 +21,8 @@
     level,
     onOpen,
     compact = false,
-  }: { view: ResultsView; level: LevelState; onOpen: (psm: number) => void; compact?: boolean } = $props()
+    follow = false,
+  }: { view: ResultsView; level: LevelState; onOpen: (psm: number) => void; compact?: boolean; follow?: boolean } = $props()
 
   const m = $derived(view.model)
   const ps = $derived(m.tables.psms)
@@ -171,4 +173,5 @@
   onRowClick={onOpen}
   selected={level.selected}
   autoMinWidth={compact ? 80 : 220}
+  followFocus={follow}
   empty={level.emptyText} />

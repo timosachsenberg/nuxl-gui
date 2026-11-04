@@ -13,6 +13,7 @@ import { resolveDesign } from '../../design/model'
 import { bytesOfRange, FileNotFound, readSearch, type SearchFiles } from '../../results/read'
 import { releaseResultsView, resultsViewFor, type ResultsView } from '../../results/view.svelte'
 import type { OpenResult } from '../../search/session.svelte'
+import { displaySettings } from '../../format/settings.svelte'
 import PsmView from './PsmView.svelte'
 
 // from the root of the project: under happy-dom, import.meta.url is not a file URL
@@ -149,5 +150,27 @@ describe('the PSM view', () => {
     expect(peptide.text('psm-crosslink')).toContain('Peptide, no cross-link.')
     expect(peptide.text('psm-q')).toBe('· q 0.2 at the peptide FDR of 1 %above the peptide FDR')
     expect(peptide.text('bottom-label')).toBe('Theoretical ions of the peptide')
+  })
+
+  it('collapses the mass errors under the spectrum, and keeps them collapsed for the next PSM', async () => {
+    try {
+      const { target } = await show(true, 'DYHTVLGAR')
+      const toggle = target.querySelector<HTMLInputElement>('[data-testid="mass-errors-toggle"]')!
+      expect(toggle.checked).toBe(true)
+      expect(target.querySelectorAll('[data-testid="error-dot"]').length).toBeGreaterThan(0)
+      toggle.click()
+      flushSync()
+      expect(displaySettings.massErrors).toBe(false)
+      expect(target.querySelectorAll('[data-testid="error-dot"]').length).toBe(0)
+      // the spectrum and its lower half stay
+      expect(target.querySelector('[data-testid="bottom-label"]')).not.toBeNull()
+      unmount(shown!)
+      shown = null
+      const again = await show(true, 'DYHTVLGAR')
+      expect(again.target.querySelector<HTMLInputElement>('[data-testid="mass-errors-toggle"]')!.checked).toBe(false)
+      expect(again.target.querySelectorAll('[data-testid="error-dot"]').length).toBe(0)
+    } finally {
+      displaySettings.massErrors = true
+    }
   })
 })

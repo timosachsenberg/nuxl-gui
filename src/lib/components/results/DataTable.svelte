@@ -54,6 +54,7 @@
     rowHeight = 33,
     autoMinWidth = 220,
     empty = 'No rows match the filters.',
+    followFocus = false,
   }: {
     rows: Uint32Array
     columns: Column[]
@@ -68,6 +69,11 @@
     /** The least width of the 'auto' column (pixels): the table scrolls sideways below it. */
     autoMinWidth?: number
     empty?: string
+    /**
+     * The arrow keys (and Page Up/Down, Home, End) also select the row they move to (`onRowClick`), with the focus
+     * staying in the grid: under the PSM view, the keys go through the PSMs. The mouse wheel only scrolls.
+     */
+    followFocus?: boolean
   } = $props()
 
   const overscan = 3
@@ -186,6 +192,7 @@
     if (target === null) return
     event.preventDefault()
     activate(target)
+    if (followFocus) onRowClick(rows[target])
   }
 
   function click(index: number, row: number) {
