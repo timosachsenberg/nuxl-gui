@@ -119,7 +119,7 @@ cross-links it finds, and how long it takes, depends on the protocol and is not 
 
 ## Licence
 
-NuXL desktop is under OpenMS' licence (BSD-3-Clause, `LICENSE`). The packages list everything they bundle, with its
+NuXL desktop was created by Timo Sachsenberg. It is under OpenMS' licence (BSD-3-Clause, `LICENSE`). The packages list everything they bundle, with its
 licence, in `resources/notices/THIRD-PARTY-NOTICES.txt`; the tools' libraries come with theirs in
 `resources/nuxl/share/OpenMS/LICENSES`. The example is OpenMS test data. OpenMS logo © OpenMS Inc., used with
 permission (the OpenMS Assets License, `src/assets/logo`).
