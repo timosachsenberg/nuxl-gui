@@ -20,6 +20,9 @@ import {
   searchesDir,
   textOf,
   waitForResults,
+  residuePair,
+  clickSpectrum,
+  labelledMzs,
 } from './lib.ts'
 
 const enabled = Boolean(process.env.NUXL_TOOL)
@@ -147,6 +150,26 @@ describe('the example search', () => {
     await browser.waitUntil(async () => (await $$('[data-testid="error-dot"]')).length === 0, { timeout: 5000, timeoutMsg: 'the mass errors stayed' })
     await jsClick(await $('[data-testid="mass-errors-toggle"]'))
     await browser.waitUntil(async () => (await $$('[data-testid="error-dot"]')).length > 0, { timeout: 5000, timeoutMsg: 'the mass errors did not come back' })
+
+    // Measure: two clicks on two annotated peaks a residue apart, a bracket with their Δm/z and the residue; Esc
+    // then leaves the tool (and the next Esc closes the view)
+    await $('[data-testid="tool-measure"]').click()
+    expect(await $('[data-testid="tool-measure"]').getAttribute('aria-pressed')).toBe('true')
+    const [from, to] = await residuePair()
+    await clickSpectrum(from)
+    await $('[data-testid="measure-start"]').waitForExist({ timeout: 5000, timeoutMsg: 'the first click marked no peak' })
+    await clickSpectrum(to)
+    await $('[data-testid="measurement"]').waitForExist({ timeout: 5000, timeoutMsg: 'the second click made no measurement' })
+    expect(String(await $('[data-testid="measurement"]').getAttribute('data-text'))).toBe(`Δ${to.delta.toFixed(3)} ≈ ${to.residue}`)
+    expect(await $('[data-testid="clear-measurements"]').isEnabled()).toBe(true)
+    // the bracket hides no label of the peaks it measures
+    expect(await labelledMzs()).toEqual(expect.arrayContaining([from.mz, to.mz]))
+    await browser.keys('Escape')
+    await browser.waitUntil(async () => (await $('[data-testid="tool-measure"]').getAttribute('aria-pressed')) === 'false', {
+      timeout: 5000,
+      timeoutMsg: 'Esc did not leave the Measure tool',
+    })
+    await expect($('[data-testid="psm-view"]')).toBeDisplayed()
     await browser.keys('Escape')
 
     // the proteins with their cross-linked sites: the first protein's panel lists them

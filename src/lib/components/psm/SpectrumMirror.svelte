@@ -21,11 +21,42 @@
   // being computed) is marked `data-no-export`.
   //
   // Below the lower half, on the same m/z axis (one x scale, the same margins, so each dot sits under its peak), the
-  // strip of the fragment mass errors: one dot per ion with a theoretical m/z, its error in the unit of the search's fragment
-  // tolerance (ppm, or Da), its area by its peak's intensity, the band the tolerance; the m/z labels come below it.
+  // strip of the fragment mass errors: one dot per annotated ion shown with a theoretical m/z (a/b/c, x/y/z, shifted,
+  // marker, precursor, immonium and internal ions, in their colours of the spectrum), its error in the unit of the
+  // search's fragment tolerance (ppm, or Da), its area by its peak's intensity, the band the tolerance; the m/z labels
+  // come below it.
   // It is part of the SVG, so "Export spectrum (SVG)" has it too.
+  //
+  // The tools (`tool`, the PSM view's toolbar; psm/measure.ts, as in pyopenms-viewer and openms-viewer): with
+  // "Measure", a click snaps to the nearest peak above the axis and marks it, the pointer then draws a dotted line to the
+  // peak it would snap to with the live Δm/z, and a second click keeps the measurement (`marks`, through `onmarks`): an
+  // orange bracket above the higher peak with its Δm/z and what it may be ("≈ Y"), drawn over the labels: it goes up
+  // above the labels it would meet and hides none, its dotted lines start above the labels of their peaks. With "Label",
+  // a click on a peak opens a text field there (Enter keeps, Esc cancels; an empty text removes the peak's label); the
+  // labels stand above their peaks in a colour of their own, placed before NuXL's (which then keep clear of them, also
+  // of one that found no room and stands right above its peak all the same). A click on a bracket or a label selects
+  // it, a second click deselects it (Delete removes it: the caller's keys, `deleteSelection`), a double click on a label
+  // edits it; with a tool on, a click at the top of a peak is the tool's, even under a bracket (not under a label of the
+  // user's: that is where it is clicked). The measurements and
+  // labels are part of the SVG and its export; the pointer's marks and the selection (an overlay) are not.
   import { signedNumber } from '$lib/format/number'
   import { errorStats, errorTickDigits, fragmentError, ionLabel, COLORS, type Tolerance } from '$lib/psm/psm'
+  import {
+    bracketAt,
+    deltaText,
+    labelIndexAt,
+    layoutBrackets,
+    measurementText,
+    snapPeak,
+    withLabel,
+    NO_MARKS,
+    type Box,
+    type DeltaContext,
+    type PeakPoint,
+    type PsmMarks,
+    type SpectrumTool,
+  } from '$lib/psm/measure'
+  import { untrack } from 'svelte'
   import type { PeakMatch } from '$lib/results/types'
   import { typeColor, type ColoredMatch } from './nuxl-psm'
   import { clipMarks, mzDomain, nearest, niceTicks, placeLabels, placeLegend, px, scale, stickGroups, stickPath, stripFits, textWidth, wrapParts } from '$lib/psm/plot'
@@ -42,6 +73,11 @@
     title,
     description,
     errors = null,
+    tool = null,
+    marks = NO_MARKS,
+    onmarks = () => {},
+    measure = null,
+    pending = $bindable(false),
   }: {
     mz: Float32Array
     intensity: Float32Array
@@ -58,8 +94,21 @@
     note?: string | null
     title: string
     description: string
-    /** The fragment mass errors under the spectrum: the ions with their colours, and the search's fragment tolerance. */
-    errors?: { matches: ColoredMatch[]; tolerance: Tolerance } | null
+    /**
+     * The fragment mass errors under the spectrum: the ions with their colours, the search's fragment tolerance and
+     * `omitted`, the annotated ions shown that have no theoretical m/z (not in the strip).
+     */
+    errors?: { matches: ColoredMatch[]; tolerance: Tolerance; omitted?: number } | null
+    /** The tool that clicks on the observed peaks use. */
+    tool?: SpectrumTool
+    /** The user's measurements and labels of this spectrum. */
+    marks?: PsmMarks
+    /** Keeps changed `marks`. */
+    onmarks?: (next: PsmMarks) => void
+    /** What a Δm/z may be: the search's fragment tolerance, the masses, the charges (psm/measure.ts); null: the Δ alone. */
+    measure?: DeltaContext | null
+    /** Out: a measurement is half made or a label is being written (Esc cancels it). */
+    pending?: boolean
   } = $props()
 
   const uid = $props.id()
@@ -120,7 +169,9 @@
 
   const bottomIons = $derived(bottom.kind === 'ions' ? bottom.ions : [])
   const domain = $derived(mzDomain([mz, bottomIons.map((b) => b.mz)]))
-  const x = $derived(scale(domain, [M.left, Math.max(M.left + 10, width - M.right)]))
+  /** The right end of the m/z axis. */
+  const xEnd = $derived(Math.max(M.left + 10, width - M.right))
+  const x = $derived(scale(domain, [M.left, xEnd]))
   const ref = $derived(reference.intensity > 0 ? reference.intensity : 1)
   /** Upper half: the ratio to the reference (0–1) to y, with room for the labels of the tallest peaks. */
   const upper = $derived((r: number) => mid - r * (mid - plotTop - 18))
@@ -148,25 +199,48 @@
     ),
   )
 
-  /** The labels of the matched peaks, the most intense first; those without room are left out. */
-  const labels = $derived.by(() => {
+  /** Where a peak's stick ends (clipped at 100 %). */
+  const topOf = (p: PeakPoint) => upper(Math.min(1, p.intensity / ref))
+  /** The baseline of a label right above a peak (above its clip mark, when clipped). */
+  const labelBase = (p: PeakPoint) => topOf(p) - (p.intensity / ref > 1 ? 9 : 4)
+
+  /**
+   * The labels: the user's first (each where it fits, else right above its peak all the same), then those of the
+   * matched peaks, the most intense first, clear of the user's, those without room left out.
+   */
+  const placedLabels = $derived.by(() => {
     const order = [...groups].sort((p, q) => q.intensity - p.intensity)
+    const lineHeight = 15
+    const own = marks.labels.map((l) => ({ x: x(l.mz), y: labelBase(l), width: textWidth(l.text, 11) * 1.1 + 12 }))
+    const ownYs = placeLabels(own, { lineHeight, tries: 4, top: plotTop + 10 })
+    const user = marks.labels.map((l, i) => ({ ...own[i], y: ownYs[i] ?? Math.max(plotTop + 10, own[i].y), top: topOf(l), text: l.text, mz: l.mz }))
+    const boxOf = (l: { x: number; y: number; width: number }): Box => ({ x0: l.x - l.width / 2, x1: l.x + l.width / 2, y0: l.y - lineHeight, y1: l.y })
     const ys = placeLabels(
       order.map((g) => {
-        const r = g.intensity / ref
         // (the labels are semibold: a tenth wider than the estimate, and room between them on both axes, so that
         // the shifted ions of a cross-link stay apart where they crowd)
-        return { x: x(g.mz), y: upper(Math.min(1, r)) - (r > 1 ? 9 : 4), width: textWidth(g.label, 11) * 1.1 + 12 }
+        return { x: x(g.mz), y: labelBase(g), width: textWidth(g.label, 11) * 1.1 + 12 }
       }),
-      { lineHeight: 15, tries: 4, top: plotTop + 10 },
+      { lineHeight, tries: 4, top: plotTop + 10, taken: user.map(boxOf) },
     )
-    const out: { x: number; y: number; text: string; ions: string; key: number }[] = []
+    const out: { x: number; y: number; text: string; ions: string; key: number; mz: number; width: number }[] = []
     order.forEach((g, i) => {
       const y = ys[i]
-      if (y !== null) out.push({ x: x(g.mz), y, text: g.label, ions: g.kinds, key: g.peak })
+      if (y !== null) out.push({ x: x(g.mz), y, text: g.label, ions: g.kinds, key: g.peak, mz: g.mz, width: textWidth(g.label, 11) * 1.1 + 12 })
     })
-    return out
+    return { user, nuxl: out, boxes: [...user, ...out].map(boxOf) }
   })
+  const labels = $derived(placedLabels.nuxl)
+  const userLabels = $derived(placedLabels.user)
+
+  /** The measurements' brackets with their labels ("Δ163.063 ≈ Y"), above the higher of their peaks and the labels. */
+  const measurementTexts = $derived(marks.measurements.map((m) => measurementText(m, measure)))
+  const brackets = $derived(
+    layoutBrackets(
+      marks.measurements.map((m, i) => ({ xa: x(m.a.mz), ya: topOf(m.a), xb: x(m.b.mz), yb: topOf(m.b), width: textWidth(measurementTexts[i], 11) * 1.1 + 8 })),
+      { top: plotTop + 14, labels: placedLabels.boxes },
+    ),
+  )
 
   const xTicks = $derived(niceTicks(domain[0], domain[1], Math.max(2, Math.floor((width - M.left - M.right) / 90))))
 
@@ -198,12 +272,19 @@
   /** Enough decimals that the ticks ±tolerance read as the tolerance (0.005 Da: three). */
   const tickDigits = $derived(errors ? errorTickDigits(errors.tolerance) : 1)
   const errorTick = (v: number) => signedNumber(v, tickDigits, { plus: false, trim: true })
+  const omitted = $derived(errors?.omitted ?? 0)
+  /** The annotated ions shown, with and without a theoretical m/z. */
+  const shownIons = $derived((errors?.matches.length ?? 0) + omitted)
+  const ions = (n: number) => (n === 1 ? '1 annotated ion' : `${n} annotated ions`)
   const errorHeader = $derived(
     !errors
       ? ''
       : errors.matches.length === 0
-        ? 'Fragment mass error · no unshifted ion annotated'
-        : `Fragment mass error of the unshifted ions · mean ${errorText(stats.mean)}${Number.isFinite(stats.sd) ? ` · SD ${errorText(stats.sd).replace(/^[+−-]/, '')}` : ''} · dot size = intensity`,
+        ? omitted === 0
+          ? 'Fragment mass error · no annotated ion shown'
+          : `Fragment mass error · ${omitted === 1 ? 'the annotated ion shown has' : `none of the ${omitted} annotated ions shown has`} a theoretical m/z`
+        : `Fragment mass error of the annotated ions · mean ${errorText(stats.mean)}${Number.isFinite(stats.sd) ? ` · SD ${errorText(stats.sd).replace(/^[+−-]/, '')}` : ''} · dot size = intensity` +
+          (omitted > 0 ? ` · ${omitted} of ${shownIons} without a theoretical m/z` : ''),
   )
   const toleranceText = $derived(errors ? `tolerance ±${errors.tolerance.value} ${unit}` : '')
   /**
@@ -220,10 +301,179 @@
     !errors
       ? ''
       : errors.matches.length === 0
-        ? ' Below it, no unshifted ion is annotated, so no mass error is shown.'
-        : ` Below it, the mass error in ${unit} of each of the ${errors.matches.length} unshifted annotated ions is shown under its peak, against the linear peptide's theoretical m/z, within the tolerance of ±${errors.tolerance.value} ${unit}.` +
+        ? omitted === 0
+          ? ' Below it, no annotated ion is shown, so no mass error is shown.'
+          : ` Below it, no mass error is shown: ${omitted === 1 ? 'the annotated ion shown has' : `none of the ${omitted} annotated ions shown has`} a theoretical m/z.`
+        : ` Below it, the mass error in ${unit} of ${omitted === 0 ? (errors.matches.length === 1 ? 'the annotated ion shown' : `each of the ${errors.matches.length} annotated ions shown`) : `${errors.matches.length} of the ${ions(shownIons)} shown (${omitted} ${omitted === 1 ? 'has' : 'have'} no theoretical m/z)`} is drawn under its peak, against its theoretical m/z as OpenNuXL computes it (shifted ions with the nucleotide fragment, marker ions as the fragment plus a proton), within the tolerance of ±${errors.tolerance.value} ${unit}, in the colours of the spectrum.` +
           ` The mean error is ${errorText(stats.mean)}${Number.isFinite(stats.sd) ? `, the standard deviation ${errorText(stats.sd).replace(/^[+−-]/, '')}` : ''}.`,
   )
+
+  /** The measurements and labels for screen readers. */
+  const marksDescription = $derived.by(() => {
+    const parts: string[] = []
+    if (marks.measurements.length > 0) {
+      const each = marks.measurements.map(
+        (m, i) => `${measurementTexts[i].replace(/^Δ/, 'Δm/z ')} between m/z ${Math.min(m.a.mz, m.b.mz).toFixed(3)} and ${Math.max(m.a.mz, m.b.mz).toFixed(3)}`,
+      )
+      parts.push(` Measured: ${each.join('; ')}.`)
+    }
+    if (marks.labels.length > 0) parts.push(` Your labels: ${marks.labels.map((l) => `“${l.text}” at m/z ${l.mz.toFixed(4)}`).join('; ')}.`)
+    return parts.join('')
+  })
+
+  // the tools: the peak a measurement starts at, the peak the pointer would snap to, what is selected, the text field
+  let start = $state<number | null>(null)
+  let hover = $state<number | null>(null)
+  let selected = $state<{ kind: 'measurement' | 'label'; index: number } | null>(null)
+  let editor = $state<{ mz: number; intensity: number; text: string } | null>(null)
+  /** What the tools did, for screen readers. */
+  let status = $state('')
+  let container = $state<HTMLDivElement | null>(null)
+  /** The selection, while what it selects is there. */
+  const selection = $derived(
+    selected && selected.index < (selected.kind === 'measurement' ? marks.measurements.length : marks.labels.length) ? selected : null,
+  )
+  // (another spectrum or tool: what was half made goes; another spectrum: the selection too)
+  $effect.pre(() => {
+    void [mz, tool]
+    untrack(() => {
+      start = null
+      hover = null
+      editor = null
+    })
+  })
+  $effect.pre(() => {
+    void mz
+    untrack(() => (selected = null))
+  })
+  $effect(() => {
+    pending = start !== null || editor !== null
+  })
+
+  const pointOf = (i: number): PeakPoint => ({ mz: mz[i], intensity: intensity[i] })
+  const mzAt = (at: number) => domain[0] + ((at - M.left) / (xEnd - M.left)) * (domain[1] - domain[0])
+  /** The observed peak a pointer at (`at`, `py`) snaps to, or -1: above the axis only. */
+  function snapAt(at: number, py: number): number {
+    if (py < plotTop - 4 || py > mid + 4 || at < M.left - 10 || at > xEnd + 10) return -1
+    return snapPeak(mz, x, mzAt, (i) => topOf(pointOf(i)), at, py)
+  }
+  function pointer(event: MouseEvent): { at: number; py: number } {
+    const box = svg?.getBoundingClientRect()
+    return { at: event.clientX - (box?.left ?? 0), py: event.clientY - (box?.top ?? 0) }
+  }
+  /** The user label whose text is at (`at`, `py`), or -1. */
+  function userLabelAt(at: number, py: number): number {
+    return userLabels.findIndex((l) => at >= l.x - l.width / 2 && at <= l.x + l.width / 2 && py >= l.y - 13 && py <= l.y + 3)
+  }
+
+  /** Whether (`at`, `py`) is at the top of the peak `i` (within 8 px on screen): a click there is the tool's. */
+  function atTopOf(i: number, at: number, py: number): boolean {
+    return i >= 0 && Math.hypot(x(mz[i]) - at, topOf(pointOf(i)) - py) <= 8
+  }
+
+  function onclick(event: MouseEvent) {
+    const { at, py } = pointer(event)
+    // a label or a bracket first (not while a measurement is half made: its second peak may be under one; nor a
+    // bracket at the top of a peak with a tool on: a tall peak may reach into it)
+    if (start === null) {
+      const l = userLabelAt(at, py)
+      if (l >= 0) {
+        const again = selection?.kind === 'label' && selection.index === l
+        return select(
+          again ? null : { kind: 'label', index: l },
+          again ? 'Label deselected.' : `Label “${marks.labels[l].text}” selected; Delete removes it, a double click edits it.`,
+        )
+      }
+      const b = tool && atTopOf(snapAt(at, py), at, py) ? -1 : bracketAt(brackets, at, py)
+      if (b >= 0) {
+        const again = selection?.kind === 'measurement' && selection.index === b
+        return select(again ? null : { kind: 'measurement', index: b }, again ? 'Measurement deselected.' : `Measurement ${measurementTexts[b]} selected; Delete removes it.`)
+      }
+    }
+    selected = null
+    if (tool === 'measure') {
+      const i = snapAt(at, py)
+      if (i < 0) return
+      container?.focus({ preventScroll: true })
+      if (start === null) {
+        start = i
+        status = `Measuring from m/z ${mz[i].toFixed(3)}: click the second peak (Esc cancels).`
+      } else if (i !== start) {
+        const m = { a: pointOf(start), b: pointOf(i) }
+        start = null
+        onmarks({ ...marks, measurements: [...marks.measurements, m] })
+        status = `Measured ${measurementText(m, measure)}.`
+      }
+    } else if (tool === 'label') {
+      const i = snapAt(at, py)
+      if (i >= 0) openEditor(pointOf(i))
+    }
+  }
+
+  function select(next: typeof selected, said: string) {
+    selected = next
+    status = said
+    container?.focus({ preventScroll: true })
+  }
+
+  function ondblclick(event: MouseEvent) {
+    const { at, py } = pointer(event)
+    const l = userLabelAt(at, py)
+    if (l >= 0) openEditor(marks.labels[l])
+  }
+
+  /** The text field at a peak: its label's text, if it has one. */
+  function openEditor(p: PeakPoint) {
+    const at = labelIndexAt(marks.labels, p.mz)
+    const peak = at >= 0 ? marks.labels[at] : p
+    editor = { mz: peak.mz, intensity: peak.intensity, text: at >= 0 ? marks.labels[at].text : '' }
+    selected = null
+  }
+  function commitEditor() {
+    const e = editor
+    if (!e) return
+    editor = null
+    onmarks({ ...marks, labels: withLabel(marks.labels, e, e.text) })
+    status = e.text.trim() === '' ? `Label at m/z ${e.mz.toFixed(4)} removed.` : `Label “${e.text.trim()}” at m/z ${e.mz.toFixed(4)}.`
+    container?.focus({ preventScroll: true })
+  }
+  function oneditorkeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      commitEditor()
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      editor = null
+      container?.focus({ preventScroll: true })
+    }
+  }
+
+  /** Cancels what is half done, else the selection; whether there was something (Esc: the caller's keys). */
+  export function cancel(): boolean {
+    if (editor) editor = null
+    else if (start !== null) {
+      start = null
+      status = 'Measurement cancelled.'
+    } else if (selection) selected = null
+    else return false
+    return true
+  }
+
+  /** Removes the selected measurement or label; whether one was (Delete, Backspace: the caller's keys). */
+  export function deleteSelection(): boolean {
+    const s = selection
+    if (!s) return false
+    selected = null
+    if (s.kind === 'measurement') {
+      status = `Measurement ${measurementTexts[s.index]} removed.`
+      onmarks({ ...marks, measurements: marks.measurements.filter((_, i) => i !== s.index) })
+    } else {
+      status = `Label “${marks.labels[s.index].text}” removed.`
+      onmarks({ ...marks, labels: marks.labels.filter((_, i) => i !== s.index) })
+    }
+    return true
+  }
 
   // hover: the peak (or theoretical ion) under the pointer, the most intense within 6 px
   let tip = $state<{ x: number; y: number; lines: string[] } | null>(null)
@@ -242,6 +492,12 @@
     const box = svg.getBoundingClientRect()
     const px0 = event.clientX - box.left
     const py = event.clientY - box.top
+    if (tool) {
+      const i = snapAt(px0, py)
+      hover = i < 0 ? null : i
+      // (a measurement half made: the live Δm/z says it, no tooltip over the brackets)
+      if (start !== null) return void (tip = null)
+    }
     if (px0 < M.left - 4 || px0 > width - M.right + 4 || py < plotTop - 4 || py > plotBottom) return void (tip = null)
     const at = domain[0] + ((px0 - M.left) / (width - M.left - M.right)) * (domain[1] - domain[0])
     if (py <= mid) {
@@ -274,7 +530,10 @@
   }
 </script>
 
-<div class="relative" bind:clientWidth={width}>
+<div class="relative outline-none" bind:clientWidth={width} bind:this={container} tabindex="-1" data-testid="spectrum-area">
+  <!-- (the clicks are the pointer's tools; what they make is listed in the description, and the toolbar's buttons and
+       the keys clear and remove it) -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
   <svg
     bind:this={svg}
     data-testid="spectrum"
@@ -286,10 +545,19 @@
     viewBox="0 0 {width} {H}"
     font-family={font}
     class="block"
+    style:cursor={tool ? 'crosshair' : undefined}
+    data-tool={tool ?? undefined}
+    data-mz-domain="{domain[0]} {domain[1]}"
+    data-x-range="{M.left} {xEnd}"
     {onpointermove}
-    onpointerleave={() => (tip = null)}>
+    {onclick}
+    {ondblclick}
+    onpointerleave={() => {
+      tip = null
+      hover = null
+    }}>
     <title id="{uid}-title">{title}</title>
-    <desc id="{uid}-desc">{description}{errorDescription}</desc>
+    <desc id="{uid}-desc">{description}{errorDescription}{marksDescription}</desc>
 
     <!-- grid: hairlines at the m/z ticks, in the spectrum and in the error strip -->
     {#each xTicks as t (t)}
@@ -365,6 +633,7 @@
             stroke-width="1.25"
             data-testid="error-dot"
             data-type={d.m.type}
+            data-ion={d.m.ion}
             data-error={d.error}
             data-mz={mz[d.m.peak]}
             ><title>{d.m.ion} · m/z {mz[d.m.peak].toFixed(4)} · {errorText(d.error)}</title></circle>
@@ -401,8 +670,124 @@
         stroke-linejoin="round"
         paint-order="stroke"
         data-testid="peak-label"
-        data-ions={l.ions}>{l.text}</text>
+        data-ions={l.ions}
+        data-mz={l.mz}>{l.text}</text>
     {/each}
+
+    <!-- the user's measurements: a bracket above the higher peak, dotted lines down to the peaks, the Δm/z -->
+    {#each brackets as b, i (i)}
+      {@const isSelected = selection?.kind === 'measurement' && selection.index === i}
+      <g data-testid="measurement" data-text={measurementTexts[i]} data-selected={isSelected ? '' : undefined}>
+        <line x1={px(b.xa)} x2={px(b.xb)} y1={px(b.y)} y2={px(b.y)} stroke="var(--plot-measure)" stroke-width="1.75" />
+        {#if b.da - b.y > 1}<line x1={px(b.xa)} x2={px(b.xa)} y1={px(b.da)} y2={px(b.y)} stroke="var(--plot-measure)" stroke-width="1" stroke-dasharray="2 2" />{/if}
+        {#if b.db - b.y > 1}<line x1={px(b.xb)} x2={px(b.xb)} y1={px(b.db)} y2={px(b.y)} stroke="var(--plot-measure)" stroke-width="1" stroke-dasharray="2 2" />{/if}
+        <text
+          x={px((b.xa + b.xb) / 2)}
+          y={px(b.y - 4)}
+          text-anchor="middle"
+          font-size="11"
+          font-weight="600"
+          fill="var(--plot-measure)"
+          stroke={halo}
+          stroke-width="3"
+          stroke-linejoin="round"
+          paint-order="stroke">{measurementTexts[i]}</text>
+        {#if isSelected}
+          <!-- (the selection: the page's only, over the bracket in the colour of a selected one) -->
+          <g data-no-export="" data-testid="measurement-selection">
+            <rect
+              x={px(b.box.x0 - 3)}
+              y={px(b.box.y0 - 2)}
+              width={px(b.box.x1 - b.box.x0 + 6)}
+              height={px(b.y - b.box.y0 + 6)}
+              rx="3"
+              fill="var(--plot-measure-selected)"
+              fill-opacity="0.12"
+              stroke="var(--plot-measure-selected)"
+              stroke-width="1" />
+            <line x1={px(b.xa)} x2={px(b.xb)} y1={px(b.y)} y2={px(b.y)} stroke="var(--plot-measure-selected)" stroke-width="1.75" />
+            <text
+              x={px((b.xa + b.xb) / 2)}
+              y={px(b.y - 4)}
+              text-anchor="middle"
+              font-size="11"
+              font-weight="600"
+              fill="var(--plot-measure-selected)">{measurementTexts[i]}</text>
+          </g>
+        {/if}
+      </g>
+    {/each}
+
+    <!-- the user's labels, above their peaks (a leader line down to the peak when the label had to go up) -->
+    {#each userLabels as l, i (i)}
+      {@const isSelected = selection?.kind === 'label' && selection.index === i}
+      <g data-testid="user-label" data-mz={l.mz} data-selected={isSelected ? '' : undefined}>
+        {#if isSelected}
+          <rect
+            x={px(l.x - l.width / 2)}
+            y={px(l.y - 13)}
+            width={px(l.width)}
+            height="17"
+            rx="3"
+            fill="var(--plot-user-label)"
+            fill-opacity="0.12"
+            stroke="var(--plot-user-label)"
+            stroke-width="1"
+            data-no-export="" />
+        {/if}
+        {#if l.top - l.y > 8}
+          <line x1={px(l.x)} x2={px(l.x)} y1={px(l.y + 3)} y2={px(l.top - 2)} stroke="var(--plot-user-label)" stroke-width="1" stroke-dasharray="1 2" />
+        {/if}
+        <text
+          x={px(l.x)}
+          y={px(l.y)}
+          text-anchor="middle"
+          font-size="11"
+          font-weight="600"
+          fill="var(--plot-user-label)"
+          stroke={halo}
+          stroke-width="3"
+          stroke-linejoin="round"
+          paint-order="stroke">{l.text}</text>
+      </g>
+    {/each}
+
+    <!-- the tools under the pointer (the page's only): the peak it would snap to, the start of a measurement, the
+         live Δm/z to the peak under the pointer -->
+    {#if tool && hover !== null && hover < mz.length}
+      <circle
+        cx={px(x(mz[hover]))}
+        cy={px(topOf(pointOf(hover)))}
+        r="4.5"
+        fill="none"
+        stroke={tool === 'measure' ? 'var(--plot-measure)' : 'var(--plot-user-label)'}
+        stroke-width="1.5"
+        data-testid="snap-ring"
+        data-no-export="" />
+    {/if}
+    {#if start !== null && start < mz.length}
+      {@const sx = x(mz[start])}
+      {@const sy = topOf(pointOf(start))}
+      <circle cx={px(sx)} cy={px(sy)} r="4" fill="var(--plot-measure)" stroke={halo} stroke-width="1" data-testid="measure-start" data-no-export="" />
+      {#if hover !== null && hover !== start && hover < mz.length}
+        {@const hx = x(mz[hover])}
+        {@const hy = topOf(pointOf(hover))}
+        <g data-testid="measure-preview" data-no-export="">
+          <line x1={px(sx)} y1={px(sy)} x2={px(hx)} y2={px(hy)} stroke="var(--plot-measure)" stroke-width="1.25" stroke-dasharray="3 3" />
+          <text
+            x={px((sx + hx) / 2)}
+            y={px(Math.max(plotTop + 10, Math.min(sy, hy) - 8))}
+            text-anchor="middle"
+            font-size="11"
+            font-weight="600"
+            fill="var(--plot-measure)"
+            stroke={halo}
+            stroke-width="3"
+            stroke-linejoin="round"
+            paint-order="stroke">{deltaText(Math.abs(mz[hover] - mz[start]))}</text>
+        </g>
+      {/if}
+    {/if}
 
     <!-- above: what the upper half is and the legend; below: what the lower half is, a note -->
     <text x={M.left} y="14" font-size="11" fill={muted} data-testid="top-label">{topLabel}</text>
@@ -431,6 +816,31 @@
         data-stacked={stacked ? '' : undefined}>{note}</text>
     {/if}
   </svg>
+
+  {#if editor}
+    {@const ex = x(editor.mz)}
+    {@const ey0 = topOf(editor)}
+    <div
+      class="absolute z-20 rounded-md border bg-background p-1 shadow-sm"
+      style:left="{Math.min(Math.max(0, ex - 80), Math.max(0, width - 170))}px"
+      style:top="{Math.max(0, ey0 - 40)}px"
+      data-testid="label-editor">
+      <input
+        type="text"
+        class="h-6 w-40 rounded-sm border bg-background px-1.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        aria-label="Label for the peak at m/z {editor.mz.toFixed(4)} (Enter keeps it, Esc cancels; empty removes the label)"
+        placeholder="Label for m/z {editor.mz.toFixed(2)}"
+        value={editor.text}
+        oninput={(e) => {
+          if (editor) editor.text = e.currentTarget.value
+        }}
+        onkeydown={oneditorkeydown}
+        onblur={commitEditor}
+        {@attach (el) => el.focus()} />
+    </div>
+  {/if}
+
+  <p class="sr-only" aria-live="polite" data-testid="tool-status">{status}</p>
 
   {#if tip}
     <div

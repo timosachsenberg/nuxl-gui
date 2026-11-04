@@ -3,13 +3,14 @@
 //   NUXL_FAKE=1 e2e/run.sh e2e/screens.shot.ts                                         (or NUXL_TOOL=…)
 //   GDK_SCALE=2 E2E_SCREEN=3000x2000x24 NUXL_FAKE=1 e2e/run.sh e2e/screens.shot.ts     (at device scale factor 2)
 // GDK_SCALE=2 makes WebKitGTK render at twice the pixels (the screen of xvfb-run has to hold the window: E2E_SCREEN).
-// Runs the example, then the views (01-11 light, 12-13 in the dark theme); removes its search folder at the end. With the fake, e2e/run.sh serves the
+// Runs the example, then the views (01-11 light, 12-13 in the dark theme, 14 the PSM view's Measure and Label in use, 15
+// the same in the dark theme); removes its search folder at the end. With the fake, e2e/run.sh serves the
 // outputs of src/lib/results/fixtures/screens (FAKE_NUXL_RESULTS=screens: OpenNuXL's test 3 on the example, 10 ppm,
 // with decoys) in place of the specs' fixtures/example (test 6, searched at 1e9 ppm: unrealistic precursor errors).
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
-import { clearSearches, fakeDelay, goTo, jsClick } from './lib.ts'
+import { clearSearches, clickSpectrum, fakeDelay, goTo, jsClick, residuePair, tallestPeakAwayFrom } from './lib.ts'
 
 const dir = resolve(fileURLToPath(new URL('../docs/screens', import.meta.url)))
 
@@ -53,6 +54,39 @@ async function rowWith(grid: string, needle: string) {
   const rows = await g.$$('tbody tr[aria-rowindex]')
   for (const r of rows) if (String(await r.getProperty('textContent')).includes(needle)) return r
   return rows[0]
+}
+
+/** Measure on, a measurement started at `from`, the pointer on `to` (the live Δ). */
+async function halfMeasurement(from: { x: number; y: number }, to: { x: number; y: number }) {
+  await $('[data-testid="tool-measure"]').click()
+  await clickSpectrum(from)
+  await $('[data-testid="measure-start"]').waitForExist({ timeout: 5000 })
+  const box = await browser.execute(() => {
+    const r = document.querySelector('[data-testid="spectrum"]')!.getBoundingClientRect()
+    return { left: r.left, top: r.top }
+  })
+  await browser
+    .action('pointer', { parameters: { pointerType: 'mouse' } })
+    .move({ origin: 'viewport', x: Math.round(box.left + to.x), y: Math.round(box.top + to.y) })
+    .perform()
+  await $('[data-testid="measure-preview"]').waitForExist({ timeout: 5000 })
+}
+
+/** A measurement from `from` to `to`, a label at `labelAt`, then a measurement half made from `to` back to `from`. */
+async function makeMarks(from: { x: number; y: number }, to: { x: number; y: number }, labelAt: { x: number; y: number }) {
+  await $('[data-testid="tool-measure"]').click()
+  await clickSpectrum(from)
+  await $('[data-testid="measure-start"]').waitForExist({ timeout: 5000 })
+  await clickSpectrum(to)
+  await $('[data-testid="measurement"]').waitForExist({ timeout: 5000 })
+  await $('[data-testid="tool-label"]').click()
+  await clickSpectrum(labelAt)
+  await $('[data-testid="label-editor"] input').waitForExist({ timeout: 5000 })
+  await $('[data-testid="label-editor"] input').setValue('check this peak')
+  await browser.keys('Enter')
+  await $('[data-testid="user-label"]').waitForExist({ timeout: 5000 })
+  await browser.keys('Escape') // the Label tool
+  await halfMeasurement(labelAt, from)
 }
 
 describe('screens', () => {
@@ -114,6 +148,16 @@ describe('screens', () => {
     await $('[data-testid="psm-view"]').waitForDisplayed({ timeout: 10000 })
     await browser.waitUntil(async () => !(await $('[data-testid="spectrum-loading"]').isExisting()), { timeout: 10000 })
     await shot('08-psm-view')
+
+    // the tools in use: a measurement between two annotated peaks a residue apart ("≈ residue"), a label of one's own
+    // on another peak, and Measure on with a second measurement half made (the pointer on its second peak: the live Δ);
+    // kept for the dark theme's (15), then cleared, so that the dark theme's PSM view (12) has none
+    const [from, to] = await residuePair()
+    const away = await tallestPeakAwayFrom([from, to])
+    await makeMarks(from, to, away)
+    await shot('14-psm-measure')
+    await browser.keys('Escape') // the half measurement
+    await browser.keys('Escape') // the tool
     await browser.keys('Escape')
 
     await tab('Overview')
@@ -138,6 +182,15 @@ describe('screens', () => {
     await jsClick(await rowWith('PSMs', PSM))
     await $('[data-testid="psm-view"]').waitForDisplayed({ timeout: 10000 })
     await browser.waitUntil(async () => !(await $('[data-testid="spectrum-loading"]').isExisting()), { timeout: 10000 })
+    // (the marks of 14 are kept for the spectrum: a half measurement again for 15, then all of it cleared)
+    await $('[data-testid="measurement"]').waitForExist({ timeout: 5000 })
+    await halfMeasurement(away, to)
+    await shot('15-psm-measure-dark')
+    await browser.keys('Escape')
+    await browser.keys('Escape')
+    await jsClick(await $('[data-testid="clear-measurements"]'))
+    await jsClick(await $('[data-testid="clear-labels"]'))
+    await browser.action('pointer').move({ origin: 'viewport', x: 2, y: 2 }).perform()
     await shot('12-psm-view-dark')
     await browser.keys('Escape')
     await tab('QC')

@@ -1,7 +1,7 @@
 // The PSM view's NuXL logic, without the page: NuXL's own annotation of a PSM's peaks (the `fragment_annotation` of
 // its hit, psm/nuxl-annotation.ts) placed on the observed peaks, what the toggles show of it, its colours, the
 // fragment ladder and the ion table from it, the linear peptide of a cross-link (for the theoretical spectrum of the
-// mirror's lower half), the mass errors of the unshifted ions, the cross-link header and the features in groups.
+// mirror's lower half), the mass errors of the annotated ions, the cross-link header and the features in groups.
 //
 // NuXL labels its ions as 'y5+', "b3+U'-H2O+" (shifted by a fragment of the cross-linked nucleotide), 'MI:U-H3PO4+'
 // (a marker ion), '[M+2H]+U-H3PO4++' (the precursor), 'iY+' (immonium), 'HT' (an internal fragment).
@@ -277,25 +277,33 @@ export function linearPeptide(openms: string): string {
     .replace(/\(NuXL:[^)]*\)/g, '')
 }
 
-/** Per type, number, charge and loss: the key of a sequence ion. */
-const ionKey = (type: string, ordinal: number, charge: number, loss: string) => `${type}${ordinal}/${charge}/${canonicalFormula(loss)}`
-
 /** A mass error of the strip under the spectrum: a match with its colour. */
 export type ColoredMatch = PeakMatch & { color: string }
 
 /**
- * The fragment mass errors of the unshifted sequence ions NuXL annotated: the m/z of their peak against that of the
- * same ion (type, number, charge, loss) of the linear peptide's theoretical spectrum (`theoretical`, with losses).
- * Shifted and other ions have no theoretical m/z here.
+ * The fragment mass errors of the annotated ions shown (`matches`): of every ion whose theoretical m/z `theoretical`
+ * gives (psm/nuxl-theoretical.ts: the a/b/y ions with and without losses, the shifted ions, the marker, precursor,
+ * immonium and internal ions, as OpenNuXL computes them), the m/z of its peak (`mz`) against it, in the colour of its
+ * kind. A peak with two ions has two dots. `omitted`: the annotated ions shown without a theoretical m/z (left out of
+ * the strip, which says so); `theoretical` null: every one (the peptide cannot be read).
  */
-export function massErrors(matches: NuxlMatch[], theoretical: TheoreticalIon[], mz: ArrayLike<number>): ColoredMatch[] {
-  const byKey = new Map<string, TheoreticalIon>()
-  for (const t of theoretical) if (t.type !== 'precursor') byKey.set(ionKey(t.type, t.ordinal, t.charge, lossOf(t.ion)), t)
+export function massErrors(
+  matches: NuxlMatch[],
+  mz: ArrayLike<number>,
+  theoretical: ((m: NuxlMatch) => number | null) | null,
+): { matches: ColoredMatch[]; omitted: number } {
   const out: ColoredMatch[] = []
+  const seen = new Set<string>()
+  let omitted = 0
   for (const m of matches) {
-    if (!isSequenceIon(m.ion) || m.ion.shift !== '') continue
-    const t = byKey.get(ionKey(m.ion.kind, m.ion.ordinal, m.ion.charge, m.ion.loss))
-    if (!t) continue
+    const key = `${m.peak}/${m.label}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const t = theoretical ? theoretical(m) : null
+    if (t === null || !Number.isFinite(t)) {
+      omitted++
+      continue
+    }
     out.push({
       peak: m.peak,
       ion: m.text,
@@ -303,12 +311,12 @@ export function massErrors(matches: NuxlMatch[], theoretical: TheoreticalIon[], 
       ordinal: m.ion.ordinal,
       charge: m.ion.charge,
       loss: m.ion.loss,
-      theoreticalMz: t.mz,
-      errorPpm: ((mz[m.peak] - t.mz) / t.mz) * 1e6,
+      theoreticalMz: t,
+      errorPpm: ((mz[m.peak] - t) / t) * 1e6,
       color: CATEGORY_COLORS[m.category],
     })
   }
-  return out.sort((p, q) => p.theoreticalMz - q.theoreticalMz)
+  return { matches: out.sort((p, q) => p.theoreticalMz - q.theoreticalMz), omitted }
 }
 
 /** A cleavage of the ladder from one end: the best unshifted series that explains it (b over a, c; y over x, z), and whether a shifted ion does. */

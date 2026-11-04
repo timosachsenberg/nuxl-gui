@@ -34,13 +34,13 @@ export type AnnotationOptions = {
 } | null | undefined
 
 /** Constants::PROTON_MASS_U */
-const PROTON_MASS_U = 1.007276466771
+export const PROTON_MASS_U = 1.007276466771
 
 //------------------------------------------------------------------------------
 // Formulas (EmpiricalFormula)
 
 /** symbol → count; no zero counts (EmpiricalFormula removes them) */
-type Formula = Readonly<Record<string, number>>
+export type Formula = Readonly<Record<string, number>>
 
 type Chemistry = {
   elements: Record<string, [number, number]>
@@ -74,10 +74,34 @@ const plus = (a: Formula, b: Formula) => combine(a, b, 1)
 const minus = (a: Formula, b: Formula) => combine(a, b, -1)
 
 /** EmpiricalFormula::getMonoWeight of `f` with `charge` (a proton per charge). */
-function monoWeight(f: Formula, charge = 0): number {
+export function monoWeight(f: Formula, charge = 0): number {
   let weight = PROTON_MASS_U * charge
   for (const [symbol, count] of ordered(f)) weight += ELEMENTS[symbol][1] * count
   return weight
+}
+
+/**
+ * A formula as EmpiricalFormula reads it ('C9H13N2O9P1', 'CH4S', 'H2O', '(13)C6'): element symbols each with an
+ * optional (signed) count; null if it is not one or has an element the table does not know.
+ */
+export function parseFormula(text: string): Formula | null {
+  const s = text.trim()
+  if (s === '') return null
+  const out: Record<string, number> = {}
+  const re = /(\(\d+\))?([A-Z][a-z]?)(-?\d*)/y
+  let at = 0
+  while (at < s.length) {
+    re.lastIndex = at
+    const m = re.exec(s)
+    if (!m) return null
+    const symbol = (m[1] ?? '') + m[2]
+    if (!Object.hasOwn(ELEMENTS, symbol) || m[3] === '-') return null
+    const n = (out[symbol] ?? 0) + (m[3] === '' ? 1 : Number(m[3]))
+    if (n === 0) delete out[symbol]
+    else out[symbol] = n
+    at = re.lastIndex
+  }
+  return out
 }
 
 /** EmpiricalFormula::operator<: the number of elements, then element by element (and count). */
@@ -121,7 +145,7 @@ function insertLoss(set: Loss[], l: Loss): void {
 const INTERNAL_TO_FULL: Formula = { H: 2, O: 1 }
 const INTERNAL_TO_NTERM: Formula = { H: 1 }
 const INTERNAL_TO_CTERM: Formula = { O: 1, H: 1 }
-const ION_OFFSET: Record<IonType, number> = {
+export const ION_OFFSET: Record<IonType, number> = {
   a: monoWeight(minus(INTERNAL_TO_NTERM, { C: 1, H: 1, O: 1 })),
   b: monoWeight(minus(INTERNAL_TO_NTERM, { H: 1 })),
   c: monoWeight(plus(INTERNAL_TO_NTERM, { N: 1, H: 2 })),
@@ -130,12 +154,12 @@ const ION_OFFSET: Record<IonType, number> = {
   z: monoWeight(minus(INTERNAL_TO_CTERM, { N: 1, H: 2 })),
 }
 /** Residue::internal_to_full_monoweight_ */
-const INTERNAL_TO_FULL_MONO = monoWeight(INTERNAL_TO_FULL)
+export const INTERNAL_TO_FULL_MONO = monoWeight(INTERNAL_TO_FULL)
 
 //------------------------------------------------------------------------------
 // The peptide (AASequence::fromString)
 
-type Residue = {
+export type Residue = {
   code: string
   /** the free amino acid's formula, with the modification's (not with a mass-only one's) */
   formula: Formula
@@ -148,8 +172,8 @@ type Residue = {
   /** a modification known by its mass only: not in the formula */
   massOnly: boolean
 }
-type TerminalMod = { diffMono: number; diffFormula: Formula; massOnly: boolean }
-type Peptide = { residues: Residue[]; nTerm: TerminalMod | null; cTerm: TerminalMod | null }
+export type TerminalMod = { diffMono: number; diffFormula: Formula; massOnly: boolean }
+export type Peptide = { residues: Residue[]; nTerm: TerminalMod | null; cTerm: TerminalMod | null }
 
 /** A residue as ResidueDB has it (formula, mass, losses). */
 function residue(code: string, formula: Formula, losses: Formula[]): Residue {
@@ -321,7 +345,7 @@ function squareBracket(peptide: Peptide, mod: string, term: 'N' | 'C' | null, s:
  * the Unimod file does not have (or not for that residue or terminus) is taken as the mass delta that
  * `massOf` gives it, if it gives one.
  */
-function parsePeptide(text: string, massOf?: ModificationMass): Peptide {
+export function parsePeptide(text: string, massOf?: ModificationMass): Peptide {
   let s = text.trim()
   if (s.startsWith('n')) s = s.slice(1)
   if (s.endsWith('c')) s = s.slice(0, -1)
@@ -402,10 +426,10 @@ function parsePeptide(text: string, massOf?: ModificationMass): Peptide {
 //------------------------------------------------------------------------------
 // The theoretical spectrum (TheoreticalSpectrumGenerator)
 
-type IonType = 'a' | 'b' | 'c' | 'x' | 'y' | 'z'
+export type IonType = 'a' | 'b' | 'c' | 'x' | 'y' | 'z'
 /** The order in which getSpectrum adds the ion types of a charge. */
 const GENERATION_ORDER: IonType[] = ['b', 'y', 'a', 'c', 'x', 'z']
-const PREFIX = new Set<IonType>(['a', 'b', 'c'])
+export const PREFIX = new Set<IonType>(['a', 'b', 'c'])
 
 /** A peak of the theoretical spectrum: its m/z, the ion name TSG gives it ('y7-H2O1++'), its charge. */
 type TheoreticalPeak = { mz: number; name: string; charge: number }

@@ -278,3 +278,100 @@ export function windowCloseToolsMissing(): string | null {
   })
   return missing.length === 0 ? null : `needs ${missing.map(([t]) => (t === 'python3' ? 'python3 with libX11' : t)).join(', ')} on the host`
 }
+
+/** Residues' masses (Residue::Internal) for a Δm/z between two annotated peaks. */
+export const RESIDUES: Record<string, number> = {
+  G: 57.02146,
+  A: 71.03711,
+  S: 87.03203,
+  P: 97.05276,
+  V: 99.06841,
+  T: 101.04768,
+  'I/L': 113.08406,
+  N: 114.04293,
+  D: 115.02694,
+  Q: 128.05858,
+  K: 128.09496,
+  E: 129.04259,
+  M: 131.04049,
+  H: 137.05891,
+  F: 147.06841,
+  R: 156.10111,
+  Y: 163.06333,
+  W: 186.07931,
+}
+
+export type SpectrumPoint = { x: number; y: number; mz: number; delta: number; residue: string }
+
+/**
+ * Two annotated peaks of the PSM view's spectrum (their labels' m/z) one residue apart (within 5 mDa, and one only),
+ * with where their sticks end in the SVG (its m/z scale, its paths).
+ */
+export async function residuePair(): Promise<[SpectrumPoint, SpectrumPoint]> {
+  const pair = await browser.execute((residues: Record<string, number>) => {
+    const svg = document.querySelector('[data-testid="spectrum"]')!
+    const [d0, d1] = svg.getAttribute('data-mz-domain')!.split(' ').map(Number)
+    const [r0, r1] = svg.getAttribute('data-x-range')!.split(' ').map(Number)
+    const paths = [...svg.querySelectorAll('[data-testid="matched-peaks"]')].map((p) => p.getAttribute('d') ?? '')
+    const at = (mz: number) => {
+      const x = Math.round((r0 + ((mz - d0) * (r1 - r0)) / (d1 - d0)) * 10) / 10
+      let y = Infinity
+      for (const d of paths) for (const m of d.matchAll(/M(-?[\d.]+) (-?[\d.]+)V(-?[\d.]+)/g)) if (Number(m[1]) === x) y = Math.min(y, Number(m[3]))
+      return { x, y }
+    }
+    const mzs = [...svg.querySelectorAll('[data-testid="peak-label"]')].map((l) => Number(l.getAttribute('data-mz'))).sort((p, q) => p - q)
+    for (let i = 0; i < mzs.length; i++) {
+      for (let j = i + 1; j < mzs.length; j++) {
+        const delta = mzs[j] - mzs[i]
+        const hits = Object.entries(residues).filter(([, mass]) => Math.abs(delta - mass) < 0.005)
+        const [a, b] = [at(mzs[i]), at(mzs[j])]
+        // (apart on screen, so that each click snaps to its own peak)
+        if (hits.length === 1 && Number.isFinite(a.y) && Number.isFinite(b.y) && b.x - a.x > 30) {
+          return [
+            { ...a, mz: mzs[i], delta, residue: hits[0][0] },
+            { ...b, mz: mzs[j], delta, residue: hits[0][0] },
+          ]
+        }
+      }
+    }
+    return null
+  }, RESIDUES)
+  if (!pair) throw new Error("no two annotated peaks of the PSM's spectrum are a residue apart")
+  return pair as [SpectrumPoint, SpectrumPoint]
+}
+
+/** The m/z of the peaks of the PSM view's spectrum that have NuXL's labels. */
+export async function labelledMzs(): Promise<number[]> {
+  return browser.execute(() => [...document.querySelectorAll('[data-testid="peak-label"]')].map((l) => Number(l.getAttribute('data-mz'))))
+}
+
+/** A click of the pointer at a point of the spectrum's SVG (scrolled into the middle of the view first). */
+export async function clickSpectrum(p: { x: number; y: number }) {
+  const box = await browser.execute(() => {
+    const svg = document.querySelector('[data-testid="spectrum"]')!
+    svg.scrollIntoView({ block: 'center' })
+    const r = svg.getBoundingClientRect()
+    return { left: r.left, top: r.top }
+  })
+  await browser
+    .action('pointer', { parameters: { pointerType: 'mouse' } })
+    .move({ origin: 'viewport', x: Math.round(box.left + p.x), y: Math.round(box.top + p.y) })
+    .down()
+    .up()
+    .perform()
+}
+
+/** Where the tallest stick of the spectrum ends that is more than 60 px from each of `points` (for a label). */
+export async function tallestPeakAwayFrom(points: { x: number }[]): Promise<{ x: number; y: number }> {
+  return browser.execute((xs: number[]) => {
+    const svg = document.querySelector('[data-testid="spectrum"]')!
+    let best = { x: NaN, y: Infinity }
+    for (const p of svg.querySelectorAll('[data-testid="matched-peaks"], [data-testid="unmatched-peaks"]')) {
+      for (const m of (p.getAttribute('d') ?? '').matchAll(/M(-?[\d.]+) (-?[\d.]+)V(-?[\d.]+)/g)) {
+        const [x, y] = [Number(m[1]), Number(m[3])]
+        if (y < best.y && xs.every((at) => Math.abs(at - x) > 60)) best = { x, y }
+      }
+    }
+    return best
+  }, points.map((p) => p.x))
+}
