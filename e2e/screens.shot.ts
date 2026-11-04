@@ -3,10 +3,12 @@
 //   NUXL_FAKE=1 e2e/run.sh e2e/screens.shot.ts                                         (or NUXL_TOOL=…)
 //   GDK_SCALE=2 E2E_SCREEN=3000x2000x24 NUXL_FAKE=1 e2e/run.sh e2e/screens.shot.ts     (at device scale factor 2)
 // GDK_SCALE=2 makes WebKitGTK render at twice the pixels (the screen of xvfb-run has to hold the window: E2E_SCREEN).
-// Runs the example, then the views (01-11 light, 12-13 in the dark theme, 14 the PSM view's Measure and Label in use, 15
-// the same in the dark theme); removes its search folder at the end. With the fake, e2e/run.sh serves the
-// outputs of src/lib/results/fixtures/screens (FAKE_NUXL_RESULTS=screens: OpenNuXL's test 3 on the example, 10 ppm,
-// with decoys) in place of the specs' fixtures/example (test 6, searched at 1e9 ppm: unrealistic precursor errors).
+// Runs the example, then the views (01-11 light, 12-13 in the dark theme, 14 the PSM view's Measure and Label in use,
+// 15 the same in the dark theme; last, 16-17, the new-version banner and the About menu's Check for updates, with
+// GitHub's answer stubbed in the page: no request leaves it); removes its search folder at the end. With the fake,
+// e2e/run.sh serves the outputs of src/lib/results/fixtures/screens (FAKE_NUXL_RESULTS=screens: OpenNuXL's test 3 on
+// the example, 10 ppm, with decoys) in place of the specs' fixtures/example (test 6, searched at 1e9 ppm: unrealistic
+// precursor errors).
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
@@ -37,6 +39,39 @@ async function revealFdrHint() {
     if (over > 0) window.scrollTo(0, Math.max(over, bar))
   })
 }
+
+/** The release that the stubbed GitHub of 16-17 names as the latest (newer than any version of the app yet). */
+const STUB_RELEASE = '9.9.0'
+
+/**
+ * GitHub's answer stubbed in the page (until it is loaded again), in its fetch: api.github.com answers with release
+ * STUB_RELEASE, and the shim's `update_check_at_start` (Tauri's IPC is a fetch of ipc://localhost/<command> here;
+ * `__TAURI_INTERNALS__.invoke` cannot be replaced) answers true in place of NUXL_NO_UPDATE_CHECK's false
+ * (e2e/app.sh); other requests go on as before. Called right after a reload, before the check at start (5 s after
+ * it): if it came too late, the shim's false stands and nothing is asked of GitHub either.
+ */
+async function stubGitHub() {
+  await browser.execute((version: string) => {
+    const w = window as any
+    const realFetch = w.fetch.bind(w)
+    w.__stubbed = { github: 0, atStart: 0 }
+    const json = (body: unknown, headers: Record<string, string> = {}) =>
+      Promise.resolve(new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json', ...headers } }))
+    w.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (/^(ipc:\/\/localhost|http:\/\/ipc\.localhost)\/update_check_at_start$/.test(url)) {
+        w.__stubbed.atStart++
+        return json(true, { 'Tauri-Response': 'ok' })
+      }
+      if (!url.startsWith('https://api.github.com/')) return realFetch(input, init)
+      w.__stubbed.github++
+      return json({ tag_name: `desktop-native-v${version}`, name: `NuXL ${version}`, published_at: '2026-11-01T12:00:00Z' })
+    }
+  }, STUB_RELEASE)
+}
+
+/** How often the stubs answered: GitHub's, and the shim's `update_check_at_start`. */
+const stubbed = () => browser.execute(() => (window as any).__stubbed as { github: number; atStart: number })
 
 /** The PSM of 08-psm-view: its sequence as the PSMs grid shows it (a row with it, else the first row). */
 const PSM = process.env.FAKE_NUXL_RESULTS === 'screens' ? 'AWQQLDNGSCAQIR' : 'XL'
@@ -199,5 +234,33 @@ describe('screens', () => {
     await jsClick(await $('[data-testid="theme-menu"]'))
     await jsClick(await $('[data-testid="theme-system"]'))
     await browser.keys('Escape')
+
+    // a newer release (stubbed: stubGitHub): the banner of the check at start over the results, then the About
+    // menu's Check for updates (last: the page is loaded again, the marks of 14-15 would go); then loaded again (the
+    // stubs gone, the banner too)
+    await goTo('Results')
+    await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 20000 })
+    await browser.refresh()
+    await $('header').waitForDisplayed({ timeout: 30000 })
+    await stubGitHub()
+    await $('[data-testid="update-banner"]')
+      .waitForDisplayed({ timeout: 15000 })
+      .catch(async (e) => {
+        throw new Error(`no banner (the stubs answered ${JSON.stringify(await stubbed())}): ${e}`)
+      })
+    await expect($('[data-testid="update-banner"]')).toHaveText(expect.stringContaining(`NuXL ${STUB_RELEASE} is available`))
+    await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 20000 })
+    await browser.action('pointer').move({ origin: 'viewport', x: 2, y: 2 }).perform()
+    await shot('16-update-available')
+    await jsClick(await $('[data-testid="about-menu"]'))
+    await $('[data-testid="about-panel"]').waitForDisplayed({ timeout: 10000 })
+    await jsClick(await $('[data-testid="update-check"]'))
+    await expect($('[data-testid="update-result"]')).toHaveText(expect.stringContaining(`NuXL ${STUB_RELEASE} is available.`))
+    expect(await stubbed()).toEqual({ github: 2, atStart: 1 })
+    await browser.action('pointer').move({ origin: 'viewport', x: 2, y: 2 }).perform()
+    await shot('17-about-check-for-updates')
+    await browser.keys('Escape')
+    await browser.refresh()
+    await $('header').waitForDisplayed({ timeout: 30000 })
   })
 })

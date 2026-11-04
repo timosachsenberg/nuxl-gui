@@ -12,4 +12,6 @@ shift
 export XDG_DATA_HOME=$home
 # the file that the specs choose in place of the system dialogs (debug builds only; see lib.rs)
 export NUXL_TEST_DIALOG_PATH=$home/chosen.nuxl
+# no new-version check at start (src-tauri/src/update.rs): the specs ask nothing of GitHub
+export NUXL_NO_UPDATE_CHECK=1
 exec "$(dirname "${BASH_SOURCE[0]}")/../src-tauri/target/debug/nuxl-desktop" "$@"

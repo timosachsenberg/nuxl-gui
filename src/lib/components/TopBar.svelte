@@ -1,7 +1,7 @@
 <script lang="ts">
-  // The web app's top bar without its engine chip and update notice (the desktop app has neither):
-  // the OpenMS logo and the wordmark, the views, on Results the result's chip and its Export menu, and a running search's
-  // progress on the other views; at the right end the theme menu.
+  // The web app's top bar without its engine chip: the OpenMS logo and the wordmark, the views, on Results the
+  // result's chip and its Export menu, and a running search's progress on the other views; at the right end the
+  // About menu (versions, "Check for updates") and the theme menu. A newer release's banner is below it (App.svelte).
   // the unmodified logo of OpenMS/Assets (src/assets/logo/README.txt), 180 px: sharp at 36 px on HiDPI screens;
   // its lettering is black, so in dark it stands on a light plate
   import openmsLogo from '../../assets/logo/openms-logo.png'
@@ -13,6 +13,7 @@
   import ExportMenu from './results/ExportMenu.svelte'
   import { cn } from '$lib/utils'
   import SearchProgress from './search/SearchProgress.svelte'
+  import AboutMenu from './AboutMenu.svelte'
   import ThemeMenu from './ThemeMenu.svelte'
 
   let { route, resultId }: { route: Route; resultId: string | null } = $props()
@@ -92,6 +93,9 @@
     {#if resultView}
       <ExportMenu view={resultView} />
     {/if}
-    <ThemeMenu />
+    <div class="flex items-center gap-1">
+      <AboutMenu />
+      <ThemeMenu />
+    </div>
   </div>
 </header>

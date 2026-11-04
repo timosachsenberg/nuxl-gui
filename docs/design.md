@@ -4,7 +4,8 @@ A desktop application for protein–nucleic acid cross-link searches with **Open
 desktop (timosachsenberg/prose-gui) is built: Tauri 2 around the OS webview, the native `OpenNuXL` tool (with
 `PercolatorAdapter` for the score recalibration) as the only native code, a small Rust shim that starts it and reads
 nothing it need not, and the Svelte 5 / Tailwind / shadcn-svelte screens of ProSE desktop. The tool stays the
-source of truth; the app makes no network connection; files are read where they are and never copied.
+source of truth; the app's only network connection is the new-version check (§7); files are read where they are and
+never copied.
 
 This repository started as a copy of prose-gui 0.1.4 (commit 5ed55d7); everything ProSE-specific is replaced.
 OpenNuXL's options and outputs are those of OpenMS `develop` (pinned in `native/OPENMS_COMMIT`).
@@ -141,3 +142,30 @@ before `IDFilter excludes <n> spectra.`) is part of the autotune.
 
 `.raw` input; PeptDeep; open search; pooled FDR over files; OpenNuXL's `optimize`, `RTpredict` and
 `pcrecalibration` filters; custom presets files.
+
+## 7. The new-version check
+
+The app's one network connection. `src/lib/update/update.ts` asks GitHub for the latest release
+(`GET https://api.github.com/repos/timosachsenberg/nuxl-gui/releases/latest`: published, not a draft nor a
+prerelease; `Accept: application/vnd.github+json`, no credentials or referrer, 8 s timeout; the web view adds its
+own User-Agent, Accept-Language and Origin, nothing about files or searches is sent), reads the version
+of its tag (`desktop-native-v<major>.<minor>.<patch>`, anything else is ignored) and compares it numerically with the
+app's (Tauri's `getVersion`, tauri.conf.json's). The result is `newer` (version, page), `current` or `error` (offline,
+timeout, HTTP errors and GitHub's rate limit, 403/429, an answer that is not JSON or has no such tag).
+
+- At start (`update.svelte.ts`, App.svelte): once, 5 s after the start, when the setting "Check for new versions at
+  start" is on (the default; localStorage `nuxl.updateCheck`) and the shim allows it (`update_check_at_start`: false
+  with `NUXL_NO_UPDATE_CHECK` set, which the e2e specs set in `e2e/app.sh` and `e2e/appimage-app.sh`). A newer release
+  shows a banner under the top bar (UpdateBanner.svelte, inside an always-present `role="status"` region so that it
+  is read out): Download (hides it for this start only), Not now (localStorage `nuxl.updateDismissed`: no banner
+  again for that version, one for a newer). No banner either when, while it waited for GitHub, the setting was turned
+  off or "Check for updates" was clicked (that check shows its own result). Errors are silent.
+- The About menu (AboutMenu.svelte, ⓘ in the top bar): the app's and OpenNuXL's versions, "Check for updates" with
+  its result in place, and the setting. A Download that cannot open the page says so where it was clicked (banner or
+  panel); a new check or Not now clears it.
+- The release page opens in the system's browser through the shim, `open_release_page(version)`
+  (`src-tauri/src/update.rs`): the version must be digits and dots (`major.minor.patch`); the URL
+  (`https://github.com/timosachsenberg/nuxl-gui/releases/tag/desktop-native-v<version>`) is built in Rust, never taken
+  from the page or from GitHub's answer, and opened with `xdg-open` (from an AppImage without the AppImage's library
+  and GTK variables), `open` (macOS) or `rundll32 url.dll,FileProtocolHandler` (Windows; no shell). No plugin.
+- The CSP's `connect-src` has `https://api.github.com` beside the app's own (tauri.conf.json); nothing else.

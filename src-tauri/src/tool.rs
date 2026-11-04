@@ -132,7 +132,7 @@ pub const NO_UPDATE_CHECK: (&str, &str) = ("OPENMS_DISABLE_UPDATE_CHECK", "ON");
 /// The command that runs the tool: `OPENBLAS_NUM_THREADS=1` unless the user has set it (Percolator's
 /// linear algebra would otherwise start a thread per core inside the tool's own threads), as the
 /// FASTag shim does. `openblas` is the variable's current value. Always with [`NO_UPDATE_CHECK`] (a
-/// user's `OFF` included: the app makes no network contact). On macOS without the
+/// user's `OFF` included: the tool makes no network contact). On macOS without the
 /// [`LOADER_VARIABLES`]; on Windows without a console window (the app has none to share).
 pub fn command_with(path: &Path, openblas: Option<OsString>) -> Command {
     let mut command = Command::new(path);

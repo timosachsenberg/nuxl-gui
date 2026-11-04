@@ -1,12 +1,14 @@
 <script lang="ts">
   import CloseGuard from '$lib/components/CloseGuard.svelte'
   import TopBar from '$lib/components/TopBar.svelte'
+  import UpdateBanner from '$lib/components/UpdateBanner.svelte'
   import { Toaster } from '$lib/components/ui/sonner'
   import * as Tooltip from '$lib/components/ui/tooltip'
   import { initHistory } from '$lib/history/history.svelte'
   import { readHash, router } from '$lib/route.svelte'
   import { loadTool } from '$lib/search/tool.svelte'
   import { initTheme } from '$lib/theme/theme.svelte'
+  import { loadAppVersion, startUpdateCheck } from '$lib/update/update.svelte'
   import History from './views/History.svelte'
   import NewSearch from './views/NewSearch.svelte'
   import Results from './views/Results.svelte'
@@ -18,6 +20,10 @@
   void loadTool()
   // finished searches are saved to History; the list is read
   initHistory()
+  // the app's version (the About menu); a few seconds after the start, a newer release is looked for (on by default:
+  // the About menu's "Check for new versions at start"; one request to api.github.com, silent when it fails)
+  void loadAppVersion()
+  void startUpdateCheck()
 </script>
 
 <svelte:window onhashchange={readHash} />
@@ -27,6 +33,7 @@
        narrow windows), at least 440 px: main takes what is left, the results fill it (absolutely) -->
   <div class={router.route.view === 'results' ? 'flex min-h-screen flex-col bg-muted/40' : 'min-h-screen bg-muted/40'}>
     <TopBar route={router.route} resultId={router.resultId} />
+    <UpdateBanner />
     {#if router.route.view === 'results'}
       <main class="relative min-h-[440px] flex-1">
         <Results id={router.route.id} />

@@ -37,5 +37,6 @@ fi
 printf 'kept: %s\ndropped: %s\nhost GLES: %s\n' "${kept[*]}" "${dropped[*]}" "${SMOKE_HOST_GLES:-from the host}" \
   > "$home/appimage-env.txt"
 
-exec env -i "${keep[@]}" XDG_DATA_HOME="$home" PATH=/usr/local/bin:/usr/bin:/bin \
+# (NUXL_NO_UPDATE_CHECK: no new-version check at start, src-tauri/src/update.rs)
+exec env -i "${keep[@]}" XDG_DATA_HOME="$home" NUXL_NO_UPDATE_CHECK=1 PATH=/usr/local/bin:/usr/bin:/bin \
   "$appimage" --appimage-extract-and-run "$@"

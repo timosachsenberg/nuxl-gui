@@ -7,7 +7,10 @@ native code, and the screens of ProSE desktop (same theme, shadcn-svelte compone
 
 The packages come from CI (`.github/workflows/desktop.yml`); they bundle OpenNuXL and PercolatorAdapter with their
 libraries and data, the cross-linking protocols (NuXL presets) among them (`native/README.md`). Everything runs on the
-computer: the app makes no network connection (OpenMS' update check is off, `native/README.md`).
+computer. The app's only network connection is its new-version check: one request to GitHub at start (on by
+default) and one each time "Check for updates" is clicked ("Where the data is" says what it sends and how to turn
+it off). OpenMS' own update check is off
+(`native/README.md`).
 
 What it does: New search takes mzML files, a FASTA and a protocol (RNA-UV (U), DNA-UV, RNA-DEB, ...), runs OpenNuXL
 once per input file, one after the other, with its own decoys and, from 1000 PSMs on, Percolator, and shows the
@@ -61,6 +64,18 @@ libGLESv2.so.2"). Install it with `sudo apt install libgles2` (Ubuntu, Debian) o
   - Windows: `%APPDATA%\org.openms.nuxl.desktop\`
 - The log of the last search that failed: `logs/last-failure.log` there (the error names it).
 - Presets of the settings: the app's webview keeps them, on this computer.
+- The new-version check: a few seconds after the start the app asks GitHub for the latest release of NuXL, one
+  `GET https://api.github.com/repos/timosachsenberg/nuxl-gui/releases/latest`, without cookies or credentials;
+  nothing about the files or the searches is sent. GitHub sees the request with the IP address and the headers the
+  app's web view adds to every request, as for any web page: a User-Agent (operating system, CPU architecture and
+  web-engine version), Accept-Language (the system's language) and the app's Origin. When a newer version exists, a
+  banner under the top bar says so: Download opens its release page in the browser (the banner comes back at the
+  next start), Not now hides it until a still newer version comes out. If the check fails (offline, GitHub's
+  limit of requests) the app says nothing. Turn it off in the About menu (the ⓘ button in the top bar): "Check for
+  new versions at start"; "Check for updates" there checks when asked (also with the setting off). Setting the
+  environment variable `NUXL_NO_UPDATE_CHECK` (any non-empty value) turns the check at start off for every user of a
+  computer.
+  Nothing else of the app uses the network (the CSP lets the page connect to `api.github.com` only).
 - The mzML and FASTA files are read where they are: never copied, and nothing is left beside them. (On Windows,
   OpenNuXL writes a debug table `<name>.mzML.ambiguous_masses.csv` beside an mzML while it searches it; the app
   removes it when the run ends, but leaves, and OpenNuXL overwrites, a file of that name that was there before.) Deleting a

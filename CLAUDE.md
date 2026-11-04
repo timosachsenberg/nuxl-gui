@@ -12,7 +12,8 @@ npx vitest run
 cd src-tauri && cargo test && cargo clippy --all-targets && cargo fmt --check
 ```
 
-The end-to-end specs run the real app against a fake OpenNuXL: `NUXL_FAKE=1 e2e/run.sh` (README, "Develop"). OpenMS
+The end-to-end specs run the real app against a fake OpenNuXL: `NUXL_FAKE=1 e2e/run.sh` (README, "Develop"). They never
+ask GitHub: `e2e/app.sh` sets `NUXL_NO_UPDATE_CHECK` (the new-version check at start, `docs/design.md` §7). OpenMS
 is not built locally; CI builds it (the packaging jobs take minutes with warm caches, about an hour without).
 
 ## Releasing
