@@ -124,12 +124,25 @@ describe('the linear peptide', () => {
     { ion: 'y2', type: 'y', ordinal: 2, charge: 1, mz: 246.1561 },
   ]
 
-  it('gives the mass errors of the unshifted ions against their theoretical m/z', () => {
-    const mz = Float32Array.from([158.0925, 175.119, 416.1608, 500])
-    const { matches } = placeAnnotation([peak(158.0925, 'y1-H3N1+'), peak(175.119, 'y1+'), peak(416.1608, 'b3+'), peak(500, "b3+U'+")], mz, PPM20)
-    const errors = massErrors(matches, theoretical, mz)
-    expect(errors.map((e) => e.ion)).toEqual(['y1-H₃N+', 'y1+', 'b3+'])
-    expect(errors[2].errorPpm).toBeCloseTo(((mz[2] - 416.1564) / 416.1564) * 1e6, 6)
+  it('gives the mass errors of every annotated ion with a theoretical m/z, in the colour of its kind', () => {
+    const mz = Float32Array.from([158.0925, 175.119, 227.0662, 416.1608, 500, 600])
+    const annotation = [peak(158.0925, 'y1-H3N1+'), peak(175.119, 'y1+'), peak(227.0662, 'MI:U-H3PO4+'), peak(416.1608, 'b3+'), peak(500, "b3+U'+"), peak(600, 'QQ')]
+    const { matches } = placeAnnotation(annotation, mz, PPM20)
+    // (by NuXL's label; the internal fragment QQ has none)
+    const known = new Map([['y1-H3N1+', 158.0924], ['y1+', 175.119], ['MI:U-H3PO4+', 227.06625], ['b3+', 416.1564], ["b3+U'+", 500.0001]])
+    const { matches: errors, omitted } = massErrors(matches, mz, (m) => known.get(m.label) ?? null)
+    expect(omitted).toBe(1)
+    expect(errors.map((e) => e.ion)).toEqual(['y1-H₃N+', 'y1+', 'MI:U-H₃PO₄+', 'b3+', "b3+U'+"])
+    expect(errors.map((e) => e.color)).toEqual([CATEGORY_COLORS.suffix, CATEGORY_COLORS.suffix, CATEGORY_COLORS.marker, CATEGORY_COLORS.prefix, CATEGORY_COLORS.shifted])
+    expect(errors.map((e) => e.type)).toEqual(['y', 'y', 'marker', 'b', 'b'])
+    expect(errors[3].errorPpm).toBeCloseTo(((mz[3] - 416.1564) / 416.1564) * 1e6, 6)
+  })
+
+  it('counts the ions left out: without a theoretical m/z, every one', () => {
+    const mz = Float32Array.from([175.119, 500])
+    const { matches } = placeAnnotation([peak(175.119, 'y1+'), peak(500, "b3+U'+")], mz, PPM20)
+    expect(massErrors(matches, mz, null)).toEqual({ matches: [], omitted: 2 })
+    expect(massErrors(matches, mz, (m) => (m.label === 'y1+' ? 175.119 : null)).omitted).toBe(1)
   })
 
   it('makes the ladder and the ion table, unshifted and shifted', () => {

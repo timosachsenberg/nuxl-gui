@@ -7,7 +7,8 @@
   // ions, precursor, immonium and internal ions) on the observed peaks read from the input mzML, or, when they cannot be
   // read, on the peaks NuXL annotated; mirrored against the theoretical b/y spectrum of the linear peptide
   // (psm/annotate.ts), with ion, charge, shift and loss toggles; the ion table, the fragment mass errors of the
-  // unshifted ions (a strip that can be collapsed, remembered in displaySettings.massErrors) and the PSM's features
+  // annotated ions shown, each against its m/z as OpenNuXL computes it (psm/nuxl-theoretical.ts; a strip that can be
+  // collapsed, remembered in displaySettings.massErrors) and the PSM's features
   // (NuXL's scores). The logic is in nuxl-psm.ts.
   import { signedNumber } from '$lib/format/number'
   import { errorText } from '$lib/format/error'
@@ -17,6 +18,7 @@
   import { download } from '$lib/download'
   import { adductLabel, peptideView, type PeptideView } from '$lib/format/peptide'
   import { annotatePeaks, type ModificationMass } from '$lib/psm/annotate'
+  import { nuxlPeptide, nuxlTheoreticalMz, searchChemistry, type NuxlChemistry, type NuxlPeptide } from '$lib/psm/nuxl-theoretical'
   import { fragmentTolerance, modificationList, spectrumPeaks, svgFileName, ION_TYPES, type IonType } from '$lib/psm/psm'
   import { exportSpectrumSvg } from '$lib/psm/svg-export'
   import { baseName, passesPeptideQ } from '$lib/results/model'
@@ -164,7 +166,7 @@
   const legend = $derived(legendOf(nuxlGroups.flatMap((g) => g.matches.map((x) => x.category)).concat(options.ions.length > 0 ? ['prefix', 'suffix'] : [])))
   const share = $derived(peaks ? annotatedShare(nuxlGroups, peaks.intensity) : null)
 
-  // the linear peptide's theoretical spectrum (the lower half, the ion table, the mass errors)
+  // the linear peptide's theoretical spectrum (the lower half, the ion table)
   const linear = $derived(linearPeptide(pt.openms[k]))
   /** The masses of the peptide's modifications by name, for a name the Unimod table does not have. */
   const modificationMass: ModificationMass = $derived.by(() => {
@@ -172,22 +174,37 @@
     for (let i = pt.modOffsets[k]; i < pt.modOffsets[k + 1]; i++) masses.set(pt.modName[i], pt.modMass[i])
     return (name: string) => masses.get(name)
   })
-  /** The theoretical ions of the types shown, up to the highest charge shown, with or without their losses; an error as text. */
-  function theoreticalOf(losses: boolean): { result: PeakAnnotationResult | null; error: string | null } {
+  /** The theoretical ions of the types shown, up to the highest charge shown, without losses; an error as text. */
+  function theoreticalIons(): { result: PeakAnnotationResult | null; error: string | null } {
     try {
       const mz = peaks?.mz ?? new Float32Array(0)
       const intensity = peaks?.intensity ?? new Float32Array(0)
-      const o = { tolerance: tolerance.value, unit: tolerance.unit, maxCharge: Math.max(1, ...options.charges), ions: ION_TYPES.filter((t) => options.ions.includes(t)), losses, precursor: false }
+      const o = { tolerance: tolerance.value, unit: tolerance.unit, maxCharge: Math.max(1, ...options.charges), ions: ION_TYPES.filter((t) => options.ions.includes(t)), losses: false, precursor: false }
       return { result: annotatePeaks(mz, intensity, linear, charge, o, modificationMass), error: null }
     } catch (e) {
       return { result: null, error: String((e as Error)?.message ?? e) }
     }
   }
-  const plain = $derived(theoreticalOf(false))
-  const withLosses = $derived(options.losses.length > 0 ? theoreticalOf(true) : plain)
+  const plain = $derived(theoreticalIons())
   const annotationError = $derived(plain.error)
   const theoretical = $derived((plain.result?.theoretical ?? []).filter((t) => options.charges.includes(t.charge)))
-  const errors = $derived(peaks ? massErrors(shown, withLosses.result?.theoretical ?? [], peaks.mz) : [])
+  // the mass errors: each annotated ion shown against its m/z as OpenNuXL computes it, from its label (the shifted ions
+  // with the search's fragment adducts: of its preset, else its NuXL:fragment_adducts, else OpenNuXL's)
+  const chemistry: NuxlChemistry = $derived(searchChemistry(parameters, view.result.outcome.nuxl?.preset) ?? { adducts: new Map(), markers: new Map() })
+  const hitPeptide: NuxlPeptide | null = $derived.by(() => {
+    const na = xl.adduct[row] ?? ''
+    try {
+      return nuxlPeptide(pt.openms[k], modificationMass, na === 'none' ? '' : na, isXL || na !== '' ? adductMass : NaN)
+    } catch {
+      return null
+    }
+  })
+  // (a peptide that cannot be read: every ion shown is left out, and the strip says so)
+  const errors = $derived(
+    peaks
+      ? massErrors(shown, peaks.mz, hitPeptide ? (x) => nuxlTheoreticalMz(x.label, x.ion.charge, hitPeptide, chemistry, x.mz).mz : null)
+      : { matches: [], omitted: 0 },
+  )
   const table = $derived(plain.result ? nuxlIonTable(theoretical, shown, sequence.length, options) : null)
   const cuts = $derived(nuxlLadder(shown, sequence.length))
 
@@ -585,7 +602,7 @@
         {bottom}
         title={spectrumTitle}
         description={spectrumDescription}
-        errors={displaySettings.massErrors ? { matches: errors, tolerance } : null} />
+        errors={displaySettings.massErrors ? { ...errors, tolerance } : null} />
       {#if annotationError}
         <p class="pb-1 text-xs text-muted-foreground" role="status">The theoretical spectrum could not be computed: {annotationError}</p>
       {/if}

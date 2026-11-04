@@ -34,7 +34,7 @@ function files(withMzml: boolean): SearchFiles {
   }
 }
 
-async function open(withMzml: boolean): Promise<OpenResult> {
+async function open(withMzml: boolean, parameters: Record<string, unknown> = {}): Promise<OpenResult> {
   const read = await readSearch(files(withMzml))
   return {
     id: 'example',
@@ -42,7 +42,7 @@ async function open(withMzml: boolean): Promise<OpenResult> {
     design: resolveDesign(read.tables.files.map((f, i) => input(basename(f), { condition: 'control', replicate: i + 1 }))),
     psmFdr: 0.01,
     proteinFdr: 1,
-    settings: { parameters: {}, fixedMods: [], database: 'OpenNuXL_1_input.fasta', rescore: false, contaminants: false, peptideFdr: 0.01, xlFdr: 0.01 },
+    settings: { parameters, fixedMods: [], database: 'OpenNuXL_1_input.fasta', rescore: false, contaminants: false, peptideFdr: 0.01, xlFdr: 0.01 },
     outcome: { ...read, seconds: 1 },
   }
 }
@@ -72,8 +72,8 @@ describe('the PSM view', () => {
     document.body.innerHTML = ''
   })
 
-  async function show(withMzml: boolean, sequence: string) {
-    const view = resultsViewFor(await open(withMzml))
+  async function show(withMzml: boolean, sequence: string, parameters: Record<string, unknown> = {}) {
+    const view = resultsViewFor(await open(withMzml, parameters))
     view.psm = { row: rowOf(view, sequence), origin: { kind: 'psms' } }
     const target = document.createElement('div')
     document.body.append(target)
@@ -150,6 +150,46 @@ describe('the PSM view', () => {
     expect(peptide.text('psm-crosslink')).toContain('Peptide, no cross-link.')
     expect(peptide.text('psm-q')).toBe('· q 0.2 at the peptide FDR of 1 %above the peptide FDR')
     expect(peptide.text('bottom-label')).toBe('Theoretical ions of the peptide')
+  })
+
+  it('gives the mass errors of all annotated ions shown, shifted and marker ions among them, in their colours and within the tolerance', async () => {
+    for (const sequence of ['DYHTVLGAR', 'AWQQLDNGSCAQIR']) {
+      const { target, text } = await show(true, sequence)
+      const dots = Array.from(target.querySelectorAll('[data-testid="error-dot"]'))
+      const kinds = new Set(dots.map((d) => d.getAttribute('data-type')))
+      expect(kinds.has('marker'), sequence).toBe(true)
+      expect(dots.some((d) => d.getAttribute('fill') === 'var(--mod)'), sequence).toBe(true)
+      expect(dots.some((d) => d.getAttribute('fill') === 'var(--ion-marker, #8b5cf6)'), sequence).toBe(true)
+      expect(dots.some((d) => d.getAttribute('fill') === 'var(--ion-b)' || d.getAttribute('fill') === 'var(--ion-y)'), sequence).toBe(true)
+      // the example was searched at 20 ppm (OpenNuXL's default)
+      for (const d of dots) expect(Math.abs(Number(d.getAttribute('data-error'))), `${sequence} ${d.getAttribute('data-ion')}`).toBeLessThanOrEqual(20)
+      expect(text('error-stats')).toMatch(/^Fragment mass error of the annotated ions · ?mean [+−-]?\d+\.\d ppm/)
+      expect(target.querySelector('[data-testid="spectrum"] desc')?.textContent).toMatch(/the mass error in ppm of each of the \d+ annotated ions shown is drawn under its peak/)
+      // the shifted ions toggled off: their dots go with them, the marker ions stay
+      const shiftedToggle = Array.from(target.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')).find((i) => i.closest('label')?.textContent?.trim() === 'shifted')
+      expect(shiftedToggle, 'the shifted toggle').toBeDefined()
+      shiftedToggle!.click()
+      flushSync()
+      const after = Array.from(target.querySelectorAll('[data-testid="error-dot"]'))
+      expect(after.some((d) => d.getAttribute('fill') === 'var(--mod)' && ['a', 'b', 'y'].includes(d.getAttribute('data-type') ?? ''))).toBe(false)
+      expect(after.some((d) => d.getAttribute('data-type') === 'marker')).toBe(true)
+      unmount(shown!)
+      shown = null
+      releaseResultsView()
+      document.body.innerHTML = ''
+    }
+  })
+
+  it('says how many annotated ions shown have no theoretical m/z (a preset this app does not know: the shifted and marker ions)', async () => {
+    const { target, text } = await show(true, 'DYHTVLGAR', { 'NuXL:presets': 'a preset of a newer OpenNuXL' })
+    const dots = Array.from(target.querySelectorAll('[data-testid="error-dot"]'))
+    expect(dots.length).toBeGreaterThan(0)
+    expect(dots.some((d) => d.getAttribute('data-type') === 'marker')).toBe(false)
+    const header = text('error-stats') ?? ''
+    const m = /· ?(\d+) of (\d+) without a theoretical m\/z/.exec(header)
+    expect(m, header).not.toBeNull()
+    expect(Number(m![2]) - Number(m![1])).toBe(dots.length)
+    expect(target.querySelector('[data-testid="spectrum"] desc')?.textContent).toContain(`the mass error in ppm of ${dots.length} of the ${m![2]} annotated ions shown (${m![1]} have no theoretical m/z) is drawn`)
   })
 
   it('collapses the mass errors under the spectrum, and keeps them collapsed for the next PSM', async () => {

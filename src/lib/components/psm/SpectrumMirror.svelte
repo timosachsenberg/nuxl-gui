@@ -21,8 +21,10 @@
   // being computed) is marked `data-no-export`.
   //
   // Below the lower half, on the same m/z axis (one x scale, the same margins, so each dot sits under its peak), the
-  // strip of the fragment mass errors: one dot per ion with a theoretical m/z, its error in the unit of the search's fragment
-  // tolerance (ppm, or Da), its area by its peak's intensity, the band the tolerance; the m/z labels come below it.
+  // strip of the fragment mass errors: one dot per annotated ion shown with a theoretical m/z (a/b/c, x/y/z, shifted,
+  // marker, precursor, immonium and internal ions, in their colours of the spectrum), its error in the unit of the
+  // search's fragment tolerance (ppm, or Da), its area by its peak's intensity, the band the tolerance; the m/z labels
+  // come below it.
   // It is part of the SVG, so "Export spectrum (SVG)" has it too.
   import { signedNumber } from '$lib/format/number'
   import { errorStats, errorTickDigits, fragmentError, ionLabel, COLORS, type Tolerance } from '$lib/psm/psm'
@@ -58,8 +60,11 @@
     note?: string | null
     title: string
     description: string
-    /** The fragment mass errors under the spectrum: the ions with their colours, and the search's fragment tolerance. */
-    errors?: { matches: ColoredMatch[]; tolerance: Tolerance } | null
+    /**
+     * The fragment mass errors under the spectrum: the ions with their colours, the search's fragment tolerance and
+     * `omitted`, the annotated ions shown that have no theoretical m/z (not in the strip).
+     */
+    errors?: { matches: ColoredMatch[]; tolerance: Tolerance; omitted?: number } | null
   } = $props()
 
   const uid = $props.id()
@@ -198,12 +203,19 @@
   /** Enough decimals that the ticks ±tolerance read as the tolerance (0.005 Da: three). */
   const tickDigits = $derived(errors ? errorTickDigits(errors.tolerance) : 1)
   const errorTick = (v: number) => signedNumber(v, tickDigits, { plus: false, trim: true })
+  const omitted = $derived(errors?.omitted ?? 0)
+  /** The annotated ions shown, with and without a theoretical m/z. */
+  const shownIons = $derived((errors?.matches.length ?? 0) + omitted)
+  const ions = (n: number) => (n === 1 ? '1 annotated ion' : `${n} annotated ions`)
   const errorHeader = $derived(
     !errors
       ? ''
       : errors.matches.length === 0
-        ? 'Fragment mass error · no unshifted ion annotated'
-        : `Fragment mass error of the unshifted ions · mean ${errorText(stats.mean)}${Number.isFinite(stats.sd) ? ` · SD ${errorText(stats.sd).replace(/^[+−-]/, '')}` : ''} · dot size = intensity`,
+        ? omitted === 0
+          ? 'Fragment mass error · no annotated ion shown'
+          : `Fragment mass error · ${omitted === 1 ? 'the annotated ion shown has' : `none of the ${omitted} annotated ions shown has`} a theoretical m/z`
+        : `Fragment mass error of the annotated ions · mean ${errorText(stats.mean)}${Number.isFinite(stats.sd) ? ` · SD ${errorText(stats.sd).replace(/^[+−-]/, '')}` : ''} · dot size = intensity` +
+          (omitted > 0 ? ` · ${omitted} of ${shownIons} without a theoretical m/z` : ''),
   )
   const toleranceText = $derived(errors ? `tolerance ±${errors.tolerance.value} ${unit}` : '')
   /**
@@ -220,8 +232,10 @@
     !errors
       ? ''
       : errors.matches.length === 0
-        ? ' Below it, no unshifted ion is annotated, so no mass error is shown.'
-        : ` Below it, the mass error in ${unit} of each of the ${errors.matches.length} unshifted annotated ions is shown under its peak, against the linear peptide's theoretical m/z, within the tolerance of ±${errors.tolerance.value} ${unit}.` +
+        ? omitted === 0
+          ? ' Below it, no annotated ion is shown, so no mass error is shown.'
+          : ` Below it, no mass error is shown: ${omitted === 1 ? 'the annotated ion shown has' : `none of the ${omitted} annotated ions shown has`} a theoretical m/z.`
+        : ` Below it, the mass error in ${unit} of ${omitted === 0 ? (errors.matches.length === 1 ? 'the annotated ion shown' : `each of the ${errors.matches.length} annotated ions shown`) : `${errors.matches.length} of the ${ions(shownIons)} shown (${omitted} ${omitted === 1 ? 'has' : 'have'} no theoretical m/z)`} is drawn under its peak, against its theoretical m/z as OpenNuXL computes it (shifted ions with the nucleotide fragment, marker ions as the fragment plus a proton), within the tolerance of ±${errors.tolerance.value} ${unit}, in the colours of the spectrum.` +
           ` The mean error is ${errorText(stats.mean)}${Number.isFinite(stats.sd) ? `, the standard deviation ${errorText(stats.sd).replace(/^[+−-]/, '')}` : ''}.`,
   )
 
@@ -365,6 +379,7 @@
             stroke-width="1.25"
             data-testid="error-dot"
             data-type={d.m.type}
+            data-ion={d.m.ion}
             data-error={d.error}
             data-mz={mz[d.m.peak]}
             ><title>{d.m.ion} · m/z {mz[d.m.peak].toFixed(4)} · {errorText(d.error)}</title></circle>
