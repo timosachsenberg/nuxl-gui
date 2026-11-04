@@ -133,6 +133,14 @@ before `IDFilter excludes <n> spectra.`) is part of the autotune.
 - peptides unique by sequence with modifications and adduct (`tables.peptides.adduct`, `tables.peptides.isXL`);
   a localized cross-link carries its adduct as a modification (`NuXL:U-H3O4P1` in OpenNuXL's sequence) at its site;
 - proteins from the hits' protein references, sequences from the FASTA; no protein FDR (NaN);
+- the PSM and Peptides tables show where a peptide is in its proteins (`positions.ts`): Sequence (the residues only),
+  Start and End (1-based, inclusive) and Protein site (the cross-linked residue there, "Cas7 K137": a PSM's localized
+  site, a peptide row's residue that carries the adduct; empty when not localized, the PSM's tooltip naming the
+  candidate residues). A cell shows the first occurrence, in the Proteins column's order, with "+n" for the others (all
+  in its tooltip); the CSV has every occurrence, joined by ";" in the order of its Proteins column ("Protein start",
+  "Protein end", "Protein site" with the accession). A position the protein's sequence does not confirm (no sequence,
+  or the peptide is not there: read.ts keeps what the search recorded) has a "?" ("12?"); none recorded: "–" (empty in
+  the CSV). The protein panel and the PSM view’s header ("· Cas7 K137") count from 1 as well;
 - the peaks of a PSM's spectrum come from the input mzML (by its index, else by scanning a file of at most 256 MB),
   read through `read_search_file` by byte range; arrays uncompressed, zlib or zstd (plain, byte-shuffled,
   dictionary-encoded, as OpenMS develop writes them), not MS-Numpress; when the file cannot be read (moved, an imported project), the

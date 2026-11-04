@@ -8,6 +8,7 @@
 
 import { parseAccession, parseDescription } from './display'
 import { baseName, type Level, type PeptideCounts, type ResultModel } from './model'
+import { firstOccurrence, occurrences, peptideSite, positionText, proteinSites, psmSite, siteSortKey, siteText } from './positions'
 import { proteinXlSites } from './protein'
 
 type Get<T> = (m: ResultModel, row: number, peptideCounts: PeptideCounts) => T
@@ -44,6 +45,33 @@ const accessions = (m: ResultModel, peptide: number) =>
  */
 const shown = (accession: string | undefined) => (accession === undefined ? '' : parseAccession(accession).id)
 
+/**
+ * The positions of peptide `k` in its proteins (`positions.ts`): the Start, End and Protein site columns of the PSM and
+ * Peptides tables. They sort by the first occurrence (the Proteins column's first protein; a protein site by its
+ * accession as shown, then its position); the CSV has every occurrence, joined by ";" in the order of the Proteins
+ * column's accessions ("12;3", "12?" as the search recorded it, empty without position; a site with its accession,
+ * "Cas7 K123"). `site` is the cross-linked residue in the peptide (0-based, -1 none).
+ */
+function positionColumns(peptideOf: (m: ResultModel, row: number) => number, siteOf: (m: ResultModel, row: number) => number): Record<string, ColumnDef> {
+  const all = (m: ResultModel, row: number, end: boolean) =>
+    occurrences(m, peptideOf(m, row))
+      .map((o) => positionText(end ? o.end : o.start, o.exact))
+      .join(';')
+  const sites = (m: ResultModel, row: number) => proteinSites(m, peptideOf(m, row), siteOf(m, row))
+  return {
+    proteinStart: label('Protein start', (m, row) => firstOccurrence(m, peptideOf(m, row))?.start ?? NaN, (m, row) => all(m, row, false)),
+    proteinEnd: label('Protein end', (m, row) => firstOccurrence(m, peptideOf(m, row))?.end ?? NaN, (m, row) => all(m, row, true)),
+    proteinSite: str(
+      'Protein site',
+      (m, row) => siteSortKey(m, sites(m, row)[0]),
+      (m, row) =>
+        sites(m, row)
+          .map((s) => (s ? `${m.tables.proteins.accession[s.protein]} ${siteText(s)}` : ''))
+          .join(';'),
+    ),
+  }
+}
+
 const proteins: Record<string, ColumnDef> = {
   accession: str('Accession', (m, p) => shown(m.tables.proteins.accession[p]), (m, p) => m.tables.proteins.accession[p]),
   // the gene name (GN=) of a UniProt-style description; '' without one
@@ -77,6 +105,8 @@ const peptides: Record<string, ColumnDef> = {
   // NuXL: the nucleic acid adduct ('' none) and whether the peptide is a cross-link
   adduct: str('Adduct', (m, k) => m.tables.peptides.adduct[k]),
   crossLink: num('Cross-link', (m, k) => m.tables.peptides.isXL[k]),
+  // where it is in its proteins; the cross-linked residue: where its sequence has the adduct
+  ...positionColumns((_, k) => k, peptideSite),
 }
 
 const psms: Record<string, ColumnDef> = {
@@ -115,6 +145,8 @@ const psms: Record<string, ColumnDef> = {
   ),
   siteScore: num('Site score', (m, i) => m.tables.psms.xl.siteScore[i]),
   fdrGroup: str('FDR group', (m, i) => m.tables.psms.xl.fdrGroup[i]),
+  // where its peptide is in the proteins, and the cross-linked residue there (localized cross-links only)
+  ...positionColumns((m, i) => m.tables.psms.peptide[i], psmSite),
 }
 
 /** The cross-linked residue of PSM `i` with its 1-based position ('K9'); '' when not localized. */

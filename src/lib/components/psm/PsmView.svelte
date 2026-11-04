@@ -44,6 +44,8 @@
   import { cn } from '$lib/utils'
   import { displaySettings } from '$lib/format/settings.svelte'
   import { tick, type Snippet } from 'svelte'
+  import PositionCell from '$lib/components/results/PositionCell.svelte'
+  import { siteCellTitle, siteView } from '$lib/components/results/position-cells'
   import FragmentLadder from './FragmentLadder.svelte'
   import IonTable from './IonTable.svelte'
   import PsmFeatures from './PsmFeatures.svelte'
@@ -276,10 +278,12 @@
   })
   const adductText = $derived(adduct === '' ? '' : Number.isFinite(adductMass) && adductMass !== 0 ? `${adduct} (${signedNumber(adductMass, 4)} Da)` : adduct)
   const siteText = $derived(localized ? `${sequence[site]}${site + 1}` : 'not localized')
+  /** The cross-linked residue in the peptide's first protein ("Cas7 K137", 1-based; all of them in its tooltip). */
+  const proteinSite = $derived(localized ? siteView(m, k, site) : null)
   /** What the header says of the cross-link, for screen readers and the tooltip. */
   const crossLinkText = $derived(
     isXL
-      ? `Cross-link with ${adductText || 'an adduct'}, ${localized ? `on ${siteText}${Number.isFinite(siteScore) ? ` (localization score ${siteScore.toFixed(2)})` : ''}` : 'not localized'}`
+      ? `Cross-link with ${adductText || 'an adduct'}, ${localized ? `on ${siteText}${Number.isFinite(siteScore) ? ` (localization score ${siteScore.toFixed(2)})` : ''}${proteinSite ? `, ${proteinSite.text}${proteinSite.inexact ? '?' : ''} in the protein` : ''}` : 'not localized'}`
       : adduct !== ''
         ? `Peptide with the adduct ${adductText}, not cross-linked`
         : 'Peptide, no cross-link',
@@ -561,6 +565,10 @@
             not localized
           {/if}
         </span>
+        {#if proteinSite}
+          <span data-testid="psm-protein-site" class="text-foreground" title={`In the protein (1-based): ${siteCellTitle(m, k, site, true)}`}
+            >· <PositionCell view={proteinSite} /></span>
+        {/if}
         {#if siteSequence !== ''}
           <span class="site-sequence font-mono" data-testid="site-sequence" title="The residues the cross-link may be on (NuXL's localization), the best one underlined"
             >{#each siteResidues(siteSequence, localized ? site : -1) as r, i (i)}<span class:candidate={r.candidate} class:site={r.site}>{r.residue}</span>{/each}</span>

@@ -30,6 +30,19 @@ export type ColumnSpec = {
 /** The tooltip of a spectrum column: how it sorts (the PSM table and the protein panel share it). */
 export const spectrumTitle = 'Sorts by scan number if every spectrum has one. Otherwise sorts by native ID in natural order, so scan 2 comes before scan 10.'
 
+/** The columns of where a peptide is in its proteins (PSM and Peptides tables, `positions.ts`), after the Proteins column. */
+function positionSpecs(site: string): ColumnSpec[] {
+  const first = 'In the first protein of the Proteins column; “+1” etc.: more proteins or occurrences (all in the tooltip and the CSV). “?”: as the search recorded it, the protein’s sequence is unknown or does not have the peptide there.'
+  return [
+    col('proteinStart', 'Start', 72, 'right', { optional: 'shown', title: `First residue of the peptide in the protein (1-based). ${first}` }),
+    col('proteinEnd', 'End', 72, 'right', { optional: 'shown', title: `Last residue of the peptide in the protein (1-based, inclusive). ${first}` }),
+    col('proteinSite', 'Protein site', 140, 'left', { optional: 'shown', title: `Cross-linked residue in the protein (${site}). ${first}` }),
+  ]
+}
+
+const sequenceSpec = (): ColumnSpec =>
+  col('sequence', 'Sequence', 150, 'left', { optional: 'shown', title: 'The residues of the peptide, without modifications or adduct' })
+
 /** The pseudo-id of the Columns menu that hides all per-sample columns. */
 export const samplesColumn = 'samples'
 
@@ -71,8 +84,10 @@ export function columnSpecs(m: ResultModel, level: Level): ColumnSpec[] {
   if (level === 'peptides') {
     return [
       col('peptide', 'Peptide', 'auto', 'left', { sortKey: 'sequence' }),
+      sequenceSpec(),
       col('adduct', 'Adduct', 150, 'left', { csv: ['adduct', 'crossLink'], optional: 'shown', title: 'Nucleic acid adduct of the precursor (OpenNuXL)' }),
       col('proteins', 'Proteins', 190, 'left'),
+      ...positionSpecs('where the peptide’s sequence has the adduct; empty when it is not localized'),
       col('psms', 'PSMs', 84, 'right', { title: 'PSMs that pass the Best PSM q-value filter' }),
       ...sampleSpecs(m),
       col('foundIn', 'Found in', 84, 'left', { title: foundTitle }),
@@ -82,9 +97,11 @@ export function columnSpecs(m: ResultModel, level: Level): ColumnSpec[] {
   }
   return [
     col('peptide', 'Peptide', 'auto', 'left', { sortKey: 'sequence' }),
+    sequenceSpec(),
     col('adduct', 'Adduct', 150, 'left', { csv: ['crossLink', 'adduct', 'adductMass', 'nucleotide'], optional: 'shown', title: 'Nucleic acid adduct of the precursor (OpenNuXL)' }),
     col('site', 'Site', 64, 'left', { csv: ['site', 'siteScore'], optional: 'shown', title: 'Cross-linked residue (OpenNuXL’s best localization)' }),
     col('proteins', 'Proteins', 150, 'left'),
+    ...positionSpecs('OpenNuXL’s best localization; “–” when it is not localized, the possible residues in the tooltip'),
     col('sample', 'Sample', 96, 'left'),
     col('scan', 'Spectrum', 90, 'left', { sortKey: 'nativeId', csv: ['nativeId'], title: spectrumTitle }),
     col('charge', 'z', 44, 'right', { title: 'Charge' }),
