@@ -2,10 +2,11 @@
 
 A desktop application for protein–nucleic acid cross-link searches with **OpenNuXL** of OpenMS, built as ProSE
 desktop (timosachsenberg/prose-gui) is built: Tauri 2 around the OS webview, the native `OpenNuXL` tool (with
-`PercolatorAdapter` for the score recalibration) as the only native code, a small Rust shim that starts it and reads
-nothing it need not, and the Svelte 5 / Tailwind / shadcn-svelte screens of ProSE desktop. The tool stays the
-source of truth; the app's only network connection is the new-version check (§7); files are read where they are and
-never copied.
+`PercolatorAdapter` for the score recalibration, and `FileConverter` for the spectra of `.raw` and `.d` inputs) as
+the only native code, with the .NET runtime that OpenMS' Thermo reader runs on, a small Rust shim that starts the
+tools and reads nothing it need not, and the Svelte 5 / Tailwind / shadcn-svelte screens of ProSE desktop. The tool
+stays the source of truth; the app's only network connection is the new-version check (§7); files are read where
+they are and never copied (the spectra of a `.raw` or `.d` input are converted to mzML in the search folder, §2).
 
 This repository started as a copy of prose-gui 0.1.4 (commit 5ed55d7); everything ProSE-specific is replaced.
 OpenNuXL's options and outputs are those of OpenMS `develop` (pinned in `native/OPENMS_COMMIT`).
@@ -15,30 +16,52 @@ OpenNuXL's options and outputs are those of OpenMS `develop` (pinned in `native/
 | | ProSE desktop | NuXL desktop |
 | --- | --- | --- |
 | Tool | `ProSE`, all inputs in one run, pooled FDR | `OpenNuXL`, **one run per input file**, run one after the other; FDR per file |
-| Inputs | `.mzML`, `.mzML.gz` | `.mzML` only (OpenNuXL reads mzML; `.raw` needs ThermoRawFileParser, not bundled) |
+| Inputs | `.mzML`, `.mzML.gz` | `.mzML` and Thermo `.raw` files, Bruker timsTOF `.d` folders, all read by OpenNuXL itself (OpenMS built with `WITH_THERMO_RAW` and `WITH_OPENTIMS`; the bundle has the .NET runtime for `.raw`, `native/README.md`) |
 | Outputs | QPX Parquet | idXML (all hits, and FDR-filtered cross-links and peptides) and TSV reports |
 | Rescoring | Percolator + PeptDeep | Percolator (built into OpenMS, through `PercolatorAdapter`); OpenNuXL skips it below 1000 PSMs |
 | Decoys | ProSE's | always OpenNuXL's own (prefix `DECOY_`): its FDR, filtered outputs and Percolator exist only with them, so a database's own decoys are left out of `database.fasta` (with a note) |
 | Settings | enzyme, tolerances, modifications, FDR, ... | the same plus the **NuXL preset** (cross-linking protocol: RNA-UV (U), DNA-UV, RNA-DEB, ...), the longest nucleotide adduct (`NuXL:length`), scoring (`fast`/`slow`), cross-link FDR |
 | Results | proteins, peptides, PSMs, QC, open-search panels | the same levels, each PSM marked **cross-link or peptide**, with its **adduct**, its **cross-linked residue** (localization) and NuXL's own fragment annotation; Proteins show the cross-linked sites |
-| PSM view | observed vs PeptDeep prediction | observed peaks (read from the input mzML when the file is there) with NuXL's annotation (shifted ions, marker ions); mirror against the theoretical b/y ions |
+| PSM view | observed vs PeptDeep prediction | observed peaks (read from the input mzML when the file is there; of a `.raw` or `.d`, from the mzML of its spectra the search wrote) with NuXL's annotation (shifted ions, marker ions); mirror against the theoretical b/y ions |
+
+The inputs in New search (`src/lib/search/files.ts`, `form.svelte.ts`): "Add files" opens a file dialog for mzML
+and `.raw` files, "Add .d folders" a folder dialog of its own (a file dialog cannot pick folders on Windows and
+Linux). Dropped on the window: mzML and `.raw` files, `.d` folders, and a `.d`'s `analysis.tdf`/`analysis.tdf_bin`
+(`.tsf`), which stand for their folder; the folder's other files dropped with them are left out quietly. A folder
+from the `.d` dialog that is not named `.d` gets a notice of its own (choose the `.d` folders, not the folder that
+holds them). The extensions are case-insensitive, and a trailing `/` or `\` is dropped (front end and shim). The
+shim (`args.rs`, `inspect_files` in `files.rs`) takes a `.d` only when it holds `analysis.tdf` and
+`analysis.tdf_bin`, or `analysis.tsf` and `analysis.tsf_bin`; a `.d` with the table but not its binary file is "not
+a complete Bruker timsTOF .d folder", one with neither "not a Bruker timsTOF .d folder"; a `.raw` folder (Waters), a
+`.d.zip` and a `.mzML.gz` are refused with what to do instead. `inspect_files` gives a `.raw` its file size, a `.d`
+the sum of its `analysis.*` files, and neither a spectrum count (nothing of them is read).
 
 ## 2. The search folder
 
 A search lives in `<app data>/searches/<id>/` (`<id>.partial/` while it runs), as in ProSE desktop:
 
 - `inputs.json`: the inputs in order, `[{ id, index, link, stem, name, path }]` (`args.rs` `InputRecord`); `link`
-  is `<n>__<name>` (a symbolic link to the user's file in the folder; on Windows the user's own path where
-  possible), `stem` is the link's name without `.mzML`.
+  is `<n>__<name>` (a symbolic link to the user's file or `.d` folder in the folder; on Windows the user's own path
+  where possible, else a hard link), `stem` is the link's name without `.mzML`, `.raw` or `.d` (inputs of one name
+  and different kinds clash, as two of one kind do). `path` is the user's path without trailing `/` or `\` (a `.d`
+  may come as `run.d/`). Windows cannot hard-link a folder: a `.d` keeps its own path (of a `.d` and a file whose
+  outputs would clash, the file is linked; of two `.d`, the later one), and a `.d` that would still need a link
+  (a name too long for the outputs, a clash with an earlier `.d`) is refused with what to rename.
 - `database.fasta` (the user's FASTA with the cRAP contaminants, `CON__` accessions, and without decoys of its own) or `database.json`
   (`{ "path": ... }`, the user's FASTA searched as it is).
-- `nuxl.log`: the tool's output of all runs (each run starts with a `$ <command line>` line).
+- `nuxl.log`: the tools' output of all runs, OpenNuXL's and FileConverter's (each run starts with a
+  `$ <command line>` line).
 - `nuxl/` with OpenNuXL's outputs of input `k`, all named after the input's stem `<stem>`:
   - `<stem>.idXML` (`-out`: every PSM, targets and decoys, before any FDR filter);
   - `<stem>.tsv` (`-out_tsv`: OpenNuXL's report, one row per spectrum's top hit);
   - what OpenNuXL derives from `-out`: `<stem>_<q>_peptides.idXML`, `<stem>_<q>_XLs.idXML`,
     `<stem>_proteins<q>_XLs.tsv`, and after Percolator the same with `_perc_` (`<stem>_perc_<q>_XLs.idXML`, ...)
     and `<stem>_perc.tsv`; `<q>` is the threshold with four decimals (`1.0000`, `0.0100`).
+  - of a `.raw` or `.d` input, `<stem>.spectra.mzML`: its spectra as indexed mzML, which the shim's FileConverter run
+    writes after the input's run (§3) for the PSM view (§5). FileConverter writes `<stem>.spectra.tmp.mzML`, which
+    the shim renames when it has ended successfully, and removes when it has not. A conversion that fails, or a
+    bundle without FileConverter, does not fail the search: `spectra` is `null` and a note says "The PSM view shows
+    the annotated peaks only: the spectra of <name> could not be converted (…)."
   - `<stem>.outputs.json`, written by the shim when the run of input `k` has ended successfully — the reader's
     only way to find the derived files (it never guesses their names):
 
@@ -51,6 +74,7 @@ A search lives in `<app data>/searches/<id>/` (`<id>.partial/` while it runs), a
       "proteins": "nuxl/<stem>_perc_proteins0.0100_XLs.tsv",
       "report": "nuxl/<stem>_perc.tsv",
       "percolator": true,
+      "spectra": "nuxl/<stem>.spectra.mzML",
       "notes": ["Too few PSMs for score recalibration. Skipped."],
       "seconds": 12.3,
       "fdr": { "peptide": 0.01, "xl": 0.01 }
@@ -65,12 +89,20 @@ A search lives in `<app data>/searches/<id>/` (`<id>.partial/` while it runs), a
     the run worth showing (the skipped Percolator; OpenNuXL warns of too few PSMs also with the rescoring off, and
     then the shim leaves that warning out), and the shim's note when the database's own decoys were left out. `fdr` are the search's cutoffs as the request gave them
     (`settings.peptideFdr`, `settings.xlFdr`, fractions): OpenNuXL ran without filtering, so the results view filters
-    the peptide PSMs and the cross-link PSMs at these.
+    the peptide PSMs and the cross-link PSMs at these. `spectra` is the converted spectra of a `.raw` or `.d`
+    input, relative to the search folder; `null` (or absent, which the reader takes the same) for an mzML input,
+    which is read where it is, and for spectra that could not be converted. `seconds` is OpenNuXL's run alone,
+    without the conversion.
 - OpenNuXL also writes a debug table beside its `-in` in every run, `<-in>.ambiguous_masses.csv`
-  (`calculateNucleotideTags_`): through a link it is in the search folder; with the user's own path (Windows) it is
-  beside the user's mzML. The shim removes it after each run, unless a file of that name was there before the run
+  (`calculateNucleotideTags_`; of a `.d`, beside the folder, not in it): through a link it is in the search folder;
+  with the user's own path (Windows) it is beside the user's input. The shim removes it after each run, unless a file of that name was there before the run
   (OpenNuXL overwrites that one; the shim leaves it).
 - `search.json` and `proteins.fasta`: History's record and the identified proteins, as in ProSE desktop.
+
+A project (`.nuxl`, `project.rs`, `history.ts` `leftOut`) holds the folder but `database.fasta`, `database.json`,
+`nuxl.log` and the converted spectra (`nuxl/<stem>.spectra.mzML`, `.spectra.tmp.mzML`: about as large as the
+input, they would make most such projects too large for a zip without zip64). A search opened from a project shows
+the annotated peaks only.
 
 ## 3. The command line of one run
 
@@ -90,6 +122,8 @@ OpenNuXL -in <link or path> -database <database.fasta or the user's FASTA> -out 
   cross-link FDR, ≤ 0.1, left out when it is 1.0) is there so that OpenNuXL writes its protein report.
 - The allowlist (`args.rs` `PARAMETERS`) holds OpenNuXL's options by their full name (`precursor:mass_tolerance`,
   `NuXL:presets`, ...) with their types, as in ProSE desktop; nothing else of the front end becomes an option.
+- `-in` is the link or the user's path, without trailing separators; OpenNuXL reads `.mzML`, `.raw` and `.d`
+  through OpenMS' `FileHandler` (the pin includes OpenMS#10816), so the app converts nothing before the search.
 - `NuXL:decoys` is never passed (OpenNuXL's FDR needs its decoys), nor `-percolator_executable` (empty, it would turn
   the built-in Percolator off too). `precursor:isotopes` is an integer list.
 - `-in`, `-database`, `-out*`, `-threads`, `-report:*FDR*`, `-percolator_*`, `NuXL:decoys`, `output_folder`,
@@ -105,6 +139,36 @@ The request (`args.rs` `SearchRequest`, camelCase JSON from `src/lib/desktop.ts`
 
 `rescore` false gives `-percolator_backend none`. `peptideFdr` and `xlFdr` are fractions in (0, 1].
 
+After the run of a `.raw` or `.d` input has ended successfully, the shim converts its spectra with the
+`FileConverter` beside OpenNuXL (`args.rs` `conversion_args`), in the same working directory, with the same `-in`:
+
+```
+FileConverter -in <link or path> -out <search folder>/nuxl/<stem>.spectra.tmp.mzML -out_type mzML -threads <n>
+              -process_lowmemory -zstd_compression
+              -RawToMzML:reader inprocess   (.raw: Thermo's RawFileReader, as OpenNuXL reads it; FileConverter's
+                                             default on Windows is ThermoRawFileParser, which is not bundled)
+              -bruker:load_ms1 false        (.d: the MS2 spectra OpenNuXL searches; the MS1 frames are most of a run)
+```
+
+`-out` is the absolute path in the `.partial` folder. Never `-lossy_compression` (MS-Numpress, which the PSM view
+does not read). FileConverter reads with the readers and defaults OpenNuXL uses, so the native IDs match (Thermo
+`controllerType=0 controllerNumber=1 scan=N`, Bruker `frame=F scan=S precursor=P`). It runs as OpenNuXL does: its
+`$ <command line>` in `nuxl.log`, ended by cancel in the same way, its exit as in a failure of OpenNuXL ("FileConverter
+ended with exit code 6"), which here becomes the note of §2.
+
+The tools' environment (`tool.rs` `command_with`; OpenNuXL, FileConverter and the version probe, and the
+PercolatorAdapter OpenNuXL starts inherits it): always `OPENMS_DISABLE_UPDATE_CHECK=ON` and, unless the user set it,
+`OPENBLAS_NUM_THREADS=1`; on macOS without the `DYLD_*` search variables. When the bundle has its .NET runtime
+(`<tool dir>/../dotnet`): `DOTNET_ROOT` names it, `DOTNET_ROOT_X64`, `DOTNET_ROOT_ARM64` and `DOTNET_ROOT(x86)` are
+removed, and `DOTNET_ROLL_FORWARD=Major` (the Thermo bridge targets .NET 8, the bundle has 10),
+`DOTNET_CLI_TELEMETRY_OPTOUT=1` and `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` (no ICU) are set. When it has the
+bridge's managed part (`<tool dir>/../share/OpenMS/openms_thermo_bridge/managed`), `OPENMS_THERMO_MANAGED_DIR` names
+it. A tool without these folders (a build tree's, `NUXL_TOOL`) keeps the user's environment for them.
+
+The packaged app's `--smoke-test` reports, beside the tool's version, whether PercolatorAdapter and FileConverter are
+beside it (`percolatorAdapter`, `fileConverter`) and whether the bundle has `dotnet/` and the managed part
+(`dotnet`, `thermoBridge`); it fails without PercolatorAdapter or FileConverter.
+
 ## 4. Progress
 
 OpenNuXL prints OpenMS' progress lines on stdout: `Progress of '<label>':`, then `\r  12.34 %` updates, then
@@ -114,6 +178,10 @@ into its stages (reading and preprocessing the spectra, the database and decoys,
 its percentages —, post-processing, FDR, Percolator). Labels as in ProSE desktop: "Searching <name> (2 of 3)...",
 "Scoring <name> (2 of 3)... this step 45 %" (the percentage of the scoring step, which OpenNuXL reports; the bar and the percentage beside it are the whole search's), "Percolator: <name> (2 of 3)...". The autotune's own load of the spectra (the filter `spectrumclusterfilter`,
 before `IDFilter excludes <n> spectra.`) is part of the autotune.
+The reading of the spectra is the reader's load, whichever it is: `loading mzML`, `Loading Thermo RAW file` (`.raw`),
+`Loading DDA-PASEF data` (`.d` of TDF data) or `Loading frames` (TSF). The conversion of a `.raw` or `.d` input's
+spectra after its run (§3) ends that run's part of the bar: "Preparing the spectra of <name> for the PSM view (2 of
+3)...".
 
 ## 5. Results (the front end)
 
@@ -145,12 +213,24 @@ before `IDFilter excludes <n> spectra.`) is part of the autotune.
 - the peaks of a PSM's spectrum come from the input mzML (by its index, else by scanning a file of at most 256 MB),
   read through `read_search_file` by byte range; arrays uncompressed, zlib or zstd (plain, byte-shuffled,
   dictionary-encoded, as OpenMS develop writes them), not MS-Numpress; when the file cannot be read (moved, an imported project), the
-  PSM view shows the peaks NuXL annotated (`fragment_annotation`) only.
+  PSM view shows the peaks NuXL annotated (`fragment_annotation`) only, and says why;
+- of a `.raw` or `.d` input, the peaks come from the mzML of its spectra that its `outputs.json` names (`spectra`, a
+  file of the search folder read by its relative name), matched by native ID; the input itself (a vendor file, a
+  folder) is never read, and its link or path is not probed (`read_search_file` serves inputs only when they are
+  `.mzML`). Without `spectra` (the conversion failed) the PSM view says that the spectra of <name> were not
+  converted; with `spectra` but no file (an imported project) that a project leaves them out; both show the
+  annotated peaks only;
+- the Spectrum column, the PSM view and the names of saved SVGs call a spectrum by the number of its native ID's
+  `scan=` term (Thermo: `scan=4711` is 4711), `spectrum=` or `index=`; of a Bruker ID by its `precursor=` (the
+  `scan=` of `frame=12 scan=301 precursor=4711` is a mobility scan that other precursors share), and one without a
+  precursor by its scan ("frame 12, scan 301").
 
 ## 6. Left out (for now)
 
-`.raw` input; PeptDeep; open search; pooled FDR over files; OpenNuXL's `optimize`, `RTpredict` and
-`pcrecalibration` filters; custom presets files.
+PeptDeep; open search; pooled FDR over files; OpenNuXL's `optimize`, `RTpredict` and `pcrecalibration` filters;
+custom presets files. Inputs: `.mzML.gz` and zipped `.d` folders (`.d.zip`: unpack them first), `.d` folders without
+timsTOF data (Agilent, Waters), Waters `.raw` folders and mzPeak (which OpenNuXL reads, but the app does not take);
+the converted spectra of `.raw` and `.d` inputs in projects.
 
 ## 7. The new-version check
 
