@@ -46,3 +46,38 @@ describe('displaySettings', () => {
     expect(settings.modMode).toBe('proforma')
   })
 })
+
+describe('updateSettings', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const loadUpdate = async () => {
+    vi.resetModules()
+    return (await import('./settings.svelte')).updateSettings
+  }
+
+  it('checks at start by default, and keeps "off" in localStorage "nuxl.updateCheck"', async () => {
+    const data = stubStorage()
+    const settings = await loadUpdate()
+    expect(settings.checkAtStart).toBe(true)
+    settings.checkAtStart = false
+    expect(data.get('nuxl.updateCheck')).toBe('off')
+    expect((await loadUpdate()).checkAtStart).toBe(false)
+    ;(await loadUpdate()).checkAtStart = true
+    expect(data.get('nuxl.updateCheck')).toBe('on')
+    expect((await loadUpdate()).checkAtStart).toBe(true)
+  })
+
+  it('is on without storage', async () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('blocked')
+      },
+      setItem: () => {
+        throw new Error('blocked')
+      },
+    })
+    const settings = await loadUpdate()
+    expect(settings.checkAtStart).toBe(true)
+    settings.checkAtStart = false
+    expect(settings.checkAtStart).toBe(false)
+  })
+})

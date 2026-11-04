@@ -5,10 +5,11 @@
 // Commands (src-tauri/src/lib.rs): tool_info, start_search, cancel_search, read_search_file,
 // inspect_files, cpu_count, example_files, save_text, save_search_file, history_list, history_save_record,
 // history_save_proteins, history_rename, history_delete, history_files, history_import, open_project_file,
-// save_project_file, answer_close. Events: search://progress, search://done, search://failed,
+// save_project_file, answer_close, update_check_at_start, open_release_page. Events: search://progress, search://done, search://failed,
 // project://progress, app://close-requested. The system's dialogs open one at a time (`oneDialog`). The window's
-// theme (`windowTheme`, `onWindowThemeChanged`, `setWindowTheme`).
+// theme (`windowTheme`, `onWindowThemeChanged`, `setWindowTheme`). The app's version (`appVersion`).
 
+import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -319,6 +320,29 @@ export async function setWindowTheme(theme: 'light' | 'dark' | null): Promise<vo
 /** The answer to a close request: close (the running search ends), or keep the window. */
 export function answerClose(close: boolean): Promise<void> {
   return invoke('answer_close', { close })
+}
+
+/** The app's version (tauri.conf.json's, e.g. "0.3.0"); outside Tauri it is unknown (rejects). */
+export function appVersion(): Promise<string> {
+  return getVersion()
+}
+
+/**
+ * Whether the automatic new-version check at start may run: false when `NUXL_NO_UPDATE_CHECK` is set (the e2e specs,
+ * computers that are not to contact GitHub; src-tauri/src/update.rs). Outside Tauri: false.
+ */
+export async function updateCheckAtStart(): Promise<boolean> {
+  if (!isDesktop()) return false
+  try {
+    return await invoke<boolean>('update_check_at_start')
+  } catch {
+    return false
+  }
+}
+
+/** Opens the page of release `version` (e.g. "0.4.0") in the system's browser; the shim builds the URL itself. */
+export function openReleasePage(version: string): Promise<void> {
+  return invoke('open_release_page', { version })
 }
 
 /** The text of a rejection of a command (a string, or an object with a message). */

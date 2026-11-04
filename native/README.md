@@ -122,7 +122,8 @@ configuration:
   OpenNuXL uses no ONNX model. `WITH_OPENTIMS=OFF`, `WITH_GUI=OFF`, `ENABLE_DOCS=OFF` and `PYOPENMS=OFF` leave
   out what the app does not use.
 - `ENABLE_UPDATE_CHECK=OFF`: an OpenMS tool otherwise contacts `openms-update.cs.uni-tuebingen.de` once a day
-  (and waits up to 5 s for it when offline), and the app makes no network contact. The app also runs OpenNuXL
+  (and waits up to 5 s for it when offline), and the tools make no network contact (the app's only one is its own
+  new-version check, docs/design.md §7). The app also runs OpenNuXL
   with `OPENMS_DISABLE_UPDATE_CHECK=ON` (`src-tauri/src/tool.rs`), for a tool from `NUXL_TOOL` or the PATH, and
   the PercolatorAdapter it starts inherits it.
 - `PATH` is rebuilt without linuxbrew (its binutils are older than the toolchain's).

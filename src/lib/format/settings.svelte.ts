@@ -1,4 +1,4 @@
-// Display settings that persist across sessions.
+// Settings that persist across sessions (the webview's localStorage): display settings, and the new-version check.
 
 export type ModMode = 'marked' | 'proforma'
 
@@ -47,6 +47,34 @@ export const displaySettings = {
     massErrors = value
     try {
       localStorage.setItem(massErrorsKey, value ? 'shown' : 'hidden')
+    } catch {
+      // the setting then lasts until the page closes
+    }
+  },
+}
+
+const updateCheckKey = 'nuxl.updateCheck'
+
+function readUpdateCheck(): boolean {
+  try {
+    return localStorage.getItem(updateCheckKey) !== 'off'
+  } catch {
+    return true
+  }
+}
+
+let checkAtStart = $state<boolean>(readUpdateCheck())
+
+/** The new-version check (src/lib/update): kept on this computer, as the display settings. */
+export const updateSettings = {
+  /** "Check for new versions at start": on by default; off, the app asks GitHub only when the user says so. */
+  get checkAtStart(): boolean {
+    return checkAtStart
+  },
+  set checkAtStart(value: boolean) {
+    checkAtStart = value
+    try {
+      localStorage.setItem(updateCheckKey, value ? 'on' : 'off')
     } catch {
       // the setting then lasts until the page closes
     }

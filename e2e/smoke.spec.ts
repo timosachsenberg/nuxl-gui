@@ -35,4 +35,24 @@ describe('smoke', () => {
     expect(String(await $('[data-testid="search-plan"]').getProperty('textContent'))).not.toContain('cannot be run')
     await expect($('button*=Start search')).toBeEnabled()
   })
+
+  it('the About menu shows the app version and Check for updates; no check ran at start', async () => {
+    const { result: version, failure } = await invoke('plugin:app|version')
+    expect(failure).toBeUndefined()
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/)
+    // NUXL_NO_UPDATE_CHECK (e2e/app.sh): the shim turns the check at start off
+    expect((await invoke('update_check_at_start')).result).toBe(false)
+    expect((await invoke('open_release_page', { version: 'https://example.org' })).failure).toContain('is not a version')
+    await $('[data-testid="about-menu"]').click()
+    const panel = await $('[data-testid="about-panel"]')
+    await panel.waitForDisplayed({ timeout: 10000 })
+    await expect($('[data-testid="about-version"]')).toHaveText(`NuXL ${version}`)
+    await expect($('[data-testid="update-check"]')).toBeDisplayed()
+    await expect($('[data-testid="update-check"]')).toHaveText('Check for updates')
+    await expect($('[data-testid="update-at-start"]')).toHaveAttribute('aria-checked', 'true')
+    // not clicked: the specs ask nothing of GitHub; no banner either
+    expect(await $('[data-testid="update-banner"]').isExisting()).toBe(false)
+    await browser.keys('Escape')
+    await panel.waitForDisplayed({ reverse: true })
+  })
 })

@@ -29,6 +29,10 @@
 //!   cancelled) and `history_import(body)` (the entries of a project in a fresh folder -> the new id). At
 //!   startup the partial folders of interrupted searches are swept (`history::sweep`).
 //!
+//! - the new-version check (`update`): `update_check_at_start()` -> whether the automatic check at start may run
+//!   (false with `NUXL_NO_UPDATE_CHECK` set), `open_release_page(version)` (the release's page on GitHub in the
+//!   system's browser; the URL is built here from a version of digits and dots, never taken from the page)
+//!
 //! - closing the window while a search runs: the window stays and `app://close-requested` asks the page,
 //!   which answers with `answer_close(close)` ([`close_requested`])
 //!
@@ -44,6 +48,7 @@ pub mod progress;
 pub mod project;
 pub mod run;
 pub mod tool;
+pub mod update;
 #[cfg(unix)]
 pub mod watchdog;
 
@@ -487,6 +492,21 @@ async fn save_project_file(
     .map_err(|e| e.to_string())?
 }
 
+/// Whether the automatic new-version check at start may run (`update::check_at_start`); the user's setting is the
+/// page's.
+#[tauri::command]
+fn update_check_at_start() -> bool {
+    update::check_at_start()
+}
+
+/// The page of the release of `version` (`major.minor.patch`) on GitHub, in the system's browser.
+#[tauri::command]
+fn open_release_page(version: String) -> Result<(), String> {
+    let url = update::release_page_url(&version)
+        .ok_or_else(|| format!("{version:?} is not a version of NuXL."))?;
+    update::open_url(&url)
+}
+
 /// The page's answer to `app://close-requested`: close (the running search ends, as with any close), or
 /// keep the window.
 #[tauri::command]
@@ -620,7 +640,9 @@ pub fn run() {
             history_import,
             open_project_file,
             save_project_file,
-            answer_close
+            answer_close,
+            update_check_at_start,
+            open_release_page
         ])
         .build(tauri::generate_context!())
         .expect("error while building the NuXL desktop app");
