@@ -108,6 +108,11 @@
 	--plot-halo: #ffffff;
 	/* the bars of all PSMs together (peptides blue, cross-links orange: these are neither) */
 	--plot-neutral: #71717a;
+	/* the PSM view's tools: measurements (orange, as the viewers', amber enough to stay apart from the y ions), the
+	   one selected, and the user's own peak labels (not a colour of the ions) */
+	--plot-measure: #e07800;
+	--plot-measure-selected: #d4380d;
+	--plot-user-label: #c0267a;
 	/* a placeholder ("–") in the tables; the rows of a protein's PSMs */
 	--faint: #d4d4d8;
 	--subtle: #fafafa;
@@ -172,6 +177,9 @@
 	--plot-zero: #71717a;
 	--plot-halo: #09090b;
 	--plot-neutral: #a1a1aa;
+	--plot-measure: #ff9a1f;
+	--plot-measure-selected: #ff6a4d;
+	--plot-user-label: #f472b6;
 	--faint: #52525b;
 	--subtle: oklch(0.185 0.006 285.885);
 }

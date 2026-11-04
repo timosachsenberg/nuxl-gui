@@ -171,13 +171,14 @@ export function textWidth(text: string, fontSize: number): number {
  * Places labels above their peaks, most important first: each at its own height `y` (a baseline),
  * or one line higher, up to `tries` positions, wherever it overlaps no label placed before (boxes
  * `width` wide around `x`, `lineHeight` high); never above `top`. A label without room is left out
- * (null): its peak keeps its colour and its tooltip.
+ * (null): its peak keeps its colour and its tooltip. `taken`: boxes already on the plot (the user's own labels),
+ * which the labels keep clear of too.
  */
 export function placeLabels(
   items: { x: number; y: number; width: number }[],
-  { lineHeight, tries, top }: { lineHeight: number; tries: number; top: number },
+  { lineHeight, tries, top, taken = [] }: { lineHeight: number; tries: number; top: number; taken?: { x0: number; x1: number; y0: number; y1: number }[] },
 ): (number | null)[] {
-  const placed: { x0: number; x1: number; y0: number; y1: number }[] = []
+  const placed: { x0: number; x1: number; y0: number; y1: number }[] = [...taken]
   return items.map(({ x, y, width }) => {
     const x0 = x - width / 2
     const x1 = x + width / 2

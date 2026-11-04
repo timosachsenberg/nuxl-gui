@@ -162,3 +162,11 @@ describe('texts of parts on narrow views', () => {
     expect(wrapParts(['a', 'a very long part of the text', 'b'], 40)).toEqual(['a ·', 'a very long part of the text ·', 'b'])
   })
 })
+
+describe('placeLabels around boxes already taken', () => {
+  it('keeps the labels clear of them (the user\'s own labels)', () => {
+    const taken = [{ x0: 40, x1: 160, y0: 85, y1: 102 }]
+    expect(placeLabels([{ x: 100, y: 100, width: 20 }], { lineHeight: 15, tries: 4, top: 0, taken })).toEqual([85])
+    expect(placeLabels([{ x: 300, y: 100, width: 20 }], { lineHeight: 15, tries: 4, top: 0, taken })).toEqual([100])
+  })
+})

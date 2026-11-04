@@ -10,6 +10,14 @@
   // annotated ions shown, each against its m/z as OpenNuXL computes it (psm/nuxl-theoretical.ts; a strip that can be
   // collapsed, remembered in displaySettings.massErrors) and the PSM's features
   // (NuXL's scores). The logic is in nuxl-psm.ts.
+  // The toolbar's "Measure" and "Label" (one at a time) are the tools of pyopenms-viewer and openms-viewer on the
+  // observed peaks (SpectrumMirror, psm/measure.ts): Δm/z between two peaks, with what it may be (a residue of the
+  // search, a nucleotide or fragment adduct of its, for a cross-link a residue it may be on with a fragment adduct), and
+  // texts of one's own; kept per spectrum for the session, as the viewers keep them (view.psmMarks: the PSMs of one
+  // spectrum, its ranks and candidates, share them; those shown on NuXL's annotated peaks, which differ from PSM to PSM,
+  // are kept per PSM), cleared with "Clear Δ" and "Clear labels". M and L switch the tools (as openms-viewer's Ctrl+M
+  // and Ctrl+L), unless what has the focus takes the keys. Esc first cancels what is half done (a measurement, a label
+  // being written) or the selection, then leaves the tool, then closes the view; Delete removes what is selected.
   import { signedNumber } from '$lib/format/number'
   import { errorText } from '$lib/format/error'
   import { Button, buttonVariants } from '$lib/components/ui/button'
@@ -30,6 +38,9 @@
   import { NUXL_PARAMETERS } from '$lib/settings/nuxl'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import XIcon from '@lucide/svelte/icons/x'
+  import RulerIcon from '@lucide/svelte/icons/ruler'
+  import TagIcon from '@lucide/svelte/icons/tag'
+  import { deltaCandidates, NO_MARKS, type PsmMarks, type SpectrumTool } from '$lib/psm/measure'
   import { cn } from '$lib/utils'
   import { displaySettings } from '$lib/format/settings.svelte'
   import { tick, type Snippet } from 'svelte'
@@ -322,6 +333,56 @@
   }
 
   let mirror = $state<SpectrumMirror | null>(null)
+
+  // the tools: one at a time; what they made, per spectrum (the view keeps it for the session)
+  let tool = $state<SpectrumTool>(null)
+  /** A measurement is half made, or a label being written (the mirror's, while there is one). */
+  let toolPending = $state(false)
+  // (another PSM: the mirror goes while its peaks are read, and with it what was half made)
+  $effect.pre(() => {
+    void row
+    toolPending = false
+  })
+  /** Whose marks these are: the spectrum's (its file and native ID), or the PSM's on NuXL's annotated peaks. */
+  const marksKey = $derived(peaks && !peaks.observed ? `psm ${row}` : `${ps.file[row]} ${ps.nativeId[row]}`)
+  const marks = $derived(view.psmMarks[marksKey] ?? NO_MARKS)
+  function setMarks(next: PsmMarks) {
+    view.psmMarks[marksKey] = next
+  }
+  const stringsOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+  /** The residues the cross-link may be on: its site, else the candidates of NuXL's localization. */
+  const crossLinked = $derived(
+    !isXL ? [] : localized ? [sequence[site]] : siteResidues(siteSequence, -1).flatMap((r) => (r.candidate ? [r.residue] : [])),
+  )
+  /**
+   * What a Δm/z may be: the residues (with the search's modifications), its nucleotides and fragment adducts, the
+   * cross-linked residues with a fragment adduct; at 1+, and 2+ while 2+ fragments are shown.
+   */
+  const measure = $derived({
+    tolerance,
+    candidates: deltaCandidates(
+      stringsOf(parameters['modifications:fixed'] ?? defaults['modifications:fixed']),
+      stringsOf(parameters['modifications:variable'] ?? defaults['modifications:variable']),
+      searchChemistry(parameters, view.result.outcome.nuxl?.preset),
+      crossLinked,
+    ),
+    charges: options.charges.includes(2) ? [1, 2] : [1],
+  })
+  function setTool(next: SpectrumTool) {
+    tool = tool === next ? null : next
+  }
+  const pending = $derived(toolPending && mirror !== null)
+  const toolHint = $derived(
+    tool === 'measure'
+      ? pending
+        ? 'Click the second peak · Esc cancels'
+        : 'Click two peaks for their Δm/z'
+      : tool === 'label'
+        ? pending
+          ? 'Enter keeps the label · Esc cancels'
+          : 'Click a peak to label it'
+        : '',
+  )
   function exportSvg() {
     const svg = mirror?.svgElement()
     if (!svg) return
@@ -370,16 +431,30 @@
     if (event.key === 'Escape') {
       if (event.target instanceof Element && event.target.closest('input[type="search"], input[type="text"], textarea, [role="dialog"], [role="menu"]')) return
       event.preventDefault()
-      onClose()
+      // what is half done (or selected) first, then the tool, then the view
+      if (mirror?.cancel()) return
+      if (tool) tool = null
+      else onClose()
+    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+      if (ownsKeys(event.target)) return
+      if (mirror?.deleteSelection()) event.preventDefault()
     } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
       if (ownsKeys(event.target)) return
       event.preventDefault()
       void step(event.key === 'ArrowLeft' ? -1 : 1)
+    } else if (event.key === 'm' || event.key === 'M' || event.key === 'l' || event.key === 'L') {
+      if (ownsKeys(event.target) || !peaks) return
+      event.preventDefault()
+      setTool(event.key.toLowerCase() === 'm' ? 'measure' : 'label')
     }
   }
 
   const toggle =
     'inline-flex h-[26px] min-w-[30px] cursor-pointer items-center justify-center rounded-md border bg-background px-2 text-xs text-muted-foreground select-none hover:text-foreground peer-checked:border-primary peer-checked:bg-primary peer-checked:text-primary-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring/50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50'
+  /** The tools' buttons: the toggles' look (pressed: the primary colour), with an icon. */
+  const tool_ =
+    'inline-flex h-[26px] cursor-pointer items-center justify-center gap-1 rounded-md border bg-background px-2 text-xs text-muted-foreground select-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-muted-foreground'
+  const toolOn = 'border-primary bg-primary text-primary-foreground hover:text-primary-foreground'
   const crumb = 'rounded-sm hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none'
 </script>
 
@@ -547,6 +622,41 @@
           onchange={(e) => (displaySettings.massErrors = e.currentTarget.checked)} />
         <span class={toggle}>mass errors</span>
       </label>
+      <!-- the tools on the observed peaks (one at a time) and what clears what they made -->
+      <div class="flex items-center gap-1" role="group" aria-label="Tools" data-testid="spectrum-tools">
+        <button
+          type="button"
+          class={cn(tool_, tool === 'measure' && toolOn)}
+          aria-pressed={tool === 'measure'}
+          title="Measure (M): click two peaks for their Δm/z (and what it may be); a click on a measurement selects it, Delete removes it"
+          disabled={!peaks}
+          data-testid="tool-measure"
+          onclick={() => setTool('measure')}><RulerIcon class="size-3.5" aria-hidden="true" />Measure</button>
+        <button
+          type="button"
+          class={tool_}
+          disabled={marks.measurements.length === 0}
+          title="Remove the measurements of this spectrum"
+          data-testid="clear-measurements"
+          onclick={() => setMarks({ ...marks, measurements: [] })}>Clear Δ</button>
+        <button
+          type="button"
+          class={cn(tool_, tool === 'label' && toolOn)}
+          aria-pressed={tool === 'label'}
+          title="Label (L): click a peak to give it a label of your own; a click on a label selects it, Delete removes it, a double click edits it"
+          disabled={!peaks}
+          data-testid="tool-label"
+          onclick={() => setTool('label')}><TagIcon class="size-3.5" aria-hidden="true" />Label</button>
+        <button
+          type="button"
+          class={tool_}
+          disabled={marks.labels.length === 0}
+          title="Remove your labels of this spectrum"
+          data-testid="clear-labels"
+          onclick={() => setMarks({ ...marks, labels: [] })}>Clear labels</button>
+        <!-- (as wide as the longest hint while a tool is on: the hint changes between the clicks, the toolbar does not) -->
+        {#if toolHint}<span class="ml-1 inline-block w-56 truncate text-muted-foreground" title={toolHint} data-testid="tool-hint">{toolHint}</span>{/if}
+      </div>
       <!-- the neutral losses and the other ions: one menu, its button says what is on -->
       <div class="flex items-center gap-1">
         <span id="{uid}-more" class="mr-1 text-muted-foreground">Also</span>
@@ -602,7 +712,12 @@
         {bottom}
         title={spectrumTitle}
         description={spectrumDescription}
-        errors={displaySettings.massErrors ? { ...errors, tolerance } : null} />
+        errors={displaySettings.massErrors ? { ...errors, tolerance } : null}
+        {tool}
+        {marks}
+        onmarks={setMarks}
+        {measure}
+        bind:pending={toolPending} />
       {#if annotationError}
         <p class="pb-1 text-xs text-muted-foreground" role="status">The theoretical spectrum could not be computed: {annotationError}</p>
       {/if}
