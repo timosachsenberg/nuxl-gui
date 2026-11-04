@@ -2,8 +2,8 @@
   // The results of the open search: key figures, the tabs of the three levels (each with its cross-links: the
   // tab counts them, its filter row shows cross-links, peptides or all, the Peptides and PSMs tables start with
   // the cross-links), one filter row and a virtualized table per level, the column settings and "Export CSV · n
-  // rows". A protein opens its panel beside the Proteins table; a PSM opens the PSM view beside the PSM table,
-  // which then narrows to the list that "Previous" and "Next" go through. The Overview (the files and OpenNuXL's
+  // rows". A protein opens its panel beside the Proteins table; a PSM opens the PSM view, with the PSM table
+  // under its spectrum: the arrow keys in the table go through the PSMs, as do "Previous" and "Next". The Overview (the files and OpenNuXL's
   // notes), Samples and QC tabs show the search as a whole; Proteins stays the first view.
   import SaveNotice from '$lib/components/history/SaveNotice.svelte'
   import ColumnsMenu from '$lib/components/results/ColumnsMenu.svelte'
@@ -102,12 +102,17 @@
   }
 
   /**
-   * A PSM of the PSM table opens the PSM view beside it. The focus stays in the table (now the list
-   * beside the view), so that the keyboard goes on through the PSMs; the view announces the PSM, and
-   * Tab leads into it.
+   * A PSM of the PSM table opens the PSM view, the table under its spectrum. The focus stays in the table, so
+   * that the arrow keys go on through the PSMs (each one shown as the keys reach it); the view announces the PSM.
    */
-  function openPsm(psm: number) {
-    view?.openPsm(psm)
+  async function openPsm(psm: number) {
+    if (!view) return
+    const opening = view.psm === null
+    view.openPsm(psm)
+    if (!opening) return
+    // the table now stands under the spectrum (a new one): the keys go on in it, at the PSM
+    await tick()
+    psmsTable?.focusRow(psm)
   }
 
   /** A PSM of the protein panel: the PSM view beside the PSMs of its peptide (or protein). */
@@ -152,12 +157,22 @@
 
 <svelte:window {onkeydown} />
 
+<!-- The PSM table under the PSM view's spectrum: the arrow keys, Page Up/Down, Home and End go through the PSMs, the
+     view showing each; the filter row stays with it. -->
+{#snippet psmList()}
+  {#if view}
+    {#key view.psms}
+      <FilterBar {view} level={view.psms} />
+    {/key}
+    <PsmsTable bind:this={psmsTable} {view} level={view.psms} onOpen={openPsm} follow />
+  {/if}
+{/snippet}
+
 {#if view && figures}
   {@const level = view.level}
   <section data-testid="view-results" class="absolute inset-0 flex">
-    <div
-      class="flex min-w-0 flex-col gap-3 py-4 {psmOpen ? 'flex-none border-r pr-3 pl-4' : 'flex-1 px-5'}"
-      style:width={psmOpen ? 'clamp(320px, 27vw, 400px)' : undefined}>
+    <!-- (with the PSM view open, the PSM table stands in it, under the spectrum: `psmList`) -->
+    <div class="flex min-w-0 flex-1 flex-col gap-3 px-5 py-4" class:hidden={psmOpen}>
       <h1 class="sr-only">Results</h1>
       <SaveNotice id={view.result.id} />
       {#if view.result.outcome.warnings.length > 0}
@@ -206,8 +221,8 @@
               <ProteinsTable bind:this={proteinsTable} {view} {level} onOpen={openProtein} />
             {:else if level.level === 'peptides'}
               <PeptidesTable {view} {level} />
-            {:else}
-              <PsmsTable bind:this={psmsTable} {view} {level} onOpen={openPsm} compact={psmOpen} />
+            {:else if !psmOpen}
+              <PsmsTable bind:this={psmsTable} {view} {level} onOpen={openPsm} />
             {/if}
             {#if level.level !== 'proteins' && !psmOpen}
               <p class="-mt-1 text-xs text-muted-foreground" data-testid="mod-legend">
@@ -241,7 +256,7 @@
       {/key}
     {/if}
     {#if psmOpen}
-      <PsmView bind:this={psmView} {view} onClose={closePsm} onBreadcrumb={breadcrumb} />
+      <PsmView bind:this={psmView} {view} onClose={closePsm} onBreadcrumb={breadcrumb} list={psmList} />
     {/if}
   </section>
 {:else}

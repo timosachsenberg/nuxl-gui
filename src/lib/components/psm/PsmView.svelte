@@ -1,11 +1,14 @@
 <script lang="ts">
-  // The PSM view (mockup 3), beside the PSM table: breadcrumb, Prev/Next and "Export spectrum (SVG)"; the peptide with
+  // The PSM view (mockup 3), over the PSM table (`list`, right under the spectrum and its mass errors, so that the arrow
+  // keys in the table go through the PSMs while the spectrum stays in sight): breadcrumb, Prev/Next and "Export spectrum
+  // (SVG)"; the peptide with
   // its fragment ladder; whether the PSM is a cross-link, its adduct and cross-linked residue, its FDR group and q-value
   // at that group's FDR; the spectrum with NuXL's own annotation (the hit's fragment_annotation: shifted ions, marker
   // ions, precursor, immonium and internal ions) on the observed peaks read from the input mzML, or, when they cannot be
   // read, on the peaks NuXL annotated; mirrored against the theoretical b/y spectrum of the linear peptide
   // (psm/annotate.ts), with ion, charge, shift and loss toggles; the ion table, the fragment mass errors of the
-  // unshifted ions and the PSM's features (NuXL's scores). The logic is in nuxl-psm.ts.
+  // unshifted ions (a strip that can be collapsed, remembered in displaySettings.massErrors) and the PSM's features
+  // (NuXL's scores). The logic is in nuxl-psm.ts.
   import { signedNumber } from '$lib/format/number'
   import { errorText } from '$lib/format/error'
   import { Button, buttonVariants } from '$lib/components/ui/button'
@@ -26,7 +29,8 @@
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
   import XIcon from '@lucide/svelte/icons/x'
   import { cn } from '$lib/utils'
-  import { tick } from 'svelte'
+  import { displaySettings } from '$lib/format/settings.svelte'
+  import { tick, type Snippet } from 'svelte'
   import FragmentLadder from './FragmentLadder.svelte'
   import IonTable from './IonTable.svelte'
   import PsmFeatures from './PsmFeatures.svelte'
@@ -56,12 +60,15 @@
     view,
     onClose,
     onBreadcrumb,
+    list,
   }: {
     view: ResultsView
     /** Back to where the PSM came from (Esc, ✕). */
     onClose: () => void
     /** A breadcrumb: the Proteins or Peptides tab, the protein's panel, the PSM table of the peptide. */
     onBreadcrumb: (to: { tab: 'proteins' | 'peptides' } | { protein: number } | { peptide: number }) => void
+    /** The PSM table (with its filter row), shown right under the spectrum and its mass errors. */
+    list?: Snippet
   } = $props()
 
   const uid = $props.id()
@@ -513,6 +520,16 @@
           onchange={(e) => (local.shifted = e.currentTarget.checked)} />
         <span class={toggle}>shifted</span>
       </label>
+      <label class="relative" title="The fragment mass errors under the spectrum">
+        <input
+          type="checkbox"
+          class="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0"
+          aria-label="Mass errors"
+          data-testid="mass-errors-toggle"
+          checked={displaySettings.massErrors}
+          onchange={(e) => (displaySettings.massErrors = e.currentTarget.checked)} />
+        <span class={toggle}>mass errors</span>
+      </label>
       <!-- the neutral losses and the other ions: one menu, its button says what is on -->
       <div class="flex items-center gap-1">
         <span id="{uid}-more" class="mr-1 text-muted-foreground">Also</span>
@@ -568,7 +585,7 @@
         {bottom}
         title={spectrumTitle}
         description={spectrumDescription}
-        errors={{ matches: errors, tolerance }} />
+        errors={displaySettings.massErrors ? { matches: errors, tolerance } : null} />
       {#if annotationError}
         <p class="pb-1 text-xs text-muted-foreground" role="status">The theoretical spectrum could not be computed: {annotationError}</p>
       {/if}
@@ -592,7 +609,15 @@
     {/if}
   </div>
 
-  <!-- below the spectrum (and its mass errors): the ion table and the features side by side; what does not fit wraps -->
+  {#if list}
+    <!-- the PSM table right under the spectrum: its height fixed, so that the spectrum stays in sight while the keys go
+         through the PSMs -->
+    <div class="mt-3 flex h-[clamp(220px,36vh,420px)] flex-none flex-col gap-2" data-testid="psm-list">
+      {@render list()}
+    </div>
+  {/if}
+
+  <!-- below the spectrum (and its mass errors, and the table): the ion table and the features side by side; what does not fit wraps -->
   <div class="mt-3 flex flex-wrap items-start gap-3">
     <div class="max-w-full min-w-0 flex-none rounded-lg border bg-background px-2 py-2">
       {#if table}

@@ -130,6 +130,23 @@ describe('the example search', () => {
     expect(strip.dots).toBeGreaterThan(5)
     expect(strip.unaligned).toEqual([])
     expect(await $$('[data-testid="peaks-missing-note"]')).toHaveLength(0)
+
+    // the PSM table stands under the spectrum, with the keyboard focus: the arrow keys go through the PSMs
+    await expect($('[data-testid="psm-list"] [role="grid"][aria-label="PSMs"]')).toBeDisplayed()
+    expect(await browser.execute(() => document.activeElement?.closest('[data-testid="psm-list"]') !== null)).toBe(true)
+    const first = await textOf('[data-testid="psm-header"]')
+    await browser.keys('ArrowDown')
+    await browser.waitUntil(async () => (await textOf('[data-testid="psm-header"]')) !== first, {
+      timeout: 5000,
+      timeoutMsg: 'ArrowDown in the PSM table did not show the next PSM',
+    })
+    await browser.keys('ArrowUp')
+    await browser.waitUntil(async () => (await textOf('[data-testid="psm-header"]')) === first, { timeout: 5000, timeoutMsg: 'ArrowUp did not go back' })
+    // the mass errors collapse (and come back)
+    await jsClick(await $('[data-testid="mass-errors-toggle"]'))
+    await browser.waitUntil(async () => (await $$('[data-testid="error-dot"]')).length === 0, { timeout: 5000, timeoutMsg: 'the mass errors stayed' })
+    await jsClick(await $('[data-testid="mass-errors-toggle"]'))
+    await browser.waitUntil(async () => (await $$('[data-testid="error-dot"]')).length > 0, { timeout: 5000, timeoutMsg: 'the mass errors did not come back' })
     await browser.keys('Escape')
 
     // the proteins with their cross-linked sites: the first protein's panel lists them
