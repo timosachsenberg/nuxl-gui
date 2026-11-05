@@ -2,7 +2,8 @@
   // The header's Export menu of the open result.
   import { buttonVariants } from '$lib/components/ui/button'
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
-  import { saveProjectFile } from '$lib/history/history.svelte'
+  import { showFolderTitle } from '$lib/history/folder'
+  import { revealSearch, saveProjectFile } from '$lib/history/history.svelte'
   import { exportCsv, exportDesign, exportIdXML, idXMLFiles } from '$lib/results/exports'
   import type { ResultsView } from '$lib/results/view.svelte'
   import { cn } from '$lib/utils'
@@ -96,5 +97,8 @@
         title="Every PSM of OpenNuXL's run of this file, targets and decoys, before the FDR filter"
         onSelect={() => idXML(f.input)}>{f.label}</DropdownMenu.Item>
     {/each}
+    <DropdownMenu.Separator />
+    <DropdownMenu.Item title={showFolderTitle()} onSelect={() => guard(() => revealSearch(view.result.id))}
+      >Show search folder</DropdownMenu.Item>
   </DropdownMenu.Content>
 </DropdownMenu.Root>
