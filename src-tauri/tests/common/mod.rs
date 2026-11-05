@@ -70,17 +70,14 @@ pub fn fake_nuxl_exe() -> PathBuf {
 /// What [`fake_tools`] puts into its folder beside the fake OpenNuXL.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FakeBundle {
-    /// `bin/FileConverter`, the fake's stand-in for OpenMS' FileConverter.
-    pub converter: bool,
     /// `dotnet/` (a .NET runtime's folder, empty) and `share/OpenMS/openms_thermo_bridge/managed/` (the Thermo
     /// bridge's managed part, empty): the bundle's parts that the tools' environment names.
     pub runtime: bool,
 }
 
 /// A folder `dir` laid out as the bundle (`resources/nuxl`): `bin/OpenNuXL` (the fake tool: a link to
-/// `tests/fake-nuxl.sh`, or a copy of the fake executable) and what `bundle` asks for beside it (FileConverter: a
-/// link of that name to the same script, or a copy of the executable of that name; the fake is the one or the
-/// other by the name it is started under). Returns the path of the fake OpenNuXL.
+/// `tests/fake-nuxl.sh`, or a copy of the fake executable) and what `bundle` asks for beside it. Returns the path of
+/// the fake OpenNuXL.
 pub fn fake_tools(dir: &Path, bundle: FakeBundle) -> PathBuf {
     let bin = dir.join("bin");
     fs::create_dir_all(&bin).unwrap();
@@ -98,9 +95,6 @@ pub fn fake_tools(dir: &Path, bundle: FakeBundle) -> PathBuf {
         target
     };
     let tool = place("OpenNuXL");
-    if bundle.converter {
-        place("FileConverter");
-    }
     if bundle.runtime {
         fs::create_dir_all(dir.join("dotnet/host/fxr")).unwrap();
         fs::create_dir_all(dir.join("share/OpenMS/openms_thermo_bridge/managed")).unwrap();

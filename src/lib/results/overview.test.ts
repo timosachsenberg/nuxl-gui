@@ -76,6 +76,8 @@ describe('percolatorStatus', () => {
     expect(engineNote('Percolator failed: out of memory')?.short).toBe('Percolator failed')
     const converted = 'The PSM view shows the annotated peaks only: the spectra of run.raw could not be converted (FileConverter ended with exit code 6).'
     expect(engineNote(converted)).toEqual({ short: 'Spectra not converted: the PSM view shows the annotated peaks only', full: converted })
+    const kept = 'The PSM view shows the annotated peaks only: the spectra of run.raw could not be kept (the spectra of 1__run.raw cannot be read again).'
+    expect(engineNote(kept)).toEqual({ short: 'Spectra not kept: the PSM view shows the annotated peaks only', full: kept })
     expect(engineNote('Too few PSMs for score recalibration. Skipped.')?.short).toBe('Too few PSMs (Percolator needs 1000)')
     // an unknown one: its first sentence, at most 80 characters
     expect(engineNote('Something new happened. More text follows here.')?.short).toBe('Something new happened')

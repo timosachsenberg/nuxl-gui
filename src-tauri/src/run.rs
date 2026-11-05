@@ -11,16 +11,16 @@
 //! - `database.fasta`, the user's FASTA with the contaminants and without its own decoys, when the shim writes
 //!   one, else `database.json`, the path of the user's FASTA ([`crate::args::plan_database`]);
 //! - `nuxl.log`, the tool's output of all runs, each after the line `$ <command line>`;
-//! - `nuxl/<stem>.spectra.mzML` of each `.raw` or `.d` input: its spectra as mzML, which FileConverter writes after
-//!   the input's run for the PSM view ([`crate::args::conversion_args`]);
+//! - `nuxl/<stem>.mz.parquet` of each input: the QPX mz view of the MS2 spectra of its PSMs (their peaks filtered),
+//!   which OpenNuXL writes with `-out_qpx` into `nuxl/runs/` for the PSM view and the shim moves here when the run has
+//!   ended ([`take_mz_view`], [`crate::args::mz_view_output`]);
 //! - `nuxl/<stem>.outputs.json` of each input whose run ended successfully ([`InputOutputs`]).
 //!
 //! The inputs are searched one after the other, one run of OpenNuXL each, by one supervising thread: a run
 //! starts when the one before it has ended successfully. A run that fails fails the search (with OpenNuXL's
-//! message, the stage and the input); cancel ends the current run and starts no further one. After the run of a
-//! `.raw` or `.d` input FileConverter converts its spectra, as a run of its own (cancel ends it as it ends
-//! OpenNuXL); a conversion that fails (or a bundle without FileConverter) does not fail the search: the input's
-//! `outputs.json` has `spectra` null and a note says that the PSM view shows the annotated peaks only.
+//! message, the stage and the input); cancel ends the current run and starts no further one. A run whose mz view
+//! OpenNuXL could not write (its `-out_qpx:` warning) does not fail the search: the input's `outputs.json` has `mz`
+//! null and a note says that the PSM view shows the annotated peaks only.
 //!
 //! The folder holds `.lock`, locked exclusively (`history::lock_partial`) for as long as the search
 //! lives, so that the startup sweep of any app instance can tell a live folder from a stale one.
@@ -43,10 +43,10 @@
 //!   handler), at the end of its current step; a later start of the app sweeps the folder.
 
 use crate::args::{
-    build_search_with, humanize, input_placements, input_records_with, outputs_record,
-    plan_database, spectra_output, spectra_partial, write_database, DatabasePlan, InputLinks,
-    InputRecord, Placement, SearchRequest, SearchRuns, DATABASE_FILE, DATABASE_RECORD, LOG_FILE,
-    OUTPUT_DIR,
+    build_search_with, humanize, input_placements, input_records_with, mz_view_output,
+    outputs_record, plan_database, write_database, DatabasePlan, InputLinks, InputRecord,
+    Placement, SearchRequest, SearchRuns, DATABASE_FILE, DATABASE_RECORD, LOG_FILE, MZ_VIEW_SUFFIX,
+    OUTPUT_DIR, QPX_RUNS_DIR,
 };
 use crate::history::{finish_partial, lock_partial, remove_partial, with_backoff};
 use crate::progress::ProgressTracker;
@@ -161,10 +161,9 @@ pub struct InputOutputs {
     pub report: Option<String>,
     /// Whether Percolator ran and its results were written: then the four above are its `_perc_` files.
     pub percolator: bool,
-    /// The spectra of a `.raw` or `.d` input as mzML (`nuxl/<stem>.spectra.mzML`, which the shim converted after
-    /// the run), which the PSM view reads in place of the input; null for an mzML input (read where it is) and for
-    /// spectra that could not be converted (a note says so).
-    pub spectra: Option<String>,
+    /// The QPX mz view of the spectra of the input's PSMs (`nuxl/<stem>.mz.parquet`, OpenNuXL's `-out_qpx`), from
+    /// which the PSM view reads the peaks; null when OpenNuXL could not write it (a note says so).
+    pub mz: Option<String>,
     /// OpenNuXL's warnings of the run worth showing ([`note_of`]), and the shim's notes of the search.
     pub notes: Vec<String>,
     /// The run's wall time.
@@ -263,8 +262,8 @@ mod tests {
         );
         // the spectra conversion's tool by its name
         assert_eq!(
-            how_tool_ended("FileConverter", &ExitStatus::from_raw(6 << 8)).as_deref(),
-            Some("FileConverter ended with exit code 6")
+            how_tool_ended("PercolatorAdapter", &ExitStatus::from_raw(6 << 8)).as_deref(),
+            Some("PercolatorAdapter ended with exit code 6")
         );
     }
 
@@ -422,6 +421,19 @@ mod digest_tests {
             assert_eq!(note_of(&format!("  {line} ")).as_deref(), Some(line));
         }
         for line in ["Running percolator.", "Score recalibration", "", "done."] {
+            assert_eq!(note_of(line), None, "{line}");
+        }
+        // the mz view's warnings (kept only when the view is missing), not its progress
+        assert_eq!(
+            note_of("Warning: -out_qpx: the spectra of a.raw cannot be read (no such file)")
+                .as_deref(),
+            Some("-out_qpx: the spectra of a.raw cannot be read (no such file)")
+        );
+        for line in [
+            "-out_qpx: reading spectra",
+            "-out_qpx: writing /s/nuxl/runs/1__a.mz.parquet",
+            "-out_qpx: wrote /s/nuxl/runs/1__a.mz.parquet (12 spectra, 900 of 1500 peaks)",
+        ] {
             assert_eq!(note_of(line), None, "{line}");
         }
     }
@@ -959,9 +971,14 @@ const NOTES: &[&str] = &[
     "autotune: too few non-cross-linked peptides found.",
 ];
 
-/// The note of a line of a run, if it is one ([`NOTES`]).
+/// The note of a line of a run, if it is one ([`NOTES`]), or a warning of the mz view (`-out_qpx: <why>`, not its
+/// progress; OpenMS may put `Warning: ` before it), which `supervise` keeps only when the view is missing.
 fn note_of(line: &str) -> Option<String> {
     let line = line.trim();
+    let qpx = line.strip_prefix("Warning: ").unwrap_or(line);
+    if qpx.starts_with(OUT_QPX) {
+        return (!is_mz_view_progress(qpx)).then(|| qpx.to_string());
+    }
     NOTES
         .iter()
         .any(|n| line.starts_with(n))
@@ -1156,10 +1173,7 @@ fn discard_partial(lock: Option<fs::File>, partial: &Path, kept: Option<&Path>) 
 struct Job {
     id: String,
     tool: PathBuf,
-    /// FileConverter beside the tool, if it is there.
-    converter: Option<PathBuf>,
-    /// The command line of each input's run, in order, and of the conversion of its spectra after it (a `.raw` or
-    /// `.d` input).
+    /// The command line of each input's run, in order.
     runs: SearchRuns,
     partial: PathBuf,
     done_dir: PathBuf,
@@ -1210,9 +1224,8 @@ impl Searches {
     }
 
     /// Checks the request, makes the search folder and starts the first run of the tool; returns the search
-    /// id. The events go to `sink`. `crap` is the contaminant FASTA, needed if the request asks for them. The
-    /// spectra of `.raw` and `.d` inputs are converted by the FileConverter beside the tool
-    /// ([`tool::file_converter`]); without one they are not (a note says so).
+    /// id. The events go to `sink`. `crap` is the contaminant FASTA, needed if the request asks for them. Each run
+    /// writes the QPX mz view of its PSMs' spectra for the PSM view ([`take_mz_view`]).
     pub fn start(
         self: &Arc<Self>,
         tool_path: &Path,
@@ -1276,7 +1289,6 @@ impl Searches {
         let job = Job {
             id: id.clone(),
             tool: tool_path.to_path_buf(),
-            converter: tool::file_converter(tool_path),
             runs,
             partial: partial.clone(),
             done_dir,
@@ -1557,7 +1569,7 @@ fn record_outputs(
     cutoffs: Cutoffs,
     notes: Vec<String>,
     seconds: f64,
-    spectra: Option<String>,
+    mz: Option<String>,
 ) -> Result<InputOutputs, String> {
     let folder = dir.join(OUTPUT_DIR);
     let names: Vec<String> = fs::read_dir(&folder)
@@ -1575,7 +1587,7 @@ fn record_outputs(
         proteins,
         report,
         percolator,
-        spectra,
+        mz,
         notes,
         seconds: (seconds * 10.0).round() / 10.0,
         fdr: cutoffs,
@@ -1615,11 +1627,11 @@ struct RunContext<'a> {
     log: Option<&'a Arc<Mutex<fs::File>>>,
 }
 
-/// One run of a tool: OpenNuXL's of an input, or FileConverter's after it.
+/// One run of a tool: OpenNuXL's of an input.
 struct ToolRun<'a> {
     /// The executable.
     exe: &'a Path,
-    /// Its name in messages ("OpenNuXL", "FileConverter").
+    /// Its name in messages ("OpenNuXL").
     name: &'a str,
     args: &'a [OsString],
     /// Whether its stdout is OpenNuXL's: its progress ([`ProgressTracker::feed`]) and its notes ([`note_of`]).
@@ -1830,81 +1842,74 @@ fn ambiguous_masses_csv(partial: &Path, record: &InputRecord, placement: Placeme
 /// The end of the name of OpenNuXL's debug table beside its input ([`ambiguous_masses_csv`]).
 const AMBIGUOUS_MASSES_SUFFIX: &str = ".ambiguous_masses.csv";
 
-/// How the conversion of an input's spectra ended ([`convert_spectra`]).
-enum Converted {
-    /// The spectra are in the search folder: their name relative to it (`nuxl/<stem>.spectra.mzML`).
-    Spectra(String),
-    /// They could not be converted: the note that says so, for the input's `outputs.json`.
-    Failed(String),
-    Cancelled,
+/// The beginning of OpenNuXL's lines about the QPX mz view (`-out_qpx`): its progress (`-out_qpx: reading spectra`,
+/// `-out_qpx: writing <path>`, `-out_qpx: wrote <path> (...)`) and its warnings when it could not write it.
+const OUT_QPX: &str = "-out_qpx:";
+
+/// Whether a line of a run is OpenNuXL's progress of the mz view (not a warning).
+fn is_mz_view_progress(line: &str) -> bool {
+    line.strip_prefix(OUT_QPX).is_some_and(|rest| {
+        let rest = rest.trim_start();
+        rest.starts_with("reading spectra")
+            || rest.starts_with("writing ")
+            || rest.starts_with("wrote ")
+    })
 }
 
-/// The note of an input whose spectra could not be converted, `why` in parentheses.
-fn conversion_note(record: &InputRecord, why: &str) -> String {
+/// The note of an input whose mz view OpenNuXL did not write: its warnings (`-out_qpx: <why>`) say why.
+fn mz_view_note(record: &InputRecord, warnings: &[String]) -> String {
+    let why: Vec<&str> = warnings
+        .iter()
+        .map(|w| w.strip_prefix(OUT_QPX).unwrap_or(w).trim())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let why = if why.is_empty() {
+        "OpenNuXL wrote no QPX mz view".to_string()
+    } else {
+        why.join("; ")
+    };
     format!(
-        "The PSM view shows the annotated peaks only: the spectra of {} could not be converted ({why}).",
+        "The PSM view shows the annotated peaks only: the spectra of {} could not be kept ({why}).",
         record.name
     )
 }
 
-/// Converts the spectra of input `k` (a `.raw` or `.d`) after its run: `converter` (FileConverter) with `args`
-/// writes them to the search folder's `nuxl/<stem>.spectra.tmp.mzML`, renamed to `nuxl/<stem>.spectra.mzML` when it
-/// has ended successfully. A failure is a note, not the search's failure; a cancel is the search's.
-fn convert_spectra(
-    context: &RunContext,
-    converter: Option<&Path>,
-    k: usize,
-    args: &[OsString],
-    tracker: &mut ProgressTracker,
-) -> Converted {
-    let record = &context.records[k];
-    let Some(converter) = converter else {
-        return Converted::Failed(conversion_note(
-            record,
-            &format!("there is no {} beside OpenNuXL", tool::FILE_CONVERTER),
-        ));
+/// Moves the QPX mz view of input `record`'s run, which OpenNuXL wrote into `nuxl/runs/` (named after its `-in`), to
+/// `nuxl/<stem>.mz.parquet` ([`mz_view_output`]); `runs/` is then removed when empty. Each run's view is moved before
+/// the next run starts, so the one mz view in `runs/` is this run's. None: there is none (OpenNuXL warned why), or
+/// it cannot be moved (it is removed then: an mz view of no record is no input's).
+pub fn take_mz_view(partial: &Path, record: &InputRecord) -> Option<String> {
+    let runs = partial.join(OUTPUT_DIR).join(QPX_RUNS_DIR);
+    let written: Vec<PathBuf> = fs::read_dir(&runs)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter(|e| e.file_name().to_string_lossy().ends_with(MZ_VIEW_SUFFIX))
+        .map(|e| e.path())
+        .collect();
+    let target = mz_view_output(&record.stem);
+    let moved = match written.as_slice() {
+        [one] => with_backoff(|| fs::rename(one, partial.join(&target))).is_ok(),
+        _ => false,
     };
-    let partial_file = context.partial.join(spectra_partial(&record.stem));
-    let target = spectra_output(&record.stem);
-    let run = ToolRun {
-        exe: converter,
-        name: "FileConverter",
-        args,
-        opennuxl: false,
-    };
-    let ended = run_tool(context, &run, tracker, |t| t.start_conversion(k), None);
-    let why = match ended {
-        RunEnd::Cancelled | RunEnd::NotStarted => return Converted::Cancelled,
-        RunEnd::Done(_) => {
-            match with_backoff(|| fs::rename(&partial_file, context.partial.join(&target))) {
-                Ok(()) => return Converted::Spectra(target),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    "FileConverter wrote no file".to_string()
-                }
-                Err(e) => format!("its file cannot be renamed: {e}"),
-            }
+    // (none, several, or one that could not be moved: nothing of this run stays in runs/)
+    if !moved {
+        for file in &written {
+            let _ = with_backoff(|| fs::remove_file(file));
         }
-        RunEnd::Failed(SearchEvent::Failed(f)) => match (f.ended, f.message.is_empty()) {
-            (Some(ended), true) => ended,
-            (Some(ended), false) => format!("{ended}: {}", f.message),
-            (None, _) => f.message,
-        },
-        RunEnd::Failed(_) => "FileConverter failed".to_string(),
-    };
-    // (what a failed conversion wrote is no spectra the PSM view could read)
-    let _ = with_backoff(|| fs::remove_file(&partial_file));
-    Converted::Failed(conversion_note(record, &why))
+    }
+    let _ = fs::remove_dir(&runs);
+    moved.then_some(target)
 }
 
-/// Runs the inputs one after the other, passes on their progress, converts the spectra of each `.raw` or `.d`
-/// input after its run, records each one's outputs, and settles the folder. Runs on the thread that starts the
+/// Runs the inputs one after the other, passes on their progress, moves each one's mz view into place, records each
+/// one's outputs, and settles the folder. Runs on the thread that starts the
 /// tools, which is what ties them to the app on Linux (`PR_SET_PDEATHSIG`).
 fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(), String>>) {
     let Job {
         id,
         tool: tool_path,
-        converter,
-        runs: SearchRuns { runs, conversions },
+        runs: SearchRuns { runs },
         partial,
         done_dir,
         records,
@@ -1956,27 +1961,19 @@ fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(),
                     notes.retain(|n| !n.starts_with(TOO_FEW_PSMS));
                 }
                 let seconds = started_run.elapsed().as_secs_f64();
-                // the spectra of a `.raw` or `.d` for the PSM view
-                let mut spectra = None;
-                if let Some(Some(conversion)) = conversions.get(k) {
-                    match convert_spectra(
-                        &context,
-                        converter.as_deref(),
-                        k,
-                        conversion,
-                        &mut tracker,
-                    ) {
-                        Converted::Spectra(name) => spectra = Some(name),
-                        Converted::Failed(note) => notes.push(note),
-                        Converted::Cancelled => {
-                            end = Some(RunEnd::Cancelled);
-                            break;
-                        }
-                    }
+                // the spectra of its PSMs for the PSM view: OpenNuXL's mz view, or a note of why there is none
+                let (warnings, mut notes): (Vec<String>, Vec<String>) =
+                    notes.into_iter().partition(|n| n.starts_with(OUT_QPX));
+                let mz = take_mz_view(&partial, record);
+                if mz.is_none() {
+                    // (the paths of the warnings as the folder will be: the partial one is gone then)
+                    let (from, to) = (partial.to_string_lossy(), done_dir.to_string_lossy());
+                    let warnings: Vec<String> =
+                        warnings.iter().map(|w| w.replace(&*from, &to)).collect();
+                    notes.push(mz_view_note(record, &warnings));
                 }
                 notes.extend(search_notes.iter().cloned());
-                if let Err(message) =
-                    record_outputs(&partial, record, cutoffs, notes, seconds, spectra)
+                if let Err(message) = record_outputs(&partial, record, cutoffs, notes, seconds, mz)
                 {
                     end = Some(RunEnd::Failed(failed(
                         &id,

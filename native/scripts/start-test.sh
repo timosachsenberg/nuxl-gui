@@ -6,11 +6,12 @@
 # 1. The package is opened: the .dmg is mounted and NuXL.app copied out of it; the installer is run
 #    silently (/S). Either goes into a folder named 'Größe ü/install', as under a user profile of a
 #    non-ASCII name. The bundled tools inside are checked (bundle_closure.py macho-verify / pe-verify).
-# 2. The bundled OpenNuXL, PercolatorAdapter and FileConverter print their version (the same), from an empty
-#    environment (Windows: only Windows' folders on PATH). With NUXL_RAW_EXAMPLE (a Thermo .raw file) and
-#    NUXL_D_EXAMPLE (a Bruker timsTOF .d folder) set, FileConverter converts each to mzML as the app runs it
-#    (src-tauri/src/run.rs, tool.rs): from that empty environment plus DOTNET_ROOT=<the package's dotnet> and the
-#    rest of what the app sets, so the .raw is read through the package's own .NET runtime and Thermo bridge.
+# 2. The bundled OpenNuXL and PercolatorAdapter print their version (the same), from an empty environment
+#    (Windows: only Windows' folders on PATH). With NUXL_RAW_EXAMPLE (a Thermo .raw file) and NUXL_D_EXAMPLE (a
+#    Bruker timsTOF .d folder) set, OpenNuXL searches each as the app runs it (src-tauri/src/args.rs, tool.rs), with
+#    -out_qpx: from that empty environment plus DOTNET_ROOT=<the package's dotnet> and the rest of what the app
+#    sets, so the .raw is read through the package's own .NET runtime and Thermo bridge (twice: for the search, and
+#    for the QPX mz view of the spectra of its PSMs, which has to be written).
 # 3. OpenNuXL searches the example (<example-dir>: OpenNuXL_1_input.mzML and OpenNuXL_1_input.fasta, copied into
 #    a folder with a space in its name) from the command line as the app runs it (src-tauri/src/args.rs), with
 #    the preset RNA-UV (U) and Percolator: it has to end with 0, write the outputs the app reads (its idXML of all
@@ -19,8 +20,8 @@
 #    The same in a folder named 'Größe ü', with the temporary folder there too, has to give the same number
 #    of PSMs.
 # 4. The app starts with --smoke-test (src-tauri/src/lib.rs): once its page has loaded it reports the page,
-#    tool_info, whether PercolatorAdapter and FileConverter are beside the tool and whether the bundle's .NET
-#    runtime and Thermo bridge are found, and exits; all four have to be. tool_info has to be the bundled
+#    tool_info, whether PercolatorAdapter is beside the tool and whether the bundle's .NET runtime and Thermo
+#    bridge are found, and exits; all three have to be. tool_info has to be the bundled
 #    OpenNuXL inside the package, with the version of step 2. On macOS the app is started a second time through a
 #    symbolic link to it, where Tauri names no resource folder and the app finds its bundle by the executable's
 #    real path.
@@ -61,7 +62,6 @@ case "$(uname -s)" in
     BUNDLE=$app/Contents/Resources/resources/nuxl
     TOOL=$BUNDLE/bin/OpenNuXL
     ADAPTER=$BUNDLE/bin/PercolatorAdapter
-    CONVERTER=$BUNDLE/bin/FileConverter
     HOSTFXR=libhostfxr.dylib
     "$PY" -I "$HERE/bundle_closure.py" macho-verify "$BUNDLE"
     native() { printf '%s\n' "$1"; }
@@ -82,7 +82,6 @@ case "$(uname -s)" in
     BUNDLE=$install/resources/nuxl
     TOOL=$BUNDLE/bin/OpenNuXL.exe
     ADAPTER=$BUNDLE/bin/PercolatorAdapter.exe
-    CONVERTER=$BUNDLE/bin/FileConverter.exe
     HOSTFXR=hostfxr.dll
     "$PY" -I "$HERE/bundle_closure.py" pe-verify "$(cygpath -m "$BUNDLE")"
     native() { cygpath -w "$1"; }
@@ -95,7 +94,7 @@ case "$(uname -s)" in
     ;;
   *) die "start-test.sh is for the macOS and Windows packages (Linux: smoke-appimage.sh)" ;;
 esac
-for exe in "$TOOL" "$ADAPTER" "$CONVERTER"; do
+for exe in "$TOOL" "$ADAPTER"; do
   [ -x "$exe" ] || [ -f "$exe" ] || die "the package has no bundled $(basename "$exe") at $exe"
 done
 # the .raw reader: the Thermo bridge's managed half and the .NET runtime that hosts it
@@ -124,48 +123,57 @@ cat "$BUNDLE/build.json"
 tool_version() { clean "$1" --help 2>&1 | sed -n 's/^ *Version: *\([^ ]*\).*/\1/p' | head -n 1; }
 version=$(tool_version "$TOOL")
 [ -n "$version" ] || die "the bundled OpenNuXL does not run: $(clean "$TOOL" --help 2>&1 | tail -n 5)"
-for exe in "$ADAPTER" "$CONVERTER"; do
+for exe in "$ADAPTER"; do
   other_version=$(tool_version "$exe")
   [ "$other_version" = "$version" ] \
     || die "the bundled $(basename "$exe") reports version '${other_version}', OpenNuXL $version: $(clean "$exe" --help 2>&1 | tail -n 5)"
 done
-echo "OpenNuXL, PercolatorAdapter and FileConverter version: $version; .NET runtime $dotnet_version"
+echo "OpenNuXL and PercolatorAdapter version: $version; .NET runtime $dotnet_version"
 
-# --- 2b. .raw and .d spectra to mzML (with NUXL_RAW_EXAMPLE, NUXL_D_EXAMPLE) ----------------------------
-# The environment the app gives the tools when its bundle has dotnet/ (tool.rs), and FileConverter's options as the
-# app runs it (run.rs; the in-process reader named, as Windows' default is ThermoRawFileParser).
+# --- 2b. .raw and .d searched as the app searches them (with NUXL_RAW_EXAMPLE, NUXL_D_EXAMPLE) -------------
+# The environment the app gives the tools when its bundle has dotnet/ (tool.rs), and OpenNuXL's command line as the
+# app runs it (args.rs, with the example's FASTA and settings): the search has to end with 0, and its -out_qpx has to
+# write the QPX mz view (OpenNuXL's warning "-out_qpx: ..." says why when it does not).
 as_app() {
   clean DOTNET_ROOT="$(native "$BUNDLE/dotnet")" DOTNET_ROLL_FORWARD=Major DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 OPENMS_THERMO_MANAGED_DIR="$(native "$MANAGED")" "$@"
 }
-convert() { # <kind: raw|d> <input> <the native ID's key: scan=|frame=>; sets converted
-  local kind=$1 input=$2 key=$3 out="$work/spectra-$1.mzML" extra=() started
-  [ "$kind" = d ] && extra=(-bruker:load_ms1 false)
-  [ "$kind" = raw ] && extra=(-RawToMzML:reader inprocess)
+vendor_search() { # <kind: raw|d> <input>; sets searched
+  local kind=$1 input=$2 dir="$work/vendor-$1" name base view rows started debris had_debris=0
+  mkdir -p "$dir"
+  name=$(basename "$input")
+  base=${name%.*}
+  # (OpenNuXL's debug table beside -in, which the app removes after each run: so does this, unless it was there)
+  debris="$input.ambiguous_masses.csv"
+  [ -e "$debris" ] && had_debris=1
   started=$(date +%s)
-  if ! as_app "$CONVERTER" -in "$(native "$input")" -out "$(native "$out")" -out_type mzML -threads 3 \
-    -process_lowmemory -zstd_compression "${extra[@]}" >"$work/convert-$kind.txt" 2>&1; then
-    tail -n 30 "$work/convert-$kind.txt"
-    die "FileConverter could not convert $(basename "$input")"
+  if ! as_app "$TOOL" -in "$(native "$input")" -database "$(native "$EXAMPLE/OpenNuXL_1_input.fasta")" \
+    -out "$(native "$dir/run.idXML")" -out_tsv "$(native "$dir/run.tsv")" -threads 3 \
+    -report:peptideFDR 0 -report:xlFDR 1.0 0.01 -report:xl_peptidelevel_FDR 1.0 1.0 \
+    -percolator_backend builtin -out_qpx "$(native "$dir")" \
+    -precursor:mass_tolerance 10 -NuXL:presets "RNA-UV (U)" >"$dir/out.txt" 2>&1; then
+    tail -n 30 "$dir/out.txt"
+    die "OpenNuXL could not search $name"
   fi
-  local spectra
-  spectra=$(grep -c '<spectrum ' "$out" || true)
-  [ "${spectra:-0}" -gt 0 ] || die "FileConverter wrote no spectra from $(basename "$input"): $(tail -n 20 "$work/convert-$kind.txt")"
-  grep -m1 '<spectrum ' "$out" | grep -q "id=\"[^\"]*$key" \
-    || die "the spectra of $(basename "$input") have no native IDs with $key: $(grep -m1 '<spectrum ' "$out")"
-  grep -q '<indexedmzML' "$out" || die "the mzML of $(basename "$input") is not indexed"
-  converted="$spectra spectra, $(( $(date +%s) - started )) s"
-  echo "FileConverter, $(basename "$input"): $converted"
+  [ "$had_debris" = 1 ] || rm -f "$debris"
+  [ -s "$dir/run.idXML" ] || die "the search of $name wrote no idXML: $(tail -n 20 "$dir/out.txt")"
+  view="$dir/runs/$base.mz.parquet"
+  [ -f "$view" ] || die "the search of $name wrote no mz view ($view): $(grep -- '-out_qpx:' "$dir/out.txt" | tail -n 5)"
+  [ "$(head -c 4 "$view")" = PAR1 ] || die "$view is not a Parquet file"
+  rows=$(sed -n 's/.*-out_qpx: wrote .* (\([0-9][0-9]*\) spectra.*/\1/p' "$dir/out.txt" | tail -n 1)
+  [ -n "$rows" ] || die "OpenNuXL said nothing of the mz view of $name: $(grep -- '-out_qpx:' "$dir/out.txt" | tail -n 5)"
+  searched="$(grep -c '<PeptideHit ' "$dir/run.idXML" || true) PSMs, $rows spectra in the mz view ($(wc -c < "$view" | tr -d ' ') bytes), $(( $(date +%s) - started )) s"
+  echo "OpenNuXL, $name: $searched"
 }
 raw_result="not run (no NUXL_RAW_EXAMPLE)"
 d_result="not run (no NUXL_D_EXAMPLE)"
 if [ -n "${NUXL_RAW_EXAMPLE:-}" ]; then
-  convert raw "$NUXL_RAW_EXAMPLE" 'scan='
-  raw_result="$converted (the package's .NET $dotnet_version)"
+  vendor_search raw "$NUXL_RAW_EXAMPLE"
+  raw_result="$searched (the package's .NET $dotnet_version)"
 fi
 if [ -n "${NUXL_D_EXAMPLE:-}" ]; then
-  convert d "${NUXL_D_EXAMPLE%/}" 'frame='
-  d_result=$converted
+  vendor_search d "${NUXL_D_EXAMPLE%/}"
+  d_result=$searched
 fi
 
 # --- 3. the example from the command line ----------------------------------------------------------
@@ -242,10 +250,7 @@ if norm(info["path"]) != norm(tool):
     sys.exit(f"the app runs {info['path']}, not its bundled {tool}")
 if data.get("percolatorAdapter") is not True:
     sys.exit("the app finds no PercolatorAdapter beside its OpenNuXL")
-# (FileConverter converts the spectra of a .raw or .d for the PSM view; the .NET runtime and the Thermo bridge's
-# managed part read a .raw: src-tauri/src/tool.rs)
-if data.get("fileConverter") is not True:
-    sys.exit("the app finds no FileConverter beside its OpenNuXL")
+# (the .NET runtime and the Thermo bridge's managed part read a .raw: src-tauri/src/tool.rs)
 if data.get("dotnet") is not True:
     sys.exit("the app finds no .NET runtime (dotnet/) beside its OpenNuXL's bin/")
 if data.get("thermoBridge") is not True:
@@ -257,7 +262,7 @@ if not data.get("page"):
 if linked == "1" and not str(data.get("tauriResources", "")).startswith("(none"):
     sys.exit(f"started through a link, Tauri still named a resource folder: {data.get('tauriResources')}")
 how = " (Tauri named none: the bundle's own Resources)" if linked == "1" else ""
-print(f"app: page {data['page']}, OpenNuXL {info['version']} with PercolatorAdapter, FileConverter, .NET and the Thermo bridge, inside the package{how}")
+print(f"app: page {data['page']}, OpenNuXL {info['version']} with PercolatorAdapter, .NET and the Thermo bridge, inside the package{how}")
 PY
 }
 smoke "$APP_BIN" installed 0
@@ -272,9 +277,9 @@ fi
 summary "### Start test ($platform)"
 summary ""
 summary "- package: \`$(basename "$PACKAGE")\`"
-summary "- bundled OpenNuXL, PercolatorAdapter and FileConverter: \`$version\`; .NET runtime \`$dotnet_version\`"
-summary "- FileConverter, Thermo .raw: $raw_result"
-summary "- FileConverter, Bruker .d: $d_result"
+summary "- bundled OpenNuXL and PercolatorAdapter: \`$version\`; .NET runtime \`$dotnet_version\`"
+summary "- OpenNuXL, Thermo .raw: $raw_result"
+summary "- OpenNuXL, Bruker .d: $d_result"
 summary "- command-line search of the example: $psms PSMs, ${seconds} s (${percolator:-no word of Percolator})"
 summary "- a folder named \`Größe ü\`: $wide_result"
 summary "- app \`--smoke-test\`: \`$report_installed\`"

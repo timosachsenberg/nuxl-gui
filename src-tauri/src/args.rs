@@ -3,8 +3,8 @@
 //!
 //! The front end sends a [`SearchRequest`] (camelCase JSON). [`build_runs`] checks it and turns it into the
 //! arguments of one run of the tool per input (`docs/design.md` §3), which `run.rs` starts one after the other;
-//! [`build_search_with`] also gives FileConverter's command line that converts the spectra of a `.raw` or `.d`
-//! input after its run ([`conversion_args`]). Nothing here runs a process or writes to the search folder; the
+//! [`build_search_with`] adds `-out_qpx` to each (the QPX mz view of the spectra of its PSMs, for the PSM view:
+//! [`mz_view_output`]). Nothing here runs a process or writes to the search folder; the
 //! folder is made by [`mod@crate::run`], which also creates the links and the database that these arguments name.
 //! The one thing read is the user's FASTA, for its decoys ([`plan_database`]), and of a `.d` which files it has
 //! ([`bruker_files`]).
@@ -17,7 +17,7 @@
 use crate::decoys::{DecoyStatistics, Marker};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -531,26 +531,29 @@ pub fn outputs_record(stem: &str) -> String {
     format!("{OUTPUT_DIR}/{stem}{OUTPUTS_SUFFIX}")
 }
 
-/// The end of the name of the spectra the shim converts a `.raw` or `.d` input into, after its run
-/// (`nuxl/<stem>.spectra.mzML`, [`spectra_output`]).
+/// The end of the name of the spectra that the shim of app versions before 0.9 converted a `.raw` or `.d` input
+/// into, after its run (`nuxl/<stem>.spectra.mzML`, FileConverter; [`is_converted_spectra`]). Searches saved by those
+/// versions still have them, and the PSM view still reads them.
 pub const SPECTRA_SUFFIX: &str = ".spectra.mzML";
 
-/// The spectra of the input of stem `stem` as mzML, which FileConverter writes after the input's run
-/// ([`conversion_args`]) for the PSM view, relative to the search folder: `nuxl/<stem>.spectra.mzML`. Only for a
-/// `.raw` or `.d` input (an mzML is read where it is); `outputs.json` records it (`spectra`).
-pub fn spectra_output(stem: &str) -> String {
-    format!("{OUTPUT_DIR}/{stem}{SPECTRA_SUFFIX}")
+/// The folder in which OpenNuXL writes the QPX mz view of a run with `-out_qpx <search folder>/nuxl`:
+/// `nuxl/runs/<basename of -in>.mz.parquet` ([`mz_view_output`]).
+pub const QPX_RUNS_DIR: &str = "runs";
+
+/// The end of the name of a QPX mz view.
+pub const MZ_VIEW_SUFFIX: &str = ".mz.parquet";
+
+/// The QPX mz view of the input of stem `stem` (the MS2 spectra of its PSMs, their peaks filtered; OpenNuXL's
+/// `-out_qpx`), relative to the search folder: `nuxl/<stem>.mz.parquet`. OpenNuXL writes it into `nuxl/runs/`,
+/// named after `-in` (the link, or on Windows the user's own path), and the shim moves it here when the run has
+/// ended successfully (`run.rs`); `outputs.json` records it (`mz`). The PSM view reads every input's peaks from it.
+pub fn mz_view_output(stem: &str) -> String {
+    format!("{OUTPUT_DIR}/{stem}{MZ_VIEW_SUFFIX}")
 }
 
-/// Where FileConverter writes the spectra ([`spectra_output`]) until it has ended successfully, when the shim
-/// renames the file: a conversion that failed or was cancelled leaves no file of the final name.
-pub fn spectra_partial(stem: &str) -> String {
-    format!("{OUTPUT_DIR}/{stem}.spectra.tmp.mzML")
-}
-
-/// Whether `name` (relative to a search folder, `/`-separated) is spectra the shim converted
-/// ([`spectra_output`], or its [`spectra_partial`]): large, and made again from the input; projects leave them
-/// out.
+/// Whether `name` (relative to a search folder, `/`-separated) is spectra the shim of an earlier version converted
+/// (`nuxl/<stem>.spectra.mzML`, or what a conversion left, `.spectra.tmp.mzML`): large, and made again from the
+/// input; projects leave them out.
 pub fn is_converted_spectra(name: &str) -> bool {
     name.strip_prefix(OUTPUT_DIR)
         .and_then(|rest| rest.strip_prefix('/'))
@@ -558,48 +561,6 @@ pub fn is_converted_spectra(name: &str) -> bool {
             !file.contains('/')
                 && (file.ends_with(SPECTRA_SUFFIX) || file.ends_with(".spectra.tmp.mzML"))
         })
-}
-
-/// FileConverter's command line that writes the spectra of a `.raw` or `.d` input as mzML for the PSM view
-/// (design §2): `-in` as OpenNuXL got it (the link, or the user's path), `-out` the search folder's
-/// [`spectra_partial`] of the input's stem `stem`, the search's threads. None for an mzML.
-///
-/// - `-process_lowmemory`: the spectra stream from the vendor file to the mzML (a `.raw` of gigabytes is not held
-///   in memory).
-/// - `-zstd_compression`: lossless and smaller than zlib. Never `-lossy_compression` (Numpress, which the PSM
-///   view cannot decode).
-/// - `.raw`: `-RawToMzML:reader inprocess`, the reader OpenNuXL uses (Thermo's RawFileReader through OpenMS'
-///   bridge; FileConverter's default on Windows is ThermoRawFileParser, which the app does not bundle). The
-///   readers have the same defaults (Thermo's centroids), so the spectra and their native IDs
-///   (`controllerType=0 controllerNumber=1 scan=N`) are those OpenNuXL searched.
-/// - `.d`: `-bruker:load_ms1 false`: OpenNuXL searches the MS2 spectra (one per precursor, `frame=F scan=S
-///   precursor=P`), and the MS1 frames of a timsTOF run are most of its data.
-pub fn conversion_args(
-    input: &OsStr,
-    kind: InputKind,
-    out_dir: &Path,
-    stem: &str,
-    threads: u32,
-) -> Option<Vec<OsString>> {
-    let reader: &[&str] = match kind {
-        InputKind::Mzml => return None,
-        InputKind::Raw => &["-RawToMzML:reader", "inprocess"],
-        InputKind::BrukerD => &["-bruker:load_ms1", "false"],
-    };
-    let mut args: Vec<OsString> = vec![
-        "-in".into(),
-        input.to_os_string(),
-        "-out".into(),
-        out_dir.join(spectra_partial(stem)).into_os_string(),
-        "-out_type".into(),
-        "mzML".into(),
-        "-threads".into(),
-        threads.to_string().into(),
-        "-process_lowmemory".into(),
-        "-zstd_compression".into(),
-    ];
-    args.extend(reader.iter().map(OsString::from));
-    Some(args)
 }
 
 /// The metadata of `path` if it is an absolute path that can be read.
@@ -893,12 +854,10 @@ pub fn build_runs_with(
 pub struct SearchRuns {
     /// OpenNuXL's, one per input ([`build_runs_with`]).
     pub runs: Vec<Vec<OsString>>,
-    /// FileConverter's after each input's run ([`conversion_args`]): None for an mzML.
-    pub conversions: Vec<Option<Vec<OsString>>>,
 }
 
-/// [`build_runs_with`], and the spectra conversion after each run of a `.raw` or `.d` input
-/// ([`conversion_args`], with the same `-in` and threads).
+/// [`build_runs_with`]: OpenNuXL's command line of each input, with `-out_qpx` (the mz view of the spectra of its
+/// PSMs, for the PSM view; [`mz_view_output`]).
 pub fn build_search_with(
     req: &SearchRequest,
     out_dir: &Path,
@@ -977,14 +936,6 @@ pub fn build_search_with(
             Placement::Symlink | Placement::HardLink => out_dir.join(&record.link).into_os_string(),
         })
         .collect();
-    let conversions = records
-        .iter()
-        .zip(&inputs)
-        .map(|(record, input)| {
-            let kind = input_kind(&record.name)?;
-            conversion_args(input, kind, out_dir, &record.stem, threads)
-        })
-        .collect();
     let runs = records
         .iter()
         .zip(inputs)
@@ -1014,11 +965,15 @@ pub fn build_search_with(
             }
             args.push("-percolator_backend".into());
             args.push(if settings.rescore { "builtin" } else { "none" }.into());
+            // the spectra of the PSMs for the PSM view: nuxl/runs/<basename of -in>.mz.parquet (QPX mz view, the
+            // peaks filtered as ProSE's: the 100 most intense per 100 Th and every annotated one)
+            args.push("-out_qpx".into());
+            args.push(out_dir.join(OUTPUT_DIR).into_os_string());
             args.extend(parameter_args_list.iter().cloned());
             args
         })
         .collect();
-    Ok(SearchRuns { runs, conversions })
+    Ok(SearchRuns { runs })
 }
 
 /// Why a Bruker `.d` input cannot be searched on Windows, where it would need a link into the search folder

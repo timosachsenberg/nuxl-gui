@@ -123,6 +123,12 @@ export class ProjectVersionError extends ProjectError {
   }
 }
 
+/**
+ * Where new searches are saved (src-tauri/src/location.rs): the folder, whether it is the app's own (in its data
+ * folder) and the app's own. History lists the searches of every folder the app has kept them in.
+ */
+export type SearchesLocation = { folder: string; isDefault: boolean; defaultFolder: string }
+
 /** The disk (desktop.ts implements it with the Rust commands; the tests with a folder in memory). */
 export interface HistoryBackend {
   list(): Promise<HistoryEntry[]>
@@ -134,7 +140,7 @@ export interface HistoryBackend {
   saveProteins(id: string, proteins: string): Promise<void>
   rename(id: string, name: string): Promise<void>
   delete(id: string): Promise<void>
-  /** The path of the search's folder (`<data>/searches/<id>`). */
+  /** The path of the search's folder (`<searches>/<id>`, in the searches folder that holds it). */
   folder(id: string): Promise<string>
   /** Show search folder: the system's file manager at the search's folder, the folder selected where it can. */
   reveal(id: string): Promise<void>
@@ -152,6 +158,15 @@ export interface HistoryBackend {
   openProject(): Promise<Uint8Array | null>
   /** Makes a search folder of the entries (see `frameEntries`): its new id. */
   importEntries(body: Uint8Array): Promise<string>
+  /** Where new searches and opened projects go (absent: a disk without folders to choose). */
+  location?(): Promise<SearchesLocation>
+  /**
+   * The system's folder dialog, then the folder chosen for new searches (the shim takes an empty folder, or one with
+   * NuXL's searches only; else it rejects with why): the new location, or null if the user cancelled.
+   */
+  chooseLocation?(): Promise<SearchesLocation | null>
+  /** New searches go to the app's own folder again. */
+  defaultLocation?(): Promise<SearchesLocation>
 }
 
 //------------------------------------------------------------------------------------------------
@@ -363,10 +378,12 @@ export const LEVEL = 1
 export const LEFT_OUT: ReadonlySet<string> = new Set(['database.fasta', 'database.json', 'nuxl.log'])
 
 /**
- * Whether a project leaves out the folder's file `name`: `LEFT_OUT`, and the spectra the shim converted from a .raw or
- * .d input for the PSM view (`nuxl/<stem>.spectra.mzML`, or its `.spectra.tmp.mzML` while it is written): about as
- * large as the input, they would make most projects too large (a zip without zip64, read whole when opened). An
- * opened project's PSM view then shows the annotated peaks, and says why. As `project.rs` (`is_converted_spectra`).
+ * Whether a project leaves out the folder's file `name`: `LEFT_OUT`, and the spectra the shim of an app before 0.9
+ * converted from a .raw or .d input for the PSM view (`nuxl/<stem>.spectra.mzML`, or its `.spectra.tmp.mzML` while it
+ * was written): about as large as the input, they would make most projects too large (a zip without zip64, read whole
+ * when opened); such a project's PSM view shows the annotated peaks, and says why. The QPX mz views of the runs
+ * (`nuxl/<stem>.mz.parquet`: the spectra of the PSMs, a few MB per thousand) go with the project, so that its PSM view
+ * shows the observed peaks. As `project.rs` (`is_converted_spectra`).
  */
 export function leftOut(name: string): boolean {
   return LEFT_OUT.has(name) || /^nuxl\/[^/]+\.spectra(\.tmp)?\.mzML$/.test(name)

@@ -15,7 +15,12 @@
 //!   diskfull  writes OpenMS' error of an output it cannot write, exit code 12
 //!   fewpsms   as a search, but "Too few PSMs for score recalibration. Skipped." (stderr, also with
 //!             -percolator_backend none, as OpenNuXL prints it), no _perc_ files
+//!   qpxfail   as a search, but with `-out_qpx` its warning that the spectra cannot be read again and no mz view
+//!             (also for any input with `FAKE_NUXL_QPX_FAIL=1`)
 //!   <other>   searches the input and exits 0
+//!
+//! With `-out_qpx <dir>` a search ends as OpenNuXL's: `-out_qpx: reading spectra`, the reader's progress label,
+//! `-out_qpx: writing <dir>/runs/<basename of -in>.mz.parquet`, a placeholder file (PAR1 ... PAR1), `-out_qpx: wrote`.
 //!
 //! An input may be an mzML, a Thermo `.raw` (a file) or a Bruker `.d` (a folder): its spectra are read with the
 //! reader's progress label (`loading mzML`, `Loading Thermo RAW file`, `Loading DDA-PASEF data`). Beside -in it
@@ -25,11 +30,6 @@
 //! `<stem>.argv.txt` (one argument per line) and `<stem>.env.txt` (its `DOTNET_*` and `OPENMS_*` variables,
 //! sorted). `--help` prints OpenMS' version line (to stderr, as TOPPBase does); `--sleep` (the children) sleeps
 //! five minutes.
-//!
-//! Started as `FileConverter` (a copy of this executable of that name beside the fake OpenNuXL, where the shim
-//! looks for it) it is the stand-in for OpenMS' FileConverter of `tests/fake-nuxl.sh`: it writes a copy of
-//! `src/lib/results/fixtures/spectra/OpenNuXL_1_input.indexed.mzML` to `-out`, with the modes `convfail` (also
-//! with `FAKE_FILECONVERTER_FAIL=1`), `convhang` and `convnone`.
 
 use std::fs;
 use std::io::Write;
@@ -51,6 +51,41 @@ fn ignore_sigterm() {
 
 #[cfg(not(unix))]
 fn ignore_sigterm() {}
+
+/// `-out_qpx`: the QPX mz view of the run's PSMs' spectra in `<dir>/runs/<basename of -in>.mz.parquet` (a placeholder),
+/// with OpenNuXL's lines; for `qpxfail` (or `FAKE_NUXL_QPX_FAIL=1`) its warning and no file.
+fn write_mz_view(dir: &str, input: &str, mode: &str, loading: &str) {
+    out("-out_qpx: reading spectra\n");
+    progress(loading);
+    done_line();
+    if mode == "qpxfail" || std::env::var("FAKE_NUXL_QPX_FAIL").is_ok_and(|v| v == "1") {
+        eprintln!("-out_qpx: the spectra of {input} cannot be read again (the fake cannot); no mz view is written");
+        return;
+    }
+    let input = input.trim_end_matches(['/', '\\']);
+    let name = Path::new(input)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let lower = name.to_ascii_lowercase();
+    let base = [".mzml", ".raw", ".d"]
+        .iter()
+        .find(|e| lower.ends_with(*e))
+        .map_or(name.as_str(), |e| &name[..name.len() - e.len()]);
+    let runs = Path::new(dir).join("runs");
+    if let Err(e) = fs::create_dir_all(&runs) {
+        eprintln!("-out_qpx: {} cannot be made ({e})", runs.display());
+        return;
+    }
+    let view = runs.join(format!("{base}.mz.parquet"));
+    out(&format!("-out_qpx: writing {}\n", view.display()));
+    fs::write(&view, format!("PAR1 the fake mz view of {input} PAR1")).unwrap();
+    out(&format!(
+        "-out_qpx: wrote {} (20 spectra, 1500 of 1500 peaks)\n",
+        view.display()
+    ));
+}
 
 /// Ends the process as a crash does: SIGSEGV.
 #[cfg(unix)]
@@ -115,105 +150,6 @@ fn tool_env() -> String {
     vars.concat()
 }
 
-/// Whether this executable was started as FileConverter (by the name it was started under, or its own).
-fn is_file_converter() -> bool {
-    let named = |path: &Path| {
-        path.file_stem()
-            .is_some_and(|stem| stem.eq_ignore_ascii_case("FileConverter"))
-    };
-    std::env::args_os()
-        .next()
-        .is_some_and(|arg| named(Path::new(&arg)))
-        || std::env::current_exe().is_ok_and(|exe| named(&exe))
-}
-
-/// The stand-in for FileConverter (see the module docs).
-fn file_converter(args: &[String]) -> ! {
-    let value = |flag: &str| {
-        args.iter()
-            .position(|a| a == flag)
-            .and_then(|at| args.get(at + 1))
-            .cloned()
-            .unwrap_or_default()
-    };
-    let (input, output) = (value("-in"), value("-out"));
-    if output.is_empty() {
-        eprintln!("Error: The required parameter '-out' was not given or is empty!");
-        exit(2);
-    }
-    let dir = Path::new(&output).parent().unwrap().to_path_buf();
-    let name = Path::new(&output)
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-    let stem = name.strip_suffix(".mzML").unwrap_or(&name);
-    let stem = stem.strip_suffix(".spectra.tmp").unwrap_or(stem);
-    fs::write(
-        dir.join(format!("{stem}.FileConverter.argv.txt")),
-        args.iter().map(|a| format!("{a}\n")).collect::<String>(),
-    )
-    .unwrap();
-    fs::write(
-        dir.join(format!("{stem}.FileConverter.env.txt")),
-        tool_env(),
-    )
-    .unwrap();
-    let folder = dir.parent().unwrap();
-    fs::write(
-        folder.join("converter.pid"),
-        format!("{}\n", std::process::id()),
-    )
-    .unwrap();
-    if !Path::new(&input).exists() {
-        eprintln!("Error: File not found (the file '{input}' could not be found)");
-        exit(6);
-    }
-    let input_name = Path::new(&input)
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-    let input_name = input_name
-        .split_once("__")
-        .map_or(input_name.as_str(), |(_, rest)| rest);
-    let mode = input_name.split('.').next().unwrap_or("");
-    progress(loading_label(&input));
-    if mode == "convfail" || std::env::var_os("FAKE_FILECONVERTER_FAIL").is_some_and(|v| v == "1") {
-        eprintln!("Error: Unable to read file (the fake FileConverter cannot read {input})");
-        exit(6);
-    }
-    match mode {
-        "convhang" => {
-            let me = std::env::current_exe().unwrap();
-            let mut child = Command::new(&me).arg("--sleep").spawn().unwrap();
-            fs::write(
-                folder.join("converter-children.pid"),
-                format!("{}\n", child.id()),
-            )
-            .unwrap();
-            let _ = child.wait();
-            exit(0);
-        }
-        "convnone" => exit(0),
-        _ => {}
-    }
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let spectra = [
-        fixtures.join("src/lib/results/fixtures/spectra/OpenNuXL_1_input.indexed.mzML"),
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/example/OpenNuXL_1_input.mzML"),
-    ]
-    .into_iter()
-    .find(|p| p.is_file())
-    .expect("the example spectra of the repository");
-    if let Err(e) = fs::copy(&spectra, &output) {
-        eprintln!("Error: Unable to write file (the file '{output}' could not be created: {e})");
-        exit(12);
-    }
-    done_line();
-    exit(0);
-}
-
 fn done_line() {
     out("\r-- done [took 0.01 s (CPU), 0.01 s (Wall)] -- \n");
 }
@@ -250,9 +186,6 @@ fn main() {
         std::thread::sleep(Duration::from_secs(300));
         exit(0);
     }
-    if is_file_converter() {
-        file_converter(&args);
-    }
     if args.iter().any(|a| a == "--help") {
         eprintln!("OpenNuXL -- a stand-in for the shim's tests");
         eprintln!("Version: 9.9.9 Oct 20 2026, 12:00:00");
@@ -260,6 +193,7 @@ fn main() {
     }
 
     let (mut input, mut output, mut tsv) = (String::new(), String::new(), String::new());
+    let mut out_qpx = String::new();
     let mut backend = "builtin".to_string();
     let mut thresholds: Vec<f64> = Vec::new();
     let mut i = 0;
@@ -269,6 +203,7 @@ fn main() {
             "-in" => input = value,
             "-out" => output = value,
             "-out_tsv" => tsv = value,
+            "-out_qpx" => out_qpx = value,
             "-percolator_backend" => backend = value,
             "-report:xlFDR" => {
                 i += 1;
@@ -432,6 +367,9 @@ fn main() {
     }
     if !tsv.is_empty() {
         fs::write(&tsv, "report\n").unwrap();
+    }
+    if !out_qpx.is_empty() {
+        write_mz_view(&out_qpx, &input, mode, loading);
     }
     out("OpenNuXL took 0.10 s (wall), 0.10 s (CPU), 0.00 s (system), 0.10 s (user); Peak Memory Usage: 10 MB.\n");
     exit(0);

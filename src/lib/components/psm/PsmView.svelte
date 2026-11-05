@@ -4,9 +4,12 @@
   // (SVG)"; the peptide with
   // its fragment ladder; whether the PSM is a cross-link, its adduct and cross-linked residue, its FDR group and q-value
   // at that group's FDR; the spectrum with NuXL's own annotation (the hit's fragment_annotation: shifted ions, marker
-  // ions, precursor, immonium and internal ions) on the observed peaks read from the input mzML (of a .raw or .d, the mzML
-  // of its spectra the search wrote), or, when they cannot be read, on the peaks NuXL annotated; mirrored against the
-  // theoretical b/y spectrum of the linear peptide (psm/annotate.ts), with ion, charge, shift and loss toggles; the ion
+  // ions, precursor, immonium and internal ions) on the observed peaks of its run's QPX mz view (OpenNuXL's -out_qpx;
+  // the top peaks per window and every annotated one, which a note says; of a search of an app before 0.9, from the
+  // input mzML or the mzML of a .raw or .d's spectra the search wrote), or, when they cannot be read, on the peaks NuXL
+  // annotated; mirrored against the
+  // theoretical b/y spectrum of the linear peptide (psm/annotate.ts), with ion, charge, shift, precursor and loss toggles
+  // (NuXL's precursor peaks shown unless switched off; the precursor's m/z is marked in the spectrum always); the ion
   // table, the fragment mass errors of the annotated ions shown, each against its m/z as OpenNuXL computes it
   // (psm/nuxl-theoretical.ts; a strip that can be collapsed, remembered in displaySettings.massErrors) and the PSM's
   // features (NuXL's scores). The logic is in nuxl-psm.ts.
@@ -163,6 +166,8 @@
   const spectra = $derived(loaded && loaded.row === row && loaded.source === source ? loaded : null)
   const observed = $derived(spectra?.data && spectra.data.missing === null ? spectrumPeaks(spectra.data.spectra, spectra.data.spectrumRow) : null)
   const nuxlPeaks = $derived(spectra?.data?.annotation ?? [])
+  /** The peak filter of the mz view the peaks come from (OpenNuXL's -out_qpx); null: every peak of the file. */
+  const peakFilter = $derived(observed ? (spectra?.data?.peakFilter ?? null) : null)
   /** Why the observed peaks are not shown (the reader's words), when they are not. */
   const missing = $derived(spectra?.data && !observed ? (spectra.data.missing ?? 'The spectrum has no peaks.') : null)
   /**
@@ -323,16 +328,17 @@
       : '',
   )
 
-  /** What the menu's button says: the losses and further ions on ("H₂O, NH₃, marker, precursor", "none"). */
+  /** What the menu's button says: the losses and further ions on ("H₂O, NH₃, marker", "none"). */
   const moreSummary = $derived.by(() => {
     const on: string[] = LOSS_TOGGLES.filter((l) => options.losses.includes(l.id)).map((l) => (l.id === 'other' ? 'other' : l.label.replace(' loss', '')))
     if (options.marker) on.push('marker')
     if (options.immonium) on.push('immonium')
     if (options.internal) on.push('internal')
-    if (options.precursor) on.push('precursor')
     return on.length > 0 ? on.join(', ') : 'none'
   })
-  const moreOn = $derived(options.losses.length > 0 || options.marker || options.immonium || options.internal || options.precursor)
+  const moreOn = $derived(options.losses.length > 0 || options.marker || options.immonium || options.internal)
+  /** The PSM's precursor, marked in the spectrum at its m/z. */
+  const precursorMark = $derived(Number.isFinite(ps.mz[row]) ? { mz: ps.mz[row], charge } : null)
 
   // the toggles: a choice of ions, charges, losses and precursor becomes the user's (no longer automatic) for all PSMs
   function setIon(type: IonType, on: boolean) {
@@ -677,6 +683,16 @@
           onchange={(e) => (local.shifted = e.currentTarget.checked)} />
         <span class={toggle}>shifted</span>
       </label>
+      <label class="relative" title="The precursor peaks NuXL annotated, with their losses and nucleotide shifts (the precursor's m/z is marked in the spectrum always)">
+        <input
+          type="checkbox"
+          class="peer absolute inset-0 z-10 m-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+          aria-label="Precursor peaks"
+          data-testid="precursor-toggle"
+          checked={options.precursor}
+          onchange={(e) => (view.psmOptions.precursor = e.currentTarget.checked)} />
+        <span class={toggle}>precursor</span>
+      </label>
       <label class="relative" title="The fragment mass errors under the spectrum">
         <input
           type="checkbox"
@@ -748,7 +764,6 @@
                 >Marker ions</DropdownMenu.CheckboxItem>
               <DropdownMenu.CheckboxItem checked={options.immonium} onCheckedChange={(on) => (local.immonium = on)}>Immonium ions</DropdownMenu.CheckboxItem>
               <DropdownMenu.CheckboxItem checked={options.internal} onCheckedChange={(on) => (local.internal = on)}>Internal fragments</DropdownMenu.CheckboxItem>
-              <DropdownMenu.CheckboxItem checked={options.precursor} onCheckedChange={(on) => (view.psmOptions.precursor = on)}>Precursor peaks</DropdownMenu.CheckboxItem>
             </DropdownMenu.Group>
           </DropdownMenu.Content>
         </DropdownMenu.Root>
@@ -782,7 +797,13 @@
         {marks}
         onmarks={setMarks}
         {measure}
+        precursor={precursorMark}
         bind:pending={toolPending} />
+      {#if peakFilter}
+        <p class="pb-1 text-xs text-muted-foreground" data-testid="peak-filter-note">
+          Showing the top {peakFilter.top} peaks per {peakFilter.window} m/z, plus every peak NuXL annotated.
+        </p>
+      {/if}
       {#if annotationError}
         <p class="pb-1 text-xs text-muted-foreground" role="status">The theoretical spectrum could not be computed: {annotationError}</p>
       {/if}

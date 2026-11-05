@@ -7,11 +7,14 @@
 //! the app's `resources/example`); a missing folder skips as well.
 //!
 //! Vendor data, each gated by a variable of its own (and `NUXL_TOOL`), searched through the shim with the bundled
-//! OpenNuXL and the FileConverter beside it (which these tests require): `NUXL_RAW_EXAMPLE` names a Thermo `.raw`
-//! file, `NUXL_D_EXAMPLE` a Bruker timsTOF `.d` folder (CI: `desktop.yml` downloads OpenMS' test files
-//! `Angiotensin_AllScans.raw` and `DDA_HeLa_50ng_5_6min.d`). Their database is `NUXL_VENDOR_FASTA` if set, else the
-//! example's FASTA (few or no PSMs: what is checked is that the search ends and that the spectra the shim converted
-//! are the ones OpenNuXL searched).
+//! OpenNuXL: `NUXL_RAW_EXAMPLE` names a Thermo `.raw` file, `NUXL_D_EXAMPLE` a Bruker timsTOF `.d` folder (CI:
+//! `desktop.yml` downloads OpenMS' test files `Angiotensin_AllScans.raw` and `DDA_HeLa_50ng_5_6min.d`). Their database
+//! is `NUXL_VENDOR_FASTA` if set, else the example's FASTA (few or no PSMs: what is checked is that the search ends
+//! and that OpenNuXL wrote the QPX mz view of its PSMs' spectra, which the shim moved into place).
+//!
+//! Every run's mz view (`-out_qpx`) is checked as far as the shim can without a Parquet reader: a Parquet file with
+//! the footer keys of OpenNuXL's peak filter, and as many rows as OpenNuXL's log line says, one per spectrum of its
+//! PSMs at most (the front end's tests read the view's columns: `src/lib/results/read.test.ts`).
 
 mod common;
 
@@ -24,6 +27,46 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// The QPX mz view `outputs.json` names (`mz`): a Parquet file in `folder` with the footer keys of OpenNuXL's peak
+/// filter. Returns the rows OpenNuXL's log line says it wrote (`-out_qpx: wrote <path> (<rows> spectra, ...)`).
+fn check_mz_view(folder: &Path, stem: &str, outputs: &Value) -> usize {
+    let mz = outputs["mz"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no mz view: {outputs}"));
+    assert_eq!(mz, format!("nuxl/{stem}.mz.parquet"));
+    let bytes = fs::read(folder.join(mz)).unwrap();
+    assert!(
+        bytes.len() > 8 && bytes.starts_with(b"PAR1") && bytes.ends_with(b"PAR1"),
+        "{mz} is not a Parquet file"
+    );
+    // (the footer's key-value metadata is not compressed)
+    let footer =
+        String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(64 << 10)..]).into_owned();
+    for key in ["nuxl_peak_window", "nuxl_peak_top", "nuxl_peak_annotated"] {
+        assert!(footer.contains(key), "{mz} has no footer key {key}");
+    }
+    assert!(!folder.join("nuxl/runs").exists(), "nuxl/runs is left");
+    let log = fs::read_to_string(folder.join("nuxl.log")).unwrap();
+    let wrote = log
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("-out_qpx: wrote "))
+        .next_back()
+        .unwrap_or_else(|| panic!("no -out_qpx line in the log: {log}"));
+    let counts = &wrote[wrote.rfind('(').unwrap() + 1..];
+    let rows: usize = counts
+        .split(' ')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("{wrote}"));
+    // (the size of the view, for docs: README's disk figures)
+    eprintln!(
+        "mz view {mz}: {rows} spectra, {} bytes, {:.2} MB per thousand spectra; {wrote}",
+        bytes.len(),
+        bytes.len() as f64 / rows.max(1) as f64 / 1000.0
+    );
+    rows
+}
 
 struct Real {
     bin: PathBuf,
@@ -166,8 +209,17 @@ fn the_example_is_searched_run_by_run_through_start_search() {
             );
         }
         assert_eq!(record["path"], originals[k].as_str());
-        // an mzML is read where it is
+        // the spectra of its PSMs for the PSM view: OpenNuXL's mz view, a row per spectrum of a PSM at most
         assert_eq!(outputs["spectra"], Value::Null, "{outputs}");
+        let rows = check_mz_view(&folder, stem, &outputs);
+        let all = fs::read_to_string(folder.join(outputs["all"].as_str().unwrap())).unwrap();
+        let spectra: std::collections::HashSet<String> =
+            spectrum_references(&all).into_iter().collect();
+        assert!(
+            rows > 0 && rows <= spectra.len(),
+            "{rows} rows, {} spectra of PSMs",
+            spectra.len()
+        );
     }
     let log = fs::read_to_string(folder.join("nuxl.log")).unwrap();
     assert_eq!(
@@ -301,30 +353,10 @@ fn vendor(variable: &str) -> Option<(Real, PathBuf, PathBuf)> {
         "{variable} names {}, which is not there",
         input.display()
     );
-    assert!(
-        tool::file_converter(&real.bin).is_some(),
-        "{} has no FileConverter beside it: the spectra of vendor data cannot be converted",
-        real.bin.display()
-    );
     let fasta = std::env::var_os("NUXL_VENDOR_FASTA")
         .map(PathBuf::from)
         .unwrap_or_else(|| real.example.join(FASTA));
     Some((real, input, fasta))
-}
-
-/// The `id` of every `<spectrum>` of an mzML.
-fn spectrum_ids(mzml: &str) -> Vec<String> {
-    mzml.split("<spectrum ")
-        .skip(1)
-        .filter_map(|tag| {
-            let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
-            let at = tag
-                .find(" id=\"")
-                .map(|a| a + 5)
-                .or_else(|| tag.starts_with("id=\"").then_some(4))?;
-            tag[at..].split('"').next().map(str::to_string)
-        })
-        .collect()
 }
 
 /// Every `spectrum_reference` of an idXML.
@@ -337,9 +369,8 @@ fn spectrum_references(idxml: &str) -> Vec<String> {
 }
 
 /// Searches the vendor input `input` (as `given`: its path, maybe with a trailing separator) through the shim with
-/// the real tools and checks what the PSM view relies on: the run ended, the spectra were converted into the
-/// search folder as an indexed mzML (no Numpress) whose native IDs begin with `id_prefix` or have `id_part`, and
-/// every PSM's spectrum is one of them.
+/// the real tool and checks what the PSM view relies on: the run ended, OpenNuXL wrote the mz view of its PSMs'
+/// spectra (`check_mz_view`), whose PSMs' native IDs have `id_part`.
 fn search_vendor(real: &Real, given: &str, input: &Path, fasta: &Path, id_part: &str) {
     let work = TempDir::new("real-vendor");
     let request: SearchRequest = serde_json::from_value(json!({
@@ -394,46 +425,31 @@ fn search_vendor(real: &Real, given: &str, input: &Path, fasta: &Path, id_part: 
         &fs::read_to_string(folder.join(format!("nuxl/{stem}.outputs.json"))).unwrap(),
     )
     .unwrap();
-    let spectra = outputs["spectra"]
-        .as_str()
-        .unwrap_or_else(|| panic!("no spectra: {outputs}"));
-    assert_eq!(spectra, format!("nuxl/{stem}.spectra.mzML"));
-    let mzml = fs::read_to_string(folder.join(spectra)).unwrap();
-    assert!(
-        mzml[..mzml.len().min(4096)].contains("<indexedmzML"),
-        "not an indexed mzML"
-    );
-    assert!(
-        mzml[mzml.len().saturating_sub(4096)..].contains("<indexListOffset>"),
-        "no index offset"
-    );
-    for numpress in ["MS:1002312", "MS:1002313", "MS:1002314"] {
-        assert!(
-            !mzml.contains(numpress),
-            "Numpress ({numpress}) in the converted spectra"
-        );
-    }
-    let ids: std::collections::HashSet<String> = spectrum_ids(&mzml).into_iter().collect();
-    assert!(!ids.is_empty(), "no spectra converted");
-    assert!(
-        ids.iter().all(|id| id.contains(id_part)),
-        "native IDs without {id_part}: {:?}",
-        ids.iter().find(|id| !id.contains(id_part))
-    );
+    let rows = check_mz_view(&folder, stem, &outputs);
     let all = fs::read_to_string(folder.join(outputs["all"].as_str().unwrap())).unwrap();
     let references = spectrum_references(&all);
+    let spectra: std::collections::HashSet<&String> = references.iter().collect();
     eprintln!(
-        "{name}: {} spectra converted, {} PSMs, notes {}",
-        ids.len(),
+        "{name}: {rows} spectra in the mz view, {} PSMs of {} spectra, notes {}",
         references.len(),
+        spectra.len(),
         outputs["notes"]
     );
-    for reference in &references {
-        assert!(
-            ids.contains(reference),
-            "the PSM's spectrum {reference} is not in the converted spectra"
-        );
-    }
+    assert!(
+        rows <= spectra.len(),
+        "{rows} rows, {} spectra of PSMs",
+        spectra.len()
+    );
+    assert!(
+        rows > 0 || spectra.is_empty(),
+        "no spectra in the mz view of {} spectra of PSMs",
+        spectra.len()
+    );
+    assert!(
+        references.iter().all(|id| id.contains(id_part)),
+        "native IDs without {id_part}: {:?}",
+        references.iter().find(|id| !id.contains(id_part))
+    );
     // nothing beside the user's input: no ThermoRawFileParser mzML (`<input>.mzML`), no debug table
     let mut beside: Vec<String> = fs::read_dir(input.parent().unwrap())
         .unwrap()
@@ -445,7 +461,7 @@ fn search_vendor(real: &Real, given: &str, input: &Path, fasta: &Path, id_part: 
 }
 
 #[test]
-fn a_thermo_raw_file_is_searched_and_its_spectra_converted_for_the_psm_view() {
+fn a_thermo_raw_file_is_searched_and_the_spectra_of_its_psms_kept_for_the_psm_view() {
     let Some((real, raw, fasta)) = vendor("NUXL_RAW_EXAMPLE") else {
         return;
     };
@@ -459,7 +475,7 @@ fn a_thermo_raw_file_is_searched_and_its_spectra_converted_for_the_psm_view() {
 }
 
 #[test]
-fn a_bruker_d_folder_is_searched_and_its_spectra_converted_for_the_psm_view() {
+fn a_bruker_d_folder_is_searched_and_the_spectra_of_its_psms_kept_for_the_psm_view() {
     let Some((real, d, fasta)) = vendor("NUXL_D_EXAMPLE") else {
         return;
     };

@@ -1,4 +1,5 @@
-//! History: the searches of the app's data folder (`<searches>/<id>/`), and the project files.
+//! History: the searches of a searches folder (`<searches>/<id>/`: the app's own, `<app data>/searches`, or one the
+//! user chose for them: `location`), and the project files.
 //!
 //! A search is in History when its folder has `search.json` (the record: see `src/lib/history/history.ts`
 //! for its schema, version 1). The app writes the record right after `search://done`, before it reads the
@@ -218,11 +219,26 @@ fn stray_name(name: &str) -> bool {
         && !name.strip_suffix(".partial").is_some_and(valid_id)
 }
 
-/// The searches of History, the newest first (those with an `error` last). Never fails: what is wrong
-/// with a folder is in its entry's `error`; a finished folder without a record is listed with
+/// Whether `folder` is the folder of a search (finished, or ended without a record): a folder, not a link, with the
+/// search's record or the list of its inputs, which a search writes first.
+pub fn is_search_folder(folder: &Path) -> bool {
+    let has = |name: &str| fs::symlink_metadata(folder.join(name)).is_ok();
+    fs::symlink_metadata(folder).is_ok_and(|m| m.is_dir())
+        && (has(RECORD) || has(crate::project::INPUTS))
+}
+
+/// The searches of History in the app's own searches folder, the newest first (those with an `error` last). Never
+/// fails: what is wrong with a folder is in its entry's `error`; a finished folder without a record is listed with
 /// [`NO_RECORD`], a folder whose name is no search's ([`stray_name`]) with [`NOT_A_SEARCH`] (a partial
 /// folder, a running search's, is not listed, nor is a link).
 pub fn list(dir: &Path) -> Vec<HistoryEntry> {
+    list_in(dir, true)
+}
+
+/// The searches of History in the searches folder `dir`, as [`list`] lists them in the app's own folder (`own`); in a
+/// folder the user chose (not `own`), only the folders that are searches ([`is_search_folder`]): nothing else of it
+/// is listed, so that History never offers to delete it.
+pub fn list_in(dir: &Path, own: bool) -> Vec<HistoryEntry> {
     let Ok(read) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -231,8 +247,11 @@ pub fn list(dir: &Path) -> Vec<HistoryEntry> {
         let Some(id) = item.file_name().to_str().map(str::to_string) else {
             continue;
         };
-        let stray = stray_name(&id);
+        let stray = own && stray_name(&id);
         if !valid_id(&id) && !stray {
+            continue;
+        }
+        if !own && !is_search_folder(&item.path()) {
             continue;
         }
         let Ok(meta) = fs::symlink_metadata(item.path()) else {
@@ -257,6 +276,12 @@ pub fn list(dir: &Path) -> Vec<HistoryEntry> {
         }
         entries.push(entry_of(dir, &id));
     }
+    sort_entries(&mut entries);
+    entries
+}
+
+/// History's order: the newest first, those with an `error` last.
+pub fn sort_entries(entries: &mut [HistoryEntry]) {
     entries.sort_by(|a, b| {
         let key = |e: &HistoryEntry| {
             (
@@ -267,7 +292,6 @@ pub fn list(dir: &Path) -> Vec<HistoryEntry> {
         };
         key(b).cmp(&key(a))
     });
-    entries
 }
 
 /// Writes `data` to `path` through a temporary file in the same folder, so that the file is whole or
@@ -809,6 +833,12 @@ fn claim_partial(folder: &Path, now: SystemTime, grace: Duration) -> Option<Opti
 /// The folders are listed first, so none made while the sweep runs is looked at. Links, files, and
 /// anything not named like a search are left alone. Returns the names removed.
 pub fn sweep(dir: &Path, now: SystemTime, grace: Duration) -> Vec<String> {
+    sweep_in(dir, now, grace, true)
+}
+
+/// The sweep of the searches folder `dir`: as [`sweep`] in the app's own folder (`own`); in a folder the user chose,
+/// only partial folders that have the app's lock file (none of an older version, which the user's folder never had).
+pub fn sweep_in(dir: &Path, now: SystemTime, grace: Duration, own: bool) -> Vec<String> {
     let Ok(read) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -827,7 +857,9 @@ pub fn sweep(dir: &Path, now: SystemTime, grace: Duration) -> Vec<String> {
         let gone = match name.strip_suffix(".partial") {
             // the claimed lock is released only once its file is gone (`remove_partial`), so no other
             // sweep claims the folder meanwhile, and Windows can remove the folder
-            Some(id) if valid_id(id) => {
+            Some(id)
+                if valid_id(id) && (own || fs::symlink_metadata(path.join(LOCK_FILE)).is_ok()) =>
+            {
                 claim_partial(&path, now, grace).map(|guard| remove_partial(guard, &path))
             }
             // (a finished search is the user's to delete)

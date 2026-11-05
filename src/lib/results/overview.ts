@@ -30,7 +30,9 @@ const SHORT_NOTES: [RegExp, string][] = [
   // OpenNuXL's (it rescores 1000 PSMs or more)
   [/^Too few PSMs for score recalibration/, 'Too few PSMs (Percolator needs 1000)'],
   [/^Score recalibration failed/, 'Percolator failed'],
-  // the shim's, of a .raw or .d input whose spectra FileConverter could not write as mzML for the PSM view
+  // the shim's, of a run whose QPX mz view (the spectra of its PSMs) OpenNuXL could not write for the PSM view
+  [/^The PSM view shows the annotated peaks only: the spectra of .+ could not be kept/, 'Spectra not kept: the PSM view shows the annotated peaks only'],
+  // (of a search of an app before 0.9: a .raw or .d input whose spectra FileConverter could not write as mzML)
   [/^The PSM view shows the annotated peaks only: the spectra of .+ could not be converted/, 'Spectra not converted: the PSM view shows the annotated peaks only'],
 ]
 

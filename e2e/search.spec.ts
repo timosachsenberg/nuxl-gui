@@ -1,7 +1,8 @@
 // The example searched through the app's screens: New search with the example, Start, Results, the PSM view,
-// History, and a project file exported and opened again. With the fake tools (NUXL_FAKE=1) also a Thermo .raw input
-// (a stand-in, lib.ts fakeRaw): the PSM view reads its spectra from the mzML the shim converted, a project leaves that
-// file out, and a conversion that fails leaves a finished search with a note.
+// History, and a project file exported and opened again (with the QPX mz view of its run: its PSM view shows the
+// observed peaks). With the fake tools (NUXL_FAKE=1) also a Thermo .raw input (a stand-in, lib.ts fakeRaw): the PSM
+// view reads its spectra from the run's mz view, which a project carries, and a run whose mz view OpenNuXL could not
+// write leaves a finished search with a note.
 // Gated: runs only with NUXL_TOOL set (the app inherits it; NUXL_FAKE=1 sets it to the stand-in, e2e/run.sh).
 // Every test that needs a result searches the example itself, so each runs alone; the searches' folders (in the
 // spec's own data folder) are removed after each test.
@@ -306,11 +307,12 @@ describe('the example search', () => {
       timeout: 30000,
       timeoutMsg: 'no project was written',
     })
-    // a zip: OpenNuXL's outputs and the record, not the log
+    // a zip: OpenNuXL's outputs (the mz view among them) and the record, not the log
     const zip = readFileSync(chosen)
     expect(zip.subarray(0, 2).toString()).toBe('PK')
     expect(zip.includes('search.json')).toBe(true)
     expect(zip.includes('nuxl/1__OpenNuXL_1_input.outputs.json')).toBe(true)
+    expect(zip.includes('nuxl/1__OpenNuXL_1_input.mz.parquet')).toBe(true)
     expect(zip.includes('nuxl.log')).toBe(false)
 
     await goTo('History')
@@ -323,10 +325,11 @@ describe('the example search', () => {
     await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 30000 })
     expect(await countOf('psm-count')).toBe(psms)
     expect(await countOf('xl-psm-count')).toBe(xls)
-    // the project has no spectra and its inputs.json no paths: the PSM view shows the peaks NuXL annotated, and says so
+    // the project has the mz view (its inputs.json no paths): the PSM view shows the observed peaks, as before
     await openFirstPsm()
     await expect($('[data-testid="psm-crosslink"]')).toBeDisplayed()
-    await expect($('[data-testid="peaks-missing-note"]')).toBeDisplayed()
+    expect(await $$('[data-testid="peaks-missing-note"]')).toHaveLength(0)
+    await expect($('[data-testid="peak-filter-note"]')).toBeDisplayed()
     await goTo('History')
     await browser.waitUntil(async () => (await $$('[data-testid="history-row"]')).length === 2, { timeoutMsg: 'History does not list both searches' })
     rmSync(chosen, { force: true })
@@ -359,9 +362,10 @@ describe('the example search', () => {
       return id
     }
 
-    it('the PSM view reads its converted spectra; a project leaves them out, and its PSM view says so', async () => {
+    it("the PSM view reads its run's mz view; a project carries it, and its PSM view shows the peaks too", async () => {
       const searchId = await searchRaw('Thermo Lauf.raw')
-      expect(existsSync(join(searchesDir(), searchId, 'nuxl', '1__Thermo Lauf.spectra.mzML'))).toBe(true)
+      expect(existsSync(join(searchesDir(), searchId, 'nuxl', '1__Thermo Lauf.mz.parquet'))).toBe(true)
+      expect(existsSync(join(searchesDir(), searchId, 'nuxl', '1__Thermo Lauf.spectra.mzML'))).toBe(false)
 
       const chosen = join(dataHome(), 'chosen.nuxl')
       rmSync(chosen, { force: true })
@@ -371,11 +375,11 @@ describe('the example search', () => {
         timeout: 30000,
         timeoutMsg: 'no project was written',
       })
-      // OpenNuXL's outputs, not the converted spectra (their size; the zip has no zip64)
+      // OpenNuXL's outputs with the mz view (the spectra of the PSMs: small)
       const zip = readFileSync(chosen)
       expect(zip.includes('nuxl/1__Thermo Lauf.outputs.json')).toBe(true)
-      expect(zip.includes('spectra.mzML')).toBe(false)
-      // (here, the PSM view has the converted spectra's peaks)
+      expect(zip.includes('nuxl/1__Thermo Lauf.mz.parquet')).toBe(true)
+      // (here, the PSM view has the mz view's peaks)
       await openFirstPsm()
       expect(await $$('[data-testid="peaks-missing-note"]')).toHaveLength(0)
 
@@ -387,28 +391,25 @@ describe('the example search', () => {
       }, { timeout: 30000, timeoutMsg: 'the project did not open' })
       await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 30000 })
       await openFirstPsm()
-      await expect($('[data-testid="peaks-missing-note"]')).toBeDisplayed()
-      expect(await textOf('[data-testid="peaks-missing-note"]')).toContain(
-        'The spectra of Thermo Lauf.raw are not in the search folder (a project leaves them out); the PSM view shows the annotated peaks only.',
-      )
+      expect(await $$('[data-testid="peaks-missing-note"]')).toHaveLength(0)
       rmSync(chosen, { force: true })
     })
 
-    it('spectra that cannot be converted: the search finishes with a note, the PSM view shows the annotated peaks', async () => {
-      // (the fake FileConverter fails for an input named convfail)
-      const id = await searchRaw('convfail.raw')
-      const outputs = JSON.parse(readFileSync(join(searchesDir(), id, 'nuxl', '1__convfail.outputs.json'), 'utf8'))
-      expect(outputs.spectra).toBeNull()
-      expect(outputs.notes.join(' ')).toContain('The PSM view shows the annotated peaks only: the spectra of convfail.raw could not be converted (')
+    it('a run whose mz view OpenNuXL could not write: the search finishes with a note, the PSM view shows the annotated peaks', async () => {
+      // (the fake OpenNuXL warns and writes no mz view for an input named qpxfail)
+      const id = await searchRaw('qpxfail.raw')
+      const outputs = JSON.parse(readFileSync(join(searchesDir(), id, 'nuxl', '1__qpxfail.outputs.json'), 'utf8'))
+      expect(outputs.mz).toBeNull()
+      expect(outputs.notes.join(' ')).toContain('The PSM view shows the annotated peaks only: the spectra of qpxfail.raw could not be kept (')
       if (EXAMPLE_PSMS) expect(await countOf('psm-count')).toBe(EXAMPLE_PSMS.psms)
       // the Overview names it in short, beside the file
       await jsClick(await $('[role="tablist"]').$('button*=Overview'))
       await browser.waitUntil(async () => (await $$('[data-testid="engine-note"]')).length > 0, { timeoutMsg: 'the Overview shows no note' })
-      expect(await textOf('[data-testid="view-results"]')).toContain('Spectra not converted: the PSM view shows the annotated peaks only')
+      expect(await textOf('[data-testid="view-results"]')).toContain('Spectra not kept: the PSM view shows the annotated peaks only')
       await openFirstPsm()
       await expect($('[data-testid="psm-crosslink"]')).toBeDisplayed()
       expect(await textOf('[data-testid="peaks-missing-note"]')).toContain(
-        'The spectra of convfail.raw were not converted; the PSM view shows the annotated peaks only.',
+        "OpenNuXL could not keep the spectra of qpxfail.raw (the Overview's notes say why); the PSM view shows the annotated peaks only.",
       )
     })
   })

@@ -253,10 +253,12 @@ describe('project files', () => {
     const named = (files: string[]) => files.map((f) => f.split('/').pop())
     expect(opened.result.outcome.tables).toEqual({ ...result.outcome.tables, files: named(result.outcome.tables.files) })
     expect(opened.result.outcome.tables.files).toEqual(['OpenNuXL_1_input.mzML'])
-    // a project has no inputs: a PSM shows NuXL's annotated peaks, and says why (the folder has no input)
+    // a project carries the run's mz view (not the inputs): a PSM shows the same observed peaks there
     const [a, b] = [await opened.result.outcome.spectra.load(5), await result.outcome.spectra.load(5)]
-    expect(a.spectra.psmSpectrum[0]).toBe(-1)
-    expect(a.missing).toMatch(/^OpenNuXL_1_input.mzML /)
+    expect(a.missing).toBeNull()
+    const peaks = (l: typeof a) => l.spectra.mz.subarray(l.spectra.offsets[l.spectrumRow], l.spectra.offsets[l.spectrumRow + 1])
+    expect(peaks(a).length).toBeGreaterThan(0)
+    expect(peaks(a)).toEqual(peaks(b))
     expect(a.annotation).toEqual(b.annotation)
     expect(a.annotation.length).toBeGreaterThan(0)
     expect(opened.result.outcome.summary.files.map((f) => f.path)).toEqual(['OpenNuXL_1_input.mzML'])

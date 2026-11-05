@@ -1,9 +1,9 @@
 //! NuXL desktop: the Tauri shell around OpenNuXL of OpenMS (protein–nucleic acid cross-links).
 //!
 //! The shim (`tool`, `args`, `progress`, `run`) runs the tool for a search request, once per input (an mzML, a
-//! Thermo .raw file or a Bruker timsTOF .d folder) and one after the other (`docs/design.md`), converts the spectra
-//! of a .raw or .d input to mzML after its run (FileConverter) for the PSM view, and reports its progress; the
-//! commands and events below are what the front end sees:
+//! Thermo .raw file or a Bruker timsTOF .d folder) and one after the other (`docs/design.md`), each run writing the
+//! QPX mz view of its PSMs' spectra for the PSM view (`-out_qpx`), and reports its progress; the commands and events
+//! below are what the front end sees:
 //!
 //! - `tool_info` -> `{ version, path }`
 //! - `start_search(request)` -> `{ searchId }`; `cancel_search(searchId)`
@@ -13,8 +13,9 @@
 //! - `read_search_file(searchId, name, tail?, offset?, length?)` -> the bytes of a file of the search's folder
 //!   (with `tail`: its last `tail` bytes; with `offset` and `length`: those bytes), of the database its
 //!   database.json records, or, by `tail` or `offset` and `length` only, of an input's mzML, named by its link
-//!   (`<n>__<name>`) or its path in inputs.json (`files`; rejects `{ notFound, message }`). The spectra of a .raw
-//!   or .d input are the folder's `nuxl/<stem>.spectra.mzML` (its outputs.json's `spectra`)
+//!   (`<n>__<name>`) or its path in inputs.json (`files`; rejects `{ notFound, message }`). The spectra of the PSMs
+//!   are the folder's `nuxl/<stem>.mz.parquet` (outputs.json's `mz`; of a search of an app before 0.9 the input
+//!   mzML, or of a .raw or .d `nuxl/<stem>.spectra.mzML`)
 //! - `inspect_files(paths)` -> `[{ path, name, size, spectra?, proteins?, residues?, error?, problem?, warnings }]`
 //!   (mzML, .raw and .d inputs, FASTA files)
 //! - `cpu_count()` -> the cores the search's threads may use
@@ -34,9 +35,14 @@
 //!   regular files of the folder, for a project file), `save_project_file(searchId, name)` (a save dialog, then the search's project zip written there
 //!   entry by entry: `project`; events `project://progress` `{ searchId, written, total }`),
 //!   `open_project_file()` (the open dialog, then the bytes of the file chosen; empty if
-//!   cancelled) and `history_import(body)` (the entries of a project in a fresh folder -> the new id),
+//!   cancelled), `history_import(body)` (the entries of a project in a fresh folder -> the new id) and
 //!   `save_curation(searchId, curation)` (the user's marks of the PSMs: the folder's `curation.json`). At
-//!   startup the partial folders of interrupted searches are swept (`history::sweep`).
+//!   startup the partial folders of interrupted searches are swept (`history::sweep_in`).
+//! - where the searches are (`location`): `searches_location()` -> `{ folder, isDefault, defaultFolder }` (where new
+//!   searches and opened projects go), `choose_searches_folder()` (the system's folder dialog, then the folder chosen
+//!   for them, checked: `location::check_folder` -> the new location, or null if cancelled) and
+//!   `use_default_searches_folder()` (back to `<app data>/searches`). History lists the searches of all the folders
+//!   the app has kept them in, and the commands above find a search by its id in them.
 //!
 //! - the new-version check (`update`): `update_check_at_start()` -> whether the automatic check at start may run
 //!   (false with `NUXL_NO_UPDATE_CHECK` set), `open_release_page(version)` (the release's page on GitHub in the
@@ -54,6 +60,7 @@ pub mod decoys;
 pub mod export;
 pub mod files;
 pub mod history;
+pub mod location;
 pub mod progress;
 pub mod project;
 pub mod run;
@@ -63,6 +70,7 @@ pub mod update;
 pub mod watchdog;
 
 use args::SearchRequest;
+use location::Locations;
 use run::{SearchEvent, Searches, Sink};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -195,12 +203,14 @@ async fn cancel_search(state: State<'_, AppState>, search_id: String) -> Result<
         .map_err(|e| e.to_string())?
 }
 
+/// The app's data folder (its own searches folder, the choice of another: `location`).
+fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_data_dir().map_err(|e| e.to_string())
+}
+
+/// The searches folder new searches go to (`location`).
 fn searches_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("searches"))
+    Ok(Locations::load(&data_dir(app)?).current)
 }
 
 /// A file of a search (see `files::read_search_file`), as raw bytes.
@@ -214,11 +224,12 @@ async fn read_search_file(
     length: Option<u64>,
 ) -> Result<Response, files::ReadError> {
     let range = files::ByteRange::of(tail, offset, length)?;
-    let dir = searches_dir(&app).map_err(|message| files::ReadError {
+    let data = data_dir(&app).map_err(|message| files::ReadError {
         not_found: false,
         message,
     })?;
     let bytes = tauri::async_runtime::spawn_blocking(move || {
+        let dir = Locations::load(&data).root_of(&search_id);
         files::read_search_file(&dir, &search_id, &name, range)
     })
     .await
@@ -266,6 +277,20 @@ fn test_dialog_path() -> Option<PathBuf> {
 
 #[cfg(not(debug_assertions))]
 fn test_dialog_path() -> Option<PathBuf> {
+    None
+}
+
+/// The folder that the end-to-end specs choose in place of the system's folder dialog of the searches folder
+/// (`NUXL_TEST_FOLDER_DIALOG_PATH`). Debug builds only, as [`test_dialog_path`].
+#[cfg(debug_assertions)]
+fn test_folder_dialog_path() -> Option<PathBuf> {
+    std::env::var_os("NUXL_TEST_FOLDER_DIALOG_PATH")
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from)
+}
+
+#[cfg(not(debug_assertions))]
+fn test_folder_dialog_path() -> Option<PathBuf> {
     None
 }
 
@@ -366,8 +391,9 @@ async fn save_search_file(
     name: String,
     suggested: String,
 ) -> Result<Option<String>, String> {
-    let dir = searches_dir(&app)?;
+    let data = data_dir(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let dir = Locations::load(&data).root_of(&search_id);
         let source = files::resolve_search_file(&dir, &search_id, &name).map_err(|e| e.message)?;
         let Some(path) = ask_save_path(&app, &suggested)? else {
             return Ok(None);
@@ -380,20 +406,53 @@ async fn save_search_file(
     .map_err(|e| e.to_string())?
 }
 
-/// The searches folder and the blocking work on it, off the async runtime's threads.
-async fn on_searches<T: Send + 'static>(
+/// Where the searches are (`location`) and the blocking work with it, off the async runtime's threads.
+async fn on_locations<T: Send + 'static>(
     app: &AppHandle,
-    work: impl FnOnce(PathBuf) -> Result<T, String> + Send + 'static,
+    work: impl FnOnce(Locations) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
-    let dir = searches_dir(app)?;
-    tauri::async_runtime::spawn_blocking(move || work(dir))
+    let data = data_dir(app)?;
+    tauri::async_runtime::spawn_blocking(move || work(Locations::load(&data)))
         .await
         .map_err(|e| e.to_string())?
 }
 
+/// The searches folder new searches and opened projects go to, and the blocking work on it.
+async fn on_searches<T: Send + 'static>(
+    app: &AppHandle,
+    work: impl FnOnce(PathBuf) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    on_locations(app, |locations| work(locations.current)).await
+}
+
+/// The searches folder that holds search `id` (`Locations::root_of`), and the blocking work on it.
+async fn on_search<T: Send + 'static>(
+    app: &AppHandle,
+    id: &str,
+    work: impl FnOnce(PathBuf) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let id = id.to_string();
+    on_locations(app, move |locations| work(locations.root_of(&id))).await
+}
+
+/// The searches of all the folders the app keeps them in (`location`), the newest first; a search of one id once (as
+/// the commands find it: in the first folder).
 #[tauri::command]
 async fn history_list(app: AppHandle) -> Result<Vec<history::HistoryEntry>, String> {
-    on_searches(&app, |dir| Ok(history::list(&dir))).await
+    on_locations(&app, |locations| {
+        let mut seen = std::collections::HashSet::new();
+        let mut entries = Vec::new();
+        for root in locations.roots() {
+            for entry in history::list_in(&root, locations.is_own(&root)) {
+                if seen.insert(entry.id.clone()) {
+                    entries.push(entry);
+                }
+            }
+        }
+        history::sort_entries(&mut entries);
+        Ok(entries)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -402,7 +461,7 @@ async fn history_save_record(
     search_id: String,
     record: String,
 ) -> Result<(), String> {
-    on_searches(&app, move |dir| {
+    on_search(&app, &search_id.clone(), move |dir| {
         history::save_record(&dir, &search_id, &record)
     })
     .await
@@ -414,7 +473,7 @@ async fn history_save_proteins(
     search_id: String,
     proteins: String,
 ) -> Result<(), String> {
-    on_searches(&app, move |dir| {
+    on_search(&app, &search_id.clone(), move |dir| {
         history::save_proteins(&dir, &search_id, &proteins)
     })
     .await
@@ -422,7 +481,7 @@ async fn history_save_proteins(
 
 #[tauri::command]
 async fn save_curation(app: AppHandle, search_id: String, curation: String) -> Result<(), String> {
-    on_searches(&app, move |dir| {
+    on_search(&app, &search_id.clone(), move |dir| {
         history::save_curation(&dir, &search_id, &curation)
     })
     .await
@@ -430,18 +489,33 @@ async fn save_curation(app: AppHandle, search_id: String, curation: String) -> R
 
 #[tauri::command]
 async fn history_rename(app: AppHandle, search_id: String, name: String) -> Result<(), String> {
-    on_searches(&app, move |dir| history::rename(&dir, &search_id, &name)).await
+    on_search(&app, &search_id.clone(), move |dir| {
+        history::rename(&dir, &search_id, &name)
+    })
+    .await
 }
 
 #[tauri::command]
 async fn history_delete(app: AppHandle, search_id: String) -> Result<(), String> {
-    on_searches(&app, move |dir| history::delete(&dir, &search_id)).await
+    on_locations(&app, move |locations| {
+        let dir = locations.root_of(&search_id);
+        // (in a folder the user chose, only a search: History lists nothing else of it)
+        let folder = dir.join(&search_id);
+        if !locations.is_own(&dir)
+            && std::fs::symlink_metadata(&folder).is_ok()
+            && !history::is_search_folder(&folder)
+        {
+            return Err(format!("{} is not a search of NuXL.", folder.display()));
+        }
+        history::delete(&dir, &search_id)
+    })
+    .await
 }
 
 /// The path of the search's folder (the Overview shows it).
 #[tauri::command]
 async fn search_folder(app: AppHandle, search_id: String) -> Result<String, String> {
-    on_searches(&app, move |dir| {
+    on_search(&app, &search_id.clone(), move |dir| {
         history::search_folder(&dir, &search_id).map(|f| f.to_string_lossy().into_owned())
     })
     .await
@@ -470,7 +544,7 @@ fn reveal_folder(folder: &Path) -> Result<(), String> {
 /// Show search folder: the folder of the search, by its id (`history::show_folder`).
 #[tauri::command]
 async fn show_search_folder(app: AppHandle, search_id: String) -> Result<(), String> {
-    on_searches(&app, move |dir| {
+    on_search(&app, &search_id.clone(), move |dir| {
         history::show_folder(&dir, &search_id, reveal_folder)
     })
     .await
@@ -481,7 +555,10 @@ async fn history_files(
     app: AppHandle,
     search_id: String,
 ) -> Result<Vec<history::FolderFile>, String> {
-    on_searches(&app, move |dir| history::folder_files(&dir, &search_id)).await
+    on_search(&app, &search_id.clone(), move |dir| {
+        history::folder_files(&dir, &search_id)
+    })
+    .await
 }
 
 /// The entries of a project file (see `history::frame`; the raw body of the call) as a new search.
@@ -553,8 +630,9 @@ async fn save_project_file(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| format!("nuxl.{}", history::PROJECT_EXTENSION));
-    let dir = searches_dir(&app)?;
+    let data = data_dir(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let dir = Locations::load(&data).root_of(&search_id);
         project::project_files(&dir, &search_id)?;
         // (the path as chosen: the dialog's filter and the suggested name carry the extension; the title says
         // what a project holds, as README.md does)
@@ -585,6 +663,57 @@ async fn save_project_file(
             &mut progress,
         )?;
         Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Where new searches go (`location`).
+#[tauri::command]
+async fn searches_location(app: AppHandle) -> Result<location::Location, String> {
+    on_locations(&app, |locations| Ok(locations.location())).await
+}
+
+/// The title of the folder dialog of the searches folder: what the folder is for.
+pub const SEARCHES_DIALOG_TITLE: &str =
+    "Choose a folder for NuXL's searches (an empty one, or one with NuXL's searches)";
+
+/// The system's folder dialog (in Rust: the page never names a path), then the folder chosen for new searches and
+/// opened projects, checked (`location::check_folder`) and kept. -> the new location, or null if cancelled.
+#[tauri::command]
+async fn choose_searches_folder(app: AppHandle) -> Result<Option<location::Location>, String> {
+    let data = data_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let chosen = match test_folder_dialog_path() {
+            Some(path) => Some(path),
+            None => {
+                let current = Locations::load(&data).current;
+                let mut dialog = app.dialog().file().set_title(SEARCHES_DIALOG_TITLE);
+                // (the dialog starts beside the current folder, where a new one is easily made)
+                if let Some(parent) = current.parent().filter(|p| p.is_dir()) {
+                    dialog = dialog.set_directory(parent);
+                }
+                match dialog.blocking_pick_folder() {
+                    None => None,
+                    Some(path) => Some(path.into_path().map_err(|e| e.to_string())?),
+                }
+            }
+        };
+        let Some(folder) = chosen else {
+            return Ok(None);
+        };
+        location::choose(&data, &folder).map(|locations| Some(locations.location()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// New searches go to the app's own searches folder again (those of the folder chosen stay in History).
+#[tauri::command]
+async fn use_default_searches_folder(app: AppHandle) -> Result<location::Location, String> {
+    let data = data_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        location::use_default(&data).map(|locations| locations.location())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -627,11 +756,11 @@ fn answer_close(
 /// The flag of the packaged app's start test (CI: `native/scripts/start-test.sh`). The app starts as
 /// usual; once its page has loaded it prints one line of JSON, `{"page": <url>, "resources": <the
 /// resource folder the app uses>, "tauriResources": <Tauri's, or why there is none>, "tool":
-/// <tool_info>, "percolatorAdapter": <whether PercolatorAdapter is beside the tool>, "fileConverter": <whether
-/// FileConverter is beside it>, "dotnet": <whether the bundle has its .NET runtime beside bin/>, "thermoBridge":
-/// <whether it has the Thermo bridge's managed part in share/OpenMS>}` (or `"error"` in place of `"tool"`), and
-/// exits: 0, or 1 when the tool cannot be used (or has no PercolatorAdapter or FileConverter beside it). A page
-/// that has not loaded after [`SMOKE_TIMEOUT`] ends the app with 2. It reads nothing and writes nothing else.
+/// <tool_info>, "percolatorAdapter": <whether PercolatorAdapter is beside the tool>, "dotnet": <whether the bundle
+/// has its .NET runtime beside bin/>, "thermoBridge": <whether it has the Thermo bridge's managed part in
+/// share/OpenMS>}` (or `"error"` in place of `"tool"`), and exits: 0, or 1 when the tool cannot be used (or has no
+/// PercolatorAdapter beside it). A page that has not loaded after [`SMOKE_TIMEOUT`] ends the app with 2. It reads
+/// nothing and writes nothing else.
 pub const SMOKE_TEST: &str = "--smoke-test";
 const SMOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
@@ -640,20 +769,19 @@ fn smoke_report(app: &AppHandle, page: &str) -> (i32, String) {
     let tool = tool::resolve(resource_dir(app).as_deref()).and_then(|path| {
         let siblings = [
             tool::has_percolator_adapter(&path),
-            tool::file_converter(&path).is_some(),
             tool::bundled_dotnet(&path).is_some(),
             tool::bundled_thermo_bridge(&path).is_some(),
         ];
         Ok((tool::probe(&path)?, siblings))
     });
-    let (code, key, value, [adapter, converter, dotnet, bridge]) = match tool {
+    let (code, key, value, [adapter, dotnet, bridge]) = match tool {
         Ok((info, siblings)) => (
-            if siblings[0] && siblings[1] { 0 } else { 1 },
+            if siblings[0] { 0 } else { 1 },
             "tool",
             serde_json::to_value(info).unwrap_or_default(),
             siblings,
         ),
-        Err(e) => (1, "error", serde_json::Value::String(e), [false; 4]),
+        Err(e) => (1, "error", serde_json::Value::String(e), [false; 3]),
     };
     let resources = resource_dir(app).map(|dir| dir.to_string_lossy().into_owned());
     let tauri_resources = match app.path().resource_dir() {
@@ -666,7 +794,6 @@ fn smoke_report(app: &AppHandle, page: &str) -> (i32, String) {
         "tauriResources": tauri_resources,
         key: value,
         "percolatorAdapter": adapter,
-        "fileConverter": converter,
         "dotnet": dotnet,
         "thermoBridge": bridge,
     })
@@ -723,10 +850,16 @@ pub fn run() {
                     std::process::exit(2);
                 });
             }
-            // what interrupted searches left (no search runs yet); a failure to sweep is no failure to start
-            if let Ok(dir) = searches_dir(app.handle()) {
+            // what interrupted searches left, in every searches folder (no search runs yet); a failure to sweep is no
+            // failure to start
+            if let Ok(data) = data_dir(app.handle()) {
                 std::thread::spawn(move || {
-                    history::sweep(&dir, std::time::SystemTime::now(), history::SWEEP_GRACE);
+                    let locations = Locations::load(&data);
+                    let now = std::time::SystemTime::now();
+                    for root in locations.roots() {
+                        let own = locations.is_own(&root);
+                        history::sweep_in(&root, now, history::SWEEP_GRACE, own);
+                    }
                 });
             }
             Ok(())
@@ -755,6 +888,9 @@ pub fn run() {
             open_project_file,
             save_project_file,
             answer_close,
+            searches_location,
+            choose_searches_folder,
+            use_default_searches_folder,
             update_check_at_start,
             open_release_page
         ])

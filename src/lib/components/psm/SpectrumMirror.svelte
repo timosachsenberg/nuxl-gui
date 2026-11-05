@@ -27,6 +27,10 @@
   // come below it.
   // It is part of the SVG, so "Export spectrum (SVG)" has it too.
   //
+  // The precursor (`precursor`, the PSM's m/z and charge) is marked where it is on the m/z axis, whether a peak is there
+  // or not: a dashed line through the upper half, a triangle and "precursor 2+" at its top, which NuXL's labels keep
+  // clear of; the m/z axis reaches it. Hovering the triangle tells its m/z. It is part of the export.
+  //
   // The tools (`tool`, the PSM view's toolbar; psm/measure.ts, as in pyopenms-viewer and openms-viewer): with
   // "Measure", a click snaps to the nearest peak above the axis and marks it, the pointer then draws a dotted line to the
   // peak it would snap to with the live Δm/z, and a second click keeps the measurement (`marks`, through `onmarks`): an
@@ -77,6 +81,7 @@
     marks = NO_MARKS,
     onmarks = () => {},
     measure = null,
+    precursor = null,
     pending = $bindable(false),
   }: {
     mz: Float32Array
@@ -107,6 +112,8 @@
     onmarks?: (next: PsmMarks) => void
     /** What a Δm/z may be: the search's fragment tolerance, the masses, the charges (psm/measure.ts); null: the Δ alone. */
     measure?: DeltaContext | null
+    /** The PSM's precursor: its m/z (the spectrum's precursor m/z) and charge; null: not marked. */
+    precursor?: { mz: number; charge: number } | null
     /** Out: a measurement is half made or a label is being written (Esc cancels it). */
     pending?: boolean
   } = $props()
@@ -168,7 +175,9 @@
   }
 
   const bottomIons = $derived(bottom.kind === 'ions' ? bottom.ions : [])
-  const domain = $derived(mzDomain([mz, bottomIons.map((b) => b.mz)]))
+  /** The precursor's m/z, when it is known. */
+  const precursorMz = $derived(precursor && Number.isFinite(precursor.mz) && precursor.mz > 0 ? precursor.mz : null)
+  const domain = $derived(mzDomain([mz, bottomIons.map((b) => b.mz), precursorMz === null ? [] : [precursorMz]]))
   /** The right end of the m/z axis. */
   const xEnd = $derived(Math.max(M.left + 10, width - M.right))
   const x = $derived(scale(domain, [M.left, xEnd]))
@@ -199,6 +208,25 @@
     ),
   )
 
+  /**
+   * The precursor's mark: its x, its label ("precursor 2+") at the right of the triangle (at the left of it near the
+   * right end) and the box the label and triangle take, which NuXL's labels keep clear of.
+   */
+  const precursorMark = $derived.by(() => {
+    if (precursorMz === null || !precursor) return null
+    const at = x(precursorMz)
+    const text = precursor.charge > 0 ? `precursor ${precursor.charge}+` : 'precursor'
+    const w = textWidth(text, 10) * 1.1
+    const right = at + 7 + w <= width - M.right
+    const box = { x0: right ? at - 6 : at - 7 - w, x1: right ? at + 7 + w : at + 6, y0: plotTop - 3, y1: plotTop + 12 }
+    return { x: at, text, right, box }
+  })
+  const precursorDescription = $derived(
+    precursorMz === null || !precursor
+      ? ''
+      : ` A dashed line marks the precursor at m/z ${precursorMz.toFixed(4)}${precursor.charge > 0 ? ` (${precursor.charge}+)` : ''}.`,
+  )
+
   /** Where a peak's stick ends (clipped at 100 %). */
   const topOf = (p: PeakPoint) => upper(Math.min(1, p.intensity / ref))
   /** The baseline of a label right above a peak (above its clip mark, when clipped). */
@@ -221,7 +249,7 @@
         // the shifted ions of a cross-link stay apart where they crowd)
         return { x: x(g.mz), y: labelBase(g), width: textWidth(g.label, 11) * 1.1 + 12 }
       }),
-      { lineHeight, tries: 4, top: plotTop + 10, taken: user.map(boxOf) },
+      { lineHeight, tries: 4, top: plotTop + 10, taken: [...user.map(boxOf), ...(precursorMark ? [precursorMark.box] : [])] },
     )
     const out: { x: number; y: number; text: string; ions: string; key: number; mz: number; width: number }[] = []
     order.forEach((g, i) => {
@@ -500,7 +528,9 @@
     }
     if (px0 < M.left - 4 || px0 > width - M.right + 4 || py < plotTop - 4 || py > plotBottom) return void (tip = null)
     const at = domain[0] + ((px0 - M.left) / (width - M.left - M.right)) * (domain[1] - domain[0])
-    if (py <= mid) {
+    if (precursorMark && precursor && py <= plotTop + 12 && px0 >= precursorMark.box.x0 && px0 <= precursorMark.box.x1) {
+      tip = { x: precursorMark.x, y: py, lines: [`Precursor · m/z ${precursor.mz.toFixed(4)}${precursor.charge > 0 ? ` · ${precursor.charge}+` : ''}`] }
+    } else if (py <= mid) {
       const i = strongestNear(mz, intensity, at)
       if (i < 0) return void (tip = null)
       const g = groupOf.get(i)
@@ -557,13 +587,29 @@
       hover = null
     }}>
     <title id="{uid}-title">{title}</title>
-    <desc id="{uid}-desc">{description}{errorDescription}{marksDescription}</desc>
+    <desc id="{uid}-desc">{description}{precursorDescription}{errorDescription}{marksDescription}</desc>
 
     <!-- grid: hairlines at the m/z ticks, in the spectrum and in the error strip -->
     {#each xTicks as t (t)}
       <line x1={px(x(t))} x2={px(x(t))} y1={plotTop} y2={plotBottom} stroke="var(--plot-band)" stroke-width="1" />
       {#if errors}<line x1={px(x(t))} x2={px(x(t))} y1={errorTop} y2={errorBottom} stroke="var(--plot-band)" stroke-width="1" />{/if}
     {/each}
+
+    <!-- the precursor: a dashed line at its m/z through the upper half, a triangle and its label at the top (above the
+         peaks, which stop below them) -->
+    {#if precursorMark}
+      <g data-testid="precursor-mark" data-mz={precursorMz}>
+        <line x1={px(precursorMark.x)} x2={px(precursorMark.x)} y1={plotTop + 9} y2={mid} stroke={muted} stroke-width="1" stroke-dasharray="3 3" />
+        <path d="M{px(precursorMark.x - 4.5)} {plotTop + 2}h9l-4.5 6z" fill={ink} />
+        <text
+          x={px(precursorMark.right ? precursorMark.x + 7 : precursorMark.x - 7)}
+          y={plotTop + 9}
+          text-anchor={precursorMark.right ? 'start' : 'end'}
+          font-size="10"
+          fill={ink}
+          data-testid="precursor-label">{precursorMark.text}</text>
+      </g>
+    {/if}
 
     <!-- the peaks: unannotated light grey and thin, annotated in the colour of their kind -->
     {#each sticks as s (s.color)}

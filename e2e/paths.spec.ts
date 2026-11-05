@@ -3,8 +3,8 @@
 // with its message). The example's run and FASTA are copied into folders made for the spec; the app reads them where
 // they are. They are searched with the example's precursor tolerance, set by hand (lib.ts exampleSettings).
 // With the fake tools (NUXL_FAKE=1) also a Thermo .raw file and a Bruker timsTOF .d folder (stand-ins: lib.ts fakeRaw,
-// fakeTimsD; the fake OpenNuXL searches them as the example, the fake FileConverter writes the example's spectra as
-// their converted mzML), and what is refused of them: a .d without timsTOF data, a Waters .raw folder, a zipped .d.
+// fakeTimsD; the fake OpenNuXL searches them as the example and writes the example's QPX mz view as theirs, -out_qpx),
+// and what is refused of them: a .d without timsTOF data, a Waters .raw folder, a zipped .d.
 // Gated: runs only with NUXL_TOOL set (the app inherits it; NUXL_FAKE=1 sets it to the stand-in, e2e/run.sh).
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -166,7 +166,7 @@ describe('inputs by path', () => {
       }
     })
 
-    it('a .raw file and a .d folder are searched; their spectra are converted for the PSM view, nothing written beside them', async () => {
+    it('a .raw file and a .d folder are searched; the spectra of their PSMs are kept for the PSM view, nothing written beside them', async () => {
       const dir = join(work, 'Rohdaten mit Leerzeichen ä')
       const raw = fakeRaw(join(dir, 'Lauf 1.raw'))
       const tims = fakeTimsD(join(dir, 'Lauf 2.d'))
@@ -185,8 +185,8 @@ describe('inputs by path', () => {
       if (EXAMPLE_PSMS) expect(await countOf('psm-count')).toBe(2 * EXAMPLE_PSMS.psms)
       expect(await textOf('[data-testid="result-chip"]')).toContain('2 files')
 
-      // the shim's record: per input its converted spectra (outputs.json `spectra`), written by FileConverter with the
-      // reader of its kind, losslessly (no Numpress: the PSM view does not read it)
+      // the shim's record: per input the QPX mz view of its PSMs' spectra (outputs.json `mz`), which OpenNuXL wrote
+      // (-out_qpx) into nuxl/runs/ and the shim moved to the input's stem
       const folder = join(searchesDir(), id)
       const records = JSON.parse(readFileSync(join(folder, 'inputs.json'), 'utf8')) as { stem: string; name: string; path: string }[]
       expect(records.map((r) => [r.name, r.path])).toEqual([
@@ -196,20 +196,19 @@ describe('inputs by path', () => {
       for (const r of records) {
         expect(r.stem).not.toMatch(/\.(raw|d)$/i)
         const outputs = JSON.parse(readFileSync(join(folder, 'nuxl', `${r.stem}.outputs.json`), 'utf8'))
-        expect(outputs.spectra).toBe(`nuxl/${r.stem}.spectra.mzML`)
-        expect(readFileSync(join(folder, outputs.spectra), 'latin1')).toContain('<indexedmzML')
-        const argv = readFileSync(join(folder, 'nuxl', `${r.stem}.FileConverter.argv.txt`), 'utf8').split('\n')
-        expect(argv).toEqual(expect.arrayContaining(['-out_type', 'mzML', '-process_lowmemory', '-zstd_compression']))
-        expect(argv).not.toContain('-lossy_compression')
-        if (r.name.endsWith('.d')) expect(argv.join(' ')).toContain('-bruker:load_ms1 false')
-        else expect(argv.join(' ')).toContain('-RawToMzML:reader inprocess')
+        expect(outputs.mz).toBe(`nuxl/${r.stem}.mz.parquet`)
+        expect(outputs.spectra).toBeUndefined()
+        expect(readFileSync(join(folder, outputs.mz)).subarray(0, 4).toString()).toBe('PAR1')
+        const argv = readFileSync(join(folder, 'nuxl', `${r.stem}.argv.txt`), 'utf8').split('\n')
+        expect(argv[argv.indexOf('-out_qpx') + 1]).toBe(join(folder + '.partial', 'nuxl'))
       }
+      expect(existsSync(join(folder, 'nuxl', 'runs'))).toBe(false)
       // nothing was written next to the inputs, nor into the .d
       expect(readdirSync(dir).sort()).toEqual(['Lauf 1.raw', 'Lauf 2.d'])
       expect(readdirSync(tims).sort()).toEqual(['analysis.tdf', 'analysis.tdf_bin'])
       expect(searchFolders().partial).toEqual([])
 
-      // the PSM view reads the peaks from the converted spectra
+      // the PSM view reads the peaks from the mz view
       await openFirstPsm()
       await expect($('[data-testid="psm-crosslink"]')).toBeDisplayed()
       expect(await $$('[data-testid="peaks-missing-note"]')).toHaveLength(0)

@@ -456,7 +456,7 @@ describe('the PSM view', () => {
 
   it('keeps the options of the spectrum from one PSM to the next', () => {
     const view = resultsViewFor(result(1, 1))
-    expect(view.psmOptions).toEqual({ ions: ['b', 'y'], charges: null, losses: null, precursor: false })
+    expect(view.psmOptions).toEqual({ ions: ['b', 'y'], charges: null, losses: null, precursor: true })
     view.openPsm(1)
     view.psmOptions.ions = ['a', 'b', 'y']
     view.stepPsm(1)

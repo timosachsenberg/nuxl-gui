@@ -1,12 +1,12 @@
 # NuXL desktop
 
 A desktop app for protein–RNA and protein–DNA cross-link searches with **OpenNuXL** of OpenMS: [Tauri 2](https://tauri.app)
-around the OS webview, the native `OpenNuXL` tool (with `PercolatorAdapter` for the score recalibration, and
-`FileConverter` for the spectra of Thermo `.raw` and Bruker `.d` inputs) as the only native code, and the screens
-of ProSE desktop (same theme, shadcn-svelte components and colours). Design: `docs/design.md`.
+around the OS webview, the native `OpenNuXL` tool (with `PercolatorAdapter` for the score recalibration) as the only
+native code, and the screens of ProSE desktop (same theme, shadcn-svelte components and colours). Design:
+`docs/design.md`.
 
-The packages come from CI (`.github/workflows/desktop.yml`); they bundle OpenNuXL, PercolatorAdapter and FileConverter
-with their libraries and data, the cross-linking protocols (NuXL presets) among them, and the .NET runtime that
+The packages come from CI (`.github/workflows/desktop.yml`); they bundle OpenNuXL and PercolatorAdapter with their
+libraries and data, the cross-linking protocols (NuXL presets) among them, and the .NET runtime that
 reads Thermo `.raw` files (`native/README.md`). Everything runs on the
 computer. The app's only network connection is its new-version check: one request to GitHub at start (on by
 default) and one each time "Check for updates" is clicked ("Where the data is" says what it sends and how to turn
@@ -53,20 +53,29 @@ libGLESv2.so.2"). Install it with `sudo apt install libgles2` (Ubuntu, Debian) o
   protocol's adducts (`NuXL:length`, the longest nucleotide adduct) and the variable modifications. How much a
   typical search needs is not measured yet; the example takes very little.
 - Disk: each search keeps OpenNuXL's outputs (idXML of all PSMs and of the filtered cross-links and peptides, the TSV
-  reports; docs/design.md §2). The spectra of an mzML are not copied: the PSM view reads the peaks from the input
-  mzML when a PSM is opened. Of a `.raw` or `.d` input the search keeps its spectra as mzML
-  (`nuxl/<stem>.spectra.mzML`, MS2 only for a `.d`), which can take about as much disk as the input. How much disk
-  a search takes per thousand PSMs is not measured yet; History shows each search's
-  size.
+  reports; docs/design.md §2) and, for the PSM view, the spectra of its PSMs as OpenNuXL keeps them: a QPX mz view per
+  input (`nuxl/<stem>.mz.parquet`: the MS2 spectra of the PSMs only, the 100 most intense peaks per 100 m/z and every
+  annotated one; ProSE measured 2.8 MB per thousand PSMs of an Orbitrap HCD run for the same view), whatever the kind
+  of input. (Versions before 0.9 converted all spectra of a `.raw` or `.d` to mzML, about as large as the input.) How
+  much disk a NuXL search takes per thousand PSMs is not measured yet; History shows each search's size. For many or
+  large inputs, choose a searches folder on a drive with room before searching ("Where the data is").
 
 ## Where the data is
 
-- The searches (History): a folder per search in the app's data folder, `searches/<id>/`: OpenNuXL's outputs in
-  `nuxl/`, its log `nuxl.log`, the record `search.json`, `proteins.fasta` (the proteins of the result, so that the
-  search opens without its database) and links to the inputs. The app's data folder is
+- The searches (History): a folder per search, `<id>/`: OpenNuXL's outputs in `nuxl/`, its log `nuxl.log`, the
+  record `search.json`, `proteins.fasta` (the proteins of the result, so that the search opens without its database)
+  and links to the inputs. They are in the searches folder, which New search and History show under their title:
+  by default `searches/` in the app's data folder, which is
   - Linux: `~/.local/share/org.openms.nuxl.desktop/` (`$XDG_DATA_HOME`)
   - macOS: `~/Library/Application Support/org.openms.nuxl.desktop/`
-  - Windows: `%APPDATA%\org.openms.nuxl.desktop\`
+  - Windows: `%APPDATA%\org.openms.nuxl.desktop\` (on the system drive, C:)
+- **Another searches folder** (e.g. on a drive with more room, before searching many `.raw` files): "Change…" beside
+  the folder, in New search or History, and choose an empty folder (the dialog can make a new one) or one that holds
+  NuXL's searches only. The searches to come, and projects opened, go there; "Use the default folder" goes back. The
+  searches saved so far stay where they are, and History keeps listing them (with their size, and Delete to free the
+  space). To move them as well, close NuXL and move their folders (Show search folder) into the new folder: History
+  finds them there. NuXL keeps nothing but its searches in that folder, and never lists, deletes or cleans up
+  anything else in it.
 - The log of the last search that failed: `logs/last-failure.log` there (the error names it).
 - To get to a search's folder from the app: "Show search folder" (the last item of the result's Export menu, the
   folder button of a row of History, or Show beside the folder's path in the Overview) opens the system's file
@@ -87,8 +96,8 @@ libGLESv2.so.2"). Install it with `sudo apt install libgles2` (Ubuntu, Debian) o
   and PyMOL scripts of a protein's cross-linked sites ("Cross-linked sites on a 3D structure") download the
   AlphaFold DB model when they are run in ChimeraX or PyMOL, not in the app.
 - The spectra (mzML, `.raw`, `.d`) and FASTA files are read where they are: never copied, and nothing is left
-  beside them. After the search of a `.raw` or `.d` the app writes its spectra as mzML into the search's folder, for
-  the PSM view. (On Windows, OpenNuXL writes a debug table `<name>.ambiguous_masses.csv` beside an input searched
+  beside them. OpenNuXL keeps the spectra of each input's PSMs (their peaks filtered) in the search's folder, for the
+  PSM view. (On Windows, OpenNuXL writes a debug table `<name>.ambiguous_masses.csv` beside an input searched
   by its own path, e.g. `run.mzML.ambiguous_masses.csv`; the app removes it when the run ends, but leaves, and
   OpenNuXL overwrites, a file of that name that was there before.) Deleting a search in History removes its folder;
   uninstalling leaves the data folder, which can be deleted by hand.
@@ -100,9 +109,10 @@ holds the search's folder as the app keeps it: OpenNuXL's outputs (`nuxl/`), `se
 `inputs.json` with the files' names only. Left out are OpenNuXL's log (its command lines carry this computer's
 paths), the database copy with the contaminants and `database.json` (the path of a database searched without them).
 **OpenNuXL's outputs name folders of the computer that searched** (the input and database paths in the idXML), and
-the project carries them as they are: share it where that is fine. The spectra are not in a project, nor the mzML
-the app wrote of a `.raw` or `.d` (it would make most such projects too large): where the input mzML cannot be read,
-and for every `.raw` or `.d` input, the PSM view shows the peaks NuXL annotated, and says why. A project file holds at most 3 GB (larger searches are refused with a message; they stay in History).
+the project carries them as they are: share it where that is fine. The spectra of the PSMs go with it (the runs' mz
+views), so that its PSM view shows the observed peaks on another computer too. (Of a search of a version before 0.9 a
+project has no spectra: its PSM view shows the peaks NuXL annotated, and says why.) A project file holds at most 3 GB
+(larger searches are refused with a message; they stay in History).
 
 ## Cross-linked sites on a 3D structure
 
@@ -149,9 +159,8 @@ The library has not been tried in DIA-NN yet; `docs/library-open-questions.md` l
   `analysis.tdf_bin`, or the `.tsf` pair). Not taken: `.mzML.gz` and `.d.zip` (unpack them first), Waters `.raw`
   folders, `.d` folders of other vendors (Agilent, Waters) and mzPeak; convert those to mzML. On Windows a `.d`
   cannot be linked into the search folder: a `.d` whose name is too long, or whose results would clash with an
-  earlier `.d` of the same name, is refused with what to rename. If the spectra of a `.raw` or `.d` cannot be
-  converted after its search, the search still ends, and the PSM view shows the annotated peaks only (Overview says
-  so). PeptDeep and open search
+  earlier `.d` of the same name, is refused with what to rename. If OpenNuXL cannot keep the spectra of an input's
+  PSMs (its mz view), the search still ends, and the PSM view shows the annotated peaks only (Overview says so). PeptDeep and open search
   (ProSE desktop's) are not part of NuXL desktop, nor OpenNuXL's `optimize`, `RTpredict` and `pcrecalibration`
   filters and custom presets files (docs/design.md §6).
 - **Large results.** The page reads a search's PSM rows into memory. How large a result opens, and how fast, is not
@@ -204,8 +213,8 @@ in it; on a machine without that toolchain (no sysroot) it uses the host's (carg
 
 Without OpenNuXL, `NUXL_FAKE=1 e2e/run.sh` runs the specs that search against a stand-in (`e2e/fake/OpenNuXL`, i.e.
 `src-tauri/tests/fake-nuxl.sh`, which writes the example's outputs of `src/lib/results/fixtures/example` for every
-input; an input named `crash.mzML` fails as OpenNuXL does; the spectra of `.raw` and `.d` inputs are converted by
-the stand-in for FileConverter beside it, `e2e/fake/FileConverter`, the same script). Screenshots for `docs/screens` at device scale factor 2:
+input, with the example's QPX mz view of its PSMs' spectra for `-out_qpx`; an input named `crash.mzML` fails as
+OpenNuXL does, one named `qpxfail` writes no mz view). Screenshots for `docs/screens` at device scale factor 2:
 `GDK_SCALE=2 E2E_SCREEN=3000x2000x24 NUXL_FAKE=1 e2e/run.sh e2e/screens.shot.ts`; for them the fake writes
 `src/lib/results/fixtures/screens` instead (`FAKE_NUXL_RESULTS=screens`: OpenMS' OpenNuXL test 3 at 10 ppm, made by
 `node scripts/results-fixtures.mjs`).
@@ -215,9 +224,10 @@ PercolatorAdapter beside it (`src-tauri/resources/nuxl/bin/OpenNuXL`, or `<build
 an app of its own with its own data folder (`XDG_DATA_HOME`, made per run, removed at its end); port 4444 must be free
 (a leftover `tauri-driver` stops the run with a message). The shim's tests against the real tool
 (`cargo test --test real_nuxl`, gated by `NUXL_TOOL`) also search a Thermo `.raw` file and a Bruker `.d` folder when
-`NUXL_RAW_EXAMPLE` and `NUXL_D_EXAMPLE` name them (FileConverter beside the tool; `native/scripts/fetch-test-data.sh
+`NUXL_RAW_EXAMPLE` and `NUXL_D_EXAMPLE` name them, and check the mz view of each run (`native/scripts/fetch-test-data.sh
 <dir>` downloads the files CI uses). Debug builds read `NUXL_TEST_DIALOG_PATH` in place of the
-system's save and open dialogs (`e2e/app.sh` sets it), since WebDriver cannot reach a dialog. The large search
+system's save and open dialogs, and `NUXL_TEST_FOLDER_DIALOG_PATH` in place of the folder dialog of the searches folder
+(`e2e/app.sh` sets both), since WebDriver cannot reach a dialog. The large search
 (`e2e/big.spec.ts`) runs only with `NUXL_BIG=1` and the data of `NUXL_BIG_DIR`; the measurement of large results
 (`e2e/large.spec.ts`) only with `NUXL_LARGE_DIR` (both headers say how).
 

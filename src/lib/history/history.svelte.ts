@@ -33,6 +33,7 @@ import {
   recordOf,
   type HistoryBackend,
   type HistoryEntry,
+  type SearchesLocation,
 } from './history'
 
 /** What became of the save of a finished search. */
@@ -46,6 +47,8 @@ let backend: HistoryBackend = desktopBackend
 /** Uses another disk (the tests'). */
 export function useBackend(next: HistoryBackend): void {
   backend = next
+  currentLocation = null
+  locationProblem = null
 }
 
 let entries = $state.raw<HistoryEntry[]>([])
@@ -81,6 +84,73 @@ export function describeSaveFailure(error: unknown): string {
 
 /** The latest refresh: an older one that finishes later must not overwrite its list. */
 let refreshes = 0
+
+let currentLocation = $state.raw<SearchesLocation | null>(null)
+let locationProblem = $state<string | null>(null)
+let locationBusy = $state(false)
+
+/** Where new searches are saved, and the user's choice of it (New search, History). */
+export const searchesFolder = {
+  /** Where new searches go; null: not known (yet), or a disk without folders to choose. */
+  get location(): SearchesLocation | null {
+    return currentLocation
+  },
+  /** Why the folder could not be read or changed, or null. */
+  get problem(): string | null {
+    return locationProblem
+  },
+  /** The folder dialog is open, or the change is being made. */
+  get busy(): boolean {
+    return locationBusy
+  },
+}
+
+/**
+ * Reads where new searches go. One that cannot be read (the page without the shell) is not shown: the search itself
+ * says what is wrong with the folder.
+ */
+export async function refreshLocation(): Promise<void> {
+  try {
+    currentLocation = backend.location ? await backend.location() : null
+  } catch {
+    currentLocation = null
+  }
+}
+
+/** A change of the folder: made, then History read again (it lists the searches of every folder kept). */
+async function changeLocation(change: () => Promise<SearchesLocation | null>): Promise<boolean> {
+  locationProblem = null
+  locationBusy = true
+  try {
+    const next = await change()
+    if (next === null) return false
+    currentLocation = next
+    await refreshHistory()
+    return true
+  } catch (e) {
+    locationProblem = errorText(e)
+    return false
+  } finally {
+    locationBusy = false
+  }
+}
+
+/** The folder dialog, then new searches go to the folder chosen; whether it changed (false: cancelled or refused). */
+export function chooseLocation(): Promise<boolean> {
+  const choose = backend.chooseLocation
+  return choose ? changeLocation(() => choose()) : Promise.resolve(false)
+}
+
+/** New searches go to the app's own folder again. */
+export function useDefaultLocation(): Promise<boolean> {
+  const reset = backend.defaultLocation
+  return reset ? changeLocation(() => reset()) : Promise.resolve(false)
+}
+
+/** Forgets why the folder could not be changed. */
+export function dismissLocationProblem(): void {
+  locationProblem = null
+}
 
 /** Reads the list of saved searches. */
 export async function refreshHistory(): Promise<void> {
