@@ -188,6 +188,20 @@ describe('the example search', () => {
     const panel = $('[data-testid="protein-panel"]')
     await panel.waitForDisplayed({ timeout: 10000 })
     expect(await textOf('[data-testid="panel-xl"]')).toMatch(/^[1-9]\d* XL PSMs? · [1-9]\d* cross-linked sites?$/)
+
+    // the sites as a ChimeraX script (debug builds save to NUXL_TEST_DIALOG_PATH: e2e/app.sh). The example's
+    // accessions are not UniProt's, so the script fetches no model: the user opens a structure first
+    await jsClick(await panel.$('button*=Coverage'))
+    const chosen = join(dataHome(), 'chosen.nuxl')
+    rmSync(chosen, { force: true })
+    await jsClick(await $('[data-testid="structure-export"]').$('button*=ChimeraX script'))
+    await browser.waitUntil(async () => existsSync(chosen) && statSync(chosen).size > 0, { timeout: 10000, timeoutMsg: 'no ChimeraX script was written' })
+    const script = readFileSync(chosen, 'utf8')
+    expect(script).toMatch(/^# NuXL: the cross-linked residues of /)
+    expect(script).toContain('is not a UniProt accession')
+    expect(script).not.toContain('alphafold fetch')
+    expect(script).toMatch(/^label :\d+ text "\{0\.name\} \{0\.number\}: .+"$/m)
+    rmSync(chosen, { force: true })
   })
 
   it("Remove all and Start over empty the form, give back the preset's precursor tolerance, and can be undone", async () => {

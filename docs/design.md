@@ -210,6 +210,13 @@ spectra after its run (§3) ends that run's part of the bar: "Preparing the spec
   "Protein end", "Protein site" with the accession). A position the protein's sequence does not confirm (no sequence,
   or the peptide is not there: read.ts keeps what the search recorded) has a "?" ("12?"); none recorded: "–" (empty in
   the CSV). The protein panel and the PSM view’s header ("· Cas7 K137") count from 1 as well;
+- the protein panel's Coverage tab saves the protein's cross-linked sites (`crossLinkedSites`, with their best
+  localization score) as a ChimeraX `.cxc` or PyMOL `.pml` script (`structure.ts`, through `save_text`): a UniProt
+  accession (`sp|…|…`, `tr|…|…`, bare; not an isoform) makes it fetch the AlphaFold DB model (`alphafold fetch` in
+  ChimeraX; PyMOL asks the AlphaFold API for the model's file, else tries the files of the newest versions), anything
+  else leaves opening a structure to the user. The viewer downloads the model, never the app (§7 stays its one
+  connection). Labels start with the structure's residue so that another numbering shows; the PyMOL script checks
+  the residues too;
 - the peaks of a PSM's spectrum come from the input mzML (by its index, else by scanning a file of at most 256 MB),
   read through `read_search_file` by byte range; arrays uncompressed, zlib or zstd (plain, byte-shuffled,
   dictionary-encoded, as OpenMS develop writes them), not MS-Numpress; when the file cannot be read (moved, an imported project), the

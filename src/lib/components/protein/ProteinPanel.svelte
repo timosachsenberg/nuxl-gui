@@ -2,17 +2,20 @@
   // The panel of one protein, at the right of the Proteins table: its accession and name, the share of
   // its sequence that peptides cover, its cross-linked residues and cross-link PSMs, the strip of its
   // peptides with the modified and cross-linked sites, and the tabs Coverage (the sequence as a map, with
-  // the list of the cross-linked sites), Peptides (expanding to their PSMs) and PSMs. A labelled
-  // region, not a dialog: the table beside it stays usable. Escape closes it (Results handles the
-  // key, so that it works from the table as well); focus moves in when it opens and back to the
-  // protein's row when it closes (Results does both).
+  // the list of the cross-linked sites and their script for ChimeraX or PyMOL), Peptides (expanding to
+  // their PSMs) and PSMs. A labelled region, not a dialog: the table beside it stays usable. Escape
+  // closes it (Results handles the key, so that it works from the table as well); focus moves in when
+  // it opens and back to the protein's row when it closes (Results does both).
   import Marker from '$lib/components/results/Marker.svelte'
   import { Button } from '$lib/components/ui/button'
+  import { download } from '$lib/download'
   import * as Tabs from '$lib/components/ui/tabs'
   import { displaySettings } from '$lib/format/settings.svelte'
   import { adductLabel } from '$lib/format/peptide'
   import { formatCount, parseAccession, parseDescription } from '$lib/results/display'
+  import { exportName } from '$lib/results/exports'
   import { proteinDetail, siteLabel } from '$lib/results/protein'
+  import { structureFileStem, structureScript, uniprotAccession, type StructureViewer } from '$lib/results/structure'
   import type { ResultsView } from '$lib/results/view.svelte'
   import XIcon from '@lucide/svelte/icons/x'
   import CoverageMap from './CoverageMap.svelte'
@@ -53,6 +56,34 @@
   // the peptide that is open in the Peptides tab (a row of `tables.peptides`): the strip shows it. The
   // view keeps it, so that it is still open when the user comes back from a PSM
   const selectedSpans = $derived(detail.peptides.find((e) => e.peptide === view.panelPeptide)?.spans ?? [])
+
+  // the cross-linked sites as a script for ChimeraX or PyMOL (structure.ts); a failed save says why, for this protein
+  const viewerNames: Record<StructureViewer, string> = { chimerax: 'ChimeraX', pymol: 'PyMOL' }
+  const uniprot = $derived(uniprotAccession(pr.accession[protein]))
+  let structureError = $state<{ protein: number; message: string } | null>(null)
+  function structureTitle(viewer: StructureViewer): string {
+    const name = viewerNames[viewer]
+    return uniprot && !uniprot.isoform
+      ? `Saves a script for ${name} that opens the AlphaFold DB model of ${uniprot.id} (${name} downloads it from EBI) and colours and labels the cross-linked sites`
+      : `Saves a script for ${name} that colours and labels the cross-linked sites in a structure you open first (${uniprot ? `${uniprot.id} is an isoform` : 'the accession is not UniProt\'s'}, so it fetches no AlphaFold DB model)`
+  }
+  async function exportStructure(viewer: StructureViewer) {
+    structureError = null
+    const at = protein
+    const input = {
+      accession: pr.accession[protein],
+      description: pr.description[protein],
+      length: detail.length,
+      sites: detail.xlSites,
+      xlFdr: m.xlFdr,
+      result: exportName(view.result),
+    }
+    try {
+      await download(`${structureFileStem(input)}.${viewer === 'chimerax' ? 'cxc' : 'pml'}`, structureScript(viewer, input))
+    } catch (e) {
+      structureError = { protein: at, message: String((e as Error)?.message ?? e) }
+    }
+  }
 
   let heading = $state<HTMLElement | null>(null)
   /** Moves the keyboard focus into the panel (to its heading, which names the protein). */
@@ -143,6 +174,16 @@
                 <span class="text-muted-foreground">({site.adducts.map((a) => `${adductLabel(a.adduct) || 'no adduct'} ×${a.psms}`).join(', ')})</span></span
               >{#if i < detail.xlSites.length - 1}{', '}{/if}{/each}
           </p>
+          <div class="mt-2 flex flex-wrap items-center gap-1.5 text-xs" data-testid="structure-export">
+            <span class="text-muted-foreground">On a 3D structure:</span>
+            {#each ['chimerax', 'pymol'] as const as viewer (viewer)}
+              <Button variant="outline" size="sm" class="h-6 px-2 text-xs" title={structureTitle(viewer)} onclick={() => exportStructure(viewer)}
+                >{viewerNames[viewer]} script</Button>
+            {/each}
+            {#if structureError?.protein === protein}
+              <span class="text-destructive" role="alert">{structureError.message}</span>
+            {/if}
+          </div>
         {:else if detail.xlPsms > 0}
           <p class="mt-3 text-xs text-muted-foreground" data-testid="xl-site-list">
             None of the cross-link PSMs of this protein is localized, so there are no cross-linked sites to mark.
