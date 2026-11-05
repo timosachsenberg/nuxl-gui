@@ -6,6 +6,7 @@
 // The peptide counts ("psms", "foundIn", "sample:<n>") depend on the cutoff of the Peptides table
 // (see `peptideCounts`): the getters get the counts to read as their third argument.
 
+import { MARK_NAMES, peptideMarks } from './curation'
 import { parseAccession, parseDescription } from './display'
 import { baseName, type Level, type PeptideCounts, type ResultModel } from './model'
 import { firstOccurrence, occurrences, peptideSite, positionText, proteinSites, psmSite, rangeSortKey, siteSortKey, siteText } from './positions'
@@ -109,6 +110,9 @@ const peptides: Record<string, ColumnDef> = {
   crossLink: num('Cross-link', (m, k) => m.tables.peptides.isXL[k]),
   // where it is in its proteins; the cross-linked residue: where its sequence has the adduct
   ...positionColumns((_, k) => k, peptideSite),
+  // its PSMs that the user accepted, rejected (curation.ts; all its PSMs, whatever the cutoffs)
+  acceptedPsms: num('Accepted PSMs', (m, k) => peptideMarks(m).accepted[k]),
+  rejectedPsms: num('Rejected PSMs', (m, k) => peptideMarks(m).rejected[k]),
 }
 
 const psms: Record<string, ColumnDef> = {
@@ -150,6 +154,9 @@ const psms: Record<string, ColumnDef> = {
   fdrGroup: str('FDR group', (m, i) => m.tables.psms.xl.fdrGroup[i]),
   // where its peptide is in the proteins, and the cross-linked residue there (localized cross-links only)
   ...positionColumns((m, i) => m.tables.psms.peptide[i], psmSite),
+  // the user's mark (curation.ts): sorts accepted, rejected, then the PSMs without a mark; prints its name
+  curation: label('Curation', (m, i) => m.curation[i] || NaN, (m, i) => MARK_NAMES[m.curation[i]] ?? ''),
+  curationNote: str('Curation note', (m, i) => m.curationNotes.get(i) ?? ''),
 }
 
 /** The cross-linked residue of PSM `i` with its 1-based position ('K9'); '' when not localized. */

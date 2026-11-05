@@ -34,7 +34,8 @@
 //!   regular files of the folder, for a project file), `save_project_file(searchId, name)` (a save dialog, then the search's project zip written there
 //!   entry by entry: `project`; events `project://progress` `{ searchId, written, total }`),
 //!   `open_project_file()` (the open dialog, then the bytes of the file chosen; empty if
-//!   cancelled) and `history_import(body)` (the entries of a project in a fresh folder -> the new id). At
+//!   cancelled) and `history_import(body)` (the entries of a project in a fresh folder -> the new id),
+//!   `save_curation(searchId, curation)` (the user's marks of the PSMs: the folder's `curation.json`). At
 //!   startup the partial folders of interrupted searches are swept (`history::sweep`).
 //!
 //! - the new-version check (`update`): `update_check_at_start()` -> whether the automatic check at start may run
@@ -420,6 +421,14 @@ async fn history_save_proteins(
 }
 
 #[tauri::command]
+async fn save_curation(app: AppHandle, search_id: String, curation: String) -> Result<(), String> {
+    on_searches(&app, move |dir| {
+        history::save_curation(&dir, &search_id, &curation)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn history_rename(app: AppHandle, search_id: String, name: String) -> Result<(), String> {
     on_searches(&app, move |dir| history::rename(&dir, &search_id, &name)).await
 }
@@ -742,6 +751,7 @@ pub fn run() {
             show_search_folder,
             history_files,
             history_import,
+            save_curation,
             open_project_file,
             save_project_file,
             answer_close,

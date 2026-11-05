@@ -43,7 +43,11 @@
   const m = $derived(view.model)
   const pr = $derived(m.tables.proteins)
   const fixedMods = $derived(view.result.settings.fixedMods)
-  const detail = $derived(proteinDetail(m, protein, fixedMods))
+  // (its cross-linked sites count the curated PSMs: read with the count of changes of the marks)
+  const detail = $derived.by(() => {
+    void view.curationVersion
+    return proteinDetail(m, protein, fixedMods)
+  })
   const accession = $derived(parseAccession(pr.accession[protein]))
   const description = $derived(parseDescription(pr.description[protein]))
   /** The line above the heading: accession (unless the heading is it, without a description), entry name, length. */
@@ -171,7 +175,11 @@
             <span class="font-medium">Cross-linked sites:</span>
             {#each detail.xlSites as site, i (site.position)}<span class="whitespace-nowrap"
                 ><span class="font-mono font-medium text-violet-800 dark:text-violet-300">{siteLabel(site)}</span>
-                <span class="text-muted-foreground">({site.adducts.map((a) => `${adductLabel(a.adduct) || 'no adduct'} ×${a.psms}`).join(', ')})</span></span
+                <span class="text-muted-foreground">({site.adducts.map((a) => `${adductLabel(a.adduct) || 'no adduct'} ×${a.psms}`).join(', ')}{#if site.accepted > 0}<span
+                      class="text-emerald-700 dark:text-emerald-400"
+                      title="{site.accepted} of its PSMs accepted">{' '}✓{site.accepted}</span
+                    >{/if}{#if site.rejected > 0}<span class="text-destructive" title="{site.rejected} of its PSMs rejected">{' '}✗{site.rejected}</span
+                    >{/if})</span></span
               >{#if i < detail.xlSites.length - 1}{', '}{/if}{/each}
           </p>
           <div class="mt-2 flex flex-wrap items-center gap-1.5 text-xs" data-testid="structure-export">

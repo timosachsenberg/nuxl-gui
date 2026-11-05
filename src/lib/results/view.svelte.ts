@@ -3,12 +3,14 @@
 // rows of a level are derived from these: the table cells, the sort order and the CSV all read the
 // same filter state (the same cutoffs: one for the peptide PSMs, one for the cross-links). Kept outside the view, so that it survives a visit to New search.
 
+import { curationStoreFor } from '../desktop'
 import { formatPercent, formatQ } from '../format/fdr'
 import type { PsmOptionState } from '../psm/psm'
 import type { PsmMarks } from '../psm/measure'
 import type { OpenResult } from '../search/session.svelte'
 import { columnDef } from './columns'
-import { toCsv } from './csv'
+import { toCsv, toTsv } from './csv'
+import { cleanNote, curationChanged, NONE, readCuration, writeCuration, type CuratedPsm, type Mark } from './curation'
 import { levelTotal } from './figures'
 import { applyFilters, initialFilters, sortRows, type FilterState } from './filters'
 import { buildModel, peptideCounts, type Level, type ResultModel } from './model'
@@ -39,6 +41,12 @@ const defaultSort: Record<Level, SortState> = {
   psms: { key: 'qValue', dir: 'asc' },
 }
 
+/** The sort keys of the curation columns: they read the marks and notes, which change in place. */
+const curationKeys = new Set(['curation', 'curationNote', 'acceptedPsms', 'rejectedPsms'])
+
+/** What "Mark shown" last did, for its Undo: the PSM rows and the marks they had before. */
+export type BulkCuration = { rows: Uint32Array; before: Uint8Array; mark: Mark }
+
 export class LevelState {
   readonly level: Level
   readonly #view: ResultsView
@@ -57,7 +65,11 @@ export class LevelState {
   }
 
   /** The rows that pass the filters, in table order. */
-  readonly kept = $derived.by(() => applyFilters(this.#view.model, this.level, this.filters))
+  readonly kept = $derived.by(() => {
+    // (the curation filter reads the marks, which change in place)
+    if (this.level !== 'proteins' && this.filters.curation !== 'any') void this.#view.curationVersion
+    return applyFilters(this.#view.model, this.level, this.filters)
+  })
 
   /** The sort that applies: the chosen one, or the default if its column is gone (e.g. a sample column). */
   readonly effectiveSort = $derived.by(() =>
@@ -65,9 +77,10 @@ export class LevelState {
   )
 
   /** The rows of the table: filtered and sorted. */
-  readonly rows = $derived.by(() =>
-    sortRows(this.#view.model, this.level, this.kept, this.effectiveSort.key, this.effectiveSort.dir, this.filters),
-  )
+  readonly rows = $derived.by(() => {
+    if (curationKeys.has(this.effectiveSort.key)) void this.#view.curationVersion
+    return sortRows(this.#view.model, this.level, this.kept, this.effectiveSort.key, this.effectiveSort.dir, this.filters)
+  })
 
   /** The peptide counts the cells show (at the peptide cutoff on the Peptides level). */
   readonly counts = $derived.by(() =>
@@ -118,7 +131,18 @@ export class LevelState {
   csv(): string {
     return toCsv(this.#view.model, this.level, this.rows, csvColumns(this.visible), this.filters)
   }
+
+  /** The same as a tab-separated table (`toTsv`). */
+  tsv(): string {
+    return toTsv(this.#view.model, this.level, this.rows, csvColumns(this.visible), this.filters)
+  }
 }
+
+/**
+ * Where the curation of a result is kept (its search folder's `curation.json`, desktop.ts): `load` resolves with
+ * the file's text, or null when there is none; `save` writes it.
+ */
+export type CurationStore = { load(): Promise<string | null>; save(text: string): Promise<void> }
 
 export class ResultsView {
   readonly result: OpenResult
@@ -154,6 +178,26 @@ export class ResultsView {
   spectrumExporter: (() => void) | null = null
 
   /**
+   * The curation marks per PSM row (curation.ts; the model's `curation` is this array), changed in place by
+   * `curate`; `curationVersion` counts the changes, so that what shows the marks reads it.
+   */
+  readonly curation: Uint8Array
+  /** The user's notes by PSM row (the model's `curationNotes`), changed in place by `setNote`. */
+  readonly curationNotes = new Map<number, string>()
+  curationVersion = $state(0)
+  /** The last "Mark shown" (`curateMany`), which `undoCurateMany` takes back; null: none. */
+  lastBulk = $state.raw<BulkCuration | null>(null)
+  /** Why the marks could not be read or saved, or null. */
+  curationError = $state<string | null>(null)
+  readonly #store: CurationStore | null
+  /** The curated PSMs of the file that are none of this result, written back as they were. */
+  #unmatched: CuratedPsm[] = []
+  /** The marks were read (or there were none to read): saving before would lose them. */
+  #loaded = false
+  #saving = false
+  #dirty = false
+
+  /**
    * The PSMs' scores are Percolator's: every file was rescored (the reader's `nuxl.percolatorScores`). With only
    * some rescored, the reader gives every PSM NuXL's score, so that one column has one scale.
    */
@@ -172,6 +216,8 @@ export class ResultsView {
       xlFdr: this.xlFdr,
       proteinFdr: this.result.proteinFdr,
       rescored: this.rescored,
+      curation: this.curation,
+      curationNotes: this.curationNotes,
     }),
   )
 
@@ -179,8 +225,10 @@ export class ResultsView {
   readonly peptides: LevelState
   readonly psms: LevelState
 
-  constructor(result: OpenResult) {
+  constructor(result: OpenResult, store: CurationStore | null = null) {
     this.result = result
+    this.curation = new Uint8Array(result.outcome.tables.psms.count)
+    this.#store = store
     const summary = result.outcome.summary
     this.rescored =
       result.outcome.nuxl?.percolatorScores ?? (summary.files.length > 0 && summary.files.every((f) => f.percolator?.applied === true))
@@ -189,6 +237,125 @@ export class ResultsView {
     this.proteins = new LevelState(this, 'proteins')
     this.peptides = new LevelState(this, 'peptides')
     this.psms = new LevelState(this, 'psms')
+    this.loaded = store ? this.#load(store) : Promise.resolve()
+    if (!store) this.#loaded = true
+  }
+
+  /** Resolves when the saved marks have been read (at once without a store). */
+  readonly loaded: Promise<void>
+
+  async #load(store: CurationStore): Promise<void> {
+    try {
+      const text = await store.load()
+      if (text !== null) {
+        const { marks, notes, unmatched } = readCuration(this.model, text)
+        // what the user marked meanwhile wins
+        for (let i = 0; i < marks.length; i++) if (this.curation[i] === NONE) this.curation[i] = marks[i]
+        for (const [i, note] of notes) if (!this.curationNotes.has(i)) this.curationNotes.set(i, note)
+        this.#unmatched = unmatched
+        this.#changed()
+      }
+      this.#loaded = true
+      if (this.#dirty) void this.#save()
+    } catch (e) {
+      // (not loaded: the marks of this session are not saved, so that they do not overwrite the file)
+      this.curationError = `The curation could not be read: ${String((e as Error)?.message ?? e)}`
+    }
+  }
+
+  /** Writes the marks; one write at a time, the last marks last. */
+  async #save(): Promise<void> {
+    this.#dirty = true
+    if (!this.#store || !this.#loaded || this.#saving) return
+    this.#saving = true
+    try {
+      while (this.#dirty) {
+        this.#dirty = false
+        await this.#store.save(writeCuration(this.model, this.curation, this.curationNotes, this.#unmatched))
+      }
+      this.curationError = null
+    } catch (e) {
+      this.curationError = `The curation could not be saved: ${String((e as Error)?.message ?? e)}`
+    } finally {
+      this.#saving = false
+    }
+  }
+
+  /**
+   * Marks PSM `i` (accepted, rejected, or NONE to take the mark away) and saves the marks. When it is the open PSM
+   * and the PSM table's filters now hide it (e.g. "Not curated"), the view goes on to the PSM after it (or before).
+   */
+  curate(i: number, mark: Mark): void {
+    if (!this.#isPsm(i) || this.curation[i] === mark) return
+    const open = this.psm?.row === i ? this.psmNeighbours : null
+    this.curation[i] = mark
+    this.#changed()
+    void this.#save()
+    if (open && this.psm && !this.psms.kept.includes(i)) {
+      const target = open.next ?? open.prev
+      if (target !== null) {
+        this.psms.selected = target
+        this.psm = { row: target, origin: this.psm.origin }
+      }
+    }
+  }
+
+  /** The marks or notes changed: what shows them reads them again. */
+  #changed(): void {
+    curationChanged()
+    this.curationVersion++
+  }
+
+  /** Sets the note of PSM `i` (`cleanNote`; empty: no note) and saves it. */
+  setNote(i: number, text: string): void {
+    if (!this.#isPsm(i)) return
+    const note = cleanNote(text)
+    if ((this.curationNotes.get(i) ?? '') === note) return
+    if (note) this.curationNotes.set(i, note)
+    else this.curationNotes.delete(i)
+    this.#changed()
+    void this.#save()
+  }
+
+  /**
+   * "Mark shown": gives the PSM rows `rows` (the PSM table as filtered) the mark `mark` (NONE: takes their marks away)
+   * and saves once. `undoCurateMany` gives them back the marks they had.
+   */
+  curateMany(rows: Uint32Array, mark: Mark): void {
+    const valid = rows.filter((i) => this.#isPsm(i))
+    if (valid.length === 0) return
+    const before = Uint8Array.from(valid, (i) => this.curation[i])
+    for (const i of valid) this.curation[i] = mark
+    this.lastBulk = { rows: valid, before, mark }
+    this.#changed()
+    void this.#save()
+  }
+
+  /** Takes back the last "Mark shown". */
+  undoCurateMany(): void {
+    const bulk = this.lastBulk
+    if (!bulk) return
+    bulk.rows.forEach((i, j) => (this.curation[i] = bulk.before[j]))
+    this.lastBulk = null
+    this.#changed()
+    void this.#save()
+  }
+
+  /** The PSMs with a mark or a note. */
+  curatedCount(): number {
+    void this.curationVersion
+    let n = 0
+    for (let i = 0; i < this.curation.length; i++) if (this.curation[i] !== NONE || this.curationNotes.has(i)) n++
+    return n
+  }
+
+  /** The PSM rows with a mark or a note, in the PSM table's order (whatever its filters). */
+  curatedRows(): Uint32Array {
+    void this.curationVersion
+    const rows: number[] = []
+    for (let i = 0; i < this.curation.length; i++) if (this.curation[i] !== NONE || this.curationNotes.has(i)) rows.push(i)
+    const sort = this.psms.effectiveSort
+    return sortRows(this.model, 'psms', Uint32Array.from(rows), sort.key, sort.dir, this.psms.filters)
   }
 
   /**
@@ -394,15 +561,15 @@ export function releaseResultsView(): void {
 }
 
 /** The view state of `result`: the same object while the same result stays open, a new one for another result. */
-export function resultsViewFor(result: OpenResult): ResultsView {
+export function resultsViewFor(result: OpenResult, store: CurationStore | null = curationStoreFor(result.id)): ResultsView {
   if (cached?.view.result !== result) {
     cached?.destroy()
     let view: ResultsView | undefined
     const destroy = $effect.root(() => {
-      view = new ResultsView(result)
+      view = new ResultsView(result, store)
     })
     // (the server build of Svelte, which the unit tests run on, does not run effect roots)
-    cached = { view: view ?? new ResultsView(result), destroy }
+    cached = { view: view ?? new ResultsView(result, store), destroy }
   }
   return cached.view
 }

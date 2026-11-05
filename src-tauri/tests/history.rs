@@ -6,8 +6,8 @@ mod common;
 use common::{set_folder_modified, TempDir};
 use nuxl_desktop_lib::history::{
     delete, finish_partial, folder_files, frame, import, list, lock_partial, read_chosen_project,
-    remove_partial, rename, save_proteins, save_record, search_folder, show_folder, sweep,
-    with_backoff, BACKOFF_TRIES, LOCK_FILE, NOT_A_SEARCH, NO_RECORD, SWEEP_GRACE,
+    remove_partial, rename, save_curation, save_proteins, save_record, search_folder, show_folder,
+    sweep, with_backoff, BACKOFF_TRIES, LOCK_FILE, NOT_A_SEARCH, NO_RECORD, SWEEP_GRACE,
 };
 use std::fs;
 use std::io;
@@ -886,4 +886,41 @@ fn the_size_of_a_search_of_vendor_inputs_counts_its_converted_spectra_and_not_it
         .map(|f| f.name)
         .collect();
     assert_eq!(names, ["nuxl/1__a.idXML", "nuxl/1__a.spectra.mzML"]);
+}
+
+#[test]
+fn curation_is_saved_whole_to_a_saved_search() {
+    let (_tmp, dir) = searches();
+    fs::create_dir_all(dir.join("1-0")).unwrap();
+    let curation = r#"{"schema":1,"psms":[{"file":"a.mzML","spectrum":"scan=1","peptide":"PEPTIDE","charge":2,"mark":"accepted"}]}"#;
+    // only to a saved search
+    assert!(save_curation(&dir, "1-0", curation)
+        .unwrap_err()
+        .contains("not saved"));
+    saved(&dir, "1-0", "first");
+    save_curation(&dir, "1-0", curation).unwrap();
+    assert_eq!(
+        json(&dir.join("1-0/curation.json"))["psms"][0]["mark"],
+        "accepted"
+    );
+    // replaced as a whole
+    save_curation(&dir, "1-0", r#"{"schema":1,"psms":[]}"#).unwrap();
+    assert_eq!(
+        json(&dir.join("1-0/curation.json"))["psms"],
+        serde_json::json!([])
+    );
+    // what is not the format is refused, and the file stays
+    for bad in ["", "[]", "{\"psms\":[]}", "{\"schema\":1,\"psms\":{}}"] {
+        assert!(save_curation(&dir, "1-0", bad).is_err(), "{bad:?}");
+    }
+    assert_eq!(json(&dir.join("1-0/curation.json"))["schema"], 1);
+    // no search of that id, or none at all
+    assert!(save_curation(&dir, "2-0", curation).is_err());
+    assert!(save_curation(&dir, "../x", curation).is_err());
+    // no leftovers of the atomic write; a project carries it
+    assert!(!dir.join("1-0/curation.json.tmp").exists());
+    assert!(folder_files(&dir, "1-0")
+        .unwrap()
+        .iter()
+        .any(|f| f.name == "curation.json"));
 }

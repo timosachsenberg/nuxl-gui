@@ -56,6 +56,10 @@ const MAX_DEPTH: usize = 8;
 const RECORD: &str = "search.json";
 /// The proteins of a saved search (see [`save_proteins`]).
 const PROTEINS: &str = "proteins.fasta";
+/// The user's curation of the PSMs of a saved search (see [`save_curation`]).
+pub const CURATION: &str = "curation.json";
+/// The largest `curation.json` (a few hundred bytes per curated PSM).
+const MAX_CURATION: usize = 64 << 20;
 /// The lock file of a partial folder.
 pub const LOCK_FILE: &str = ".lock";
 /// A lock file younger than this is not taken for a stale one (its owner may not have locked it yet).
@@ -371,6 +375,33 @@ pub fn save_proteins(dir: &Path, id: &str, proteins_fasta: &str) -> Result<(), S
         )),
         _ => Ok(()),
     }
+}
+
+/// The user's curation of the PSMs of the saved search `id` (the results view's marks, `src/lib/results/curation.ts`):
+/// its `curation.json`, replaced as a whole. It has to be a JSON object with the `schema` of that format (the page
+/// writes and reads what it holds) and at most [`MAX_CURATION`] bytes; the search has to have its record.
+pub fn save_curation(dir: &Path, id: &str, curation_json: &str) -> Result<(), String> {
+    let folder = existing_folder(dir, id)?;
+    if fs::symlink_metadata(folder.join(RECORD)).is_err() {
+        return Err(format!(
+            "The search {id} is not saved (it has no {RECORD})."
+        ));
+    }
+    if curation_json.len() > MAX_CURATION {
+        return Err(format!(
+            "The curation is too large ({} bytes; at most {MAX_CURATION}).",
+            curation_json.len()
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_str(curation_json)
+        .map_err(|e| format!("The curation is not JSON ({e})."))?;
+    if !value.get("schema").is_some_and(serde_json::Value::is_u64)
+        || !value.get("psms").is_some_and(serde_json::Value::is_array)
+    {
+        return Err("The curation is not of the app's format.".to_string());
+    }
+    write_atomically(&folder.join(CURATION), curation_json.as_bytes())
+        .map_err(|e| format!("{CURATION} cannot be written ({e})."))
 }
 
 /// A name for a search: not empty, one line, not longer than [`MAX_NAME`] characters.

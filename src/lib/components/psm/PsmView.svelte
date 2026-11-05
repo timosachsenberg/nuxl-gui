@@ -18,6 +18,9 @@
   // are kept per PSM), cleared with "Clear Δ" and "Clear labels". M and L switch the tools (as openms-viewer's Ctrl+M
   // and Ctrl+L), unless what has the focus takes the keys. Esc first cancels what is half done (a measurement, a label
   // being written) or the selection, then leaves the tool, then closes the view; Delete removes what is selected.
+  // "Accept" and "Reject" (keys A and R; again: the mark goes) curate the PSM (results/curation.ts, view.curate): the
+  // PSM table shows and filters the marks, and a PSM that the table's curation filter now hides gives way to the next.
+  // The note under the header (optional, one line) is saved with the marks when the field loses the focus or on Enter.
   import { signedNumber } from '$lib/format/number'
   import { errorText } from '$lib/format/error'
   import { Button, buttonVariants } from '$lib/components/ui/button'
@@ -29,6 +32,7 @@
   import { nuxlPeptide, nuxlTheoreticalMz, searchChemistry, type NuxlChemistry, type NuxlPeptide } from '$lib/psm/nuxl-theoretical'
   import { fragmentTolerance, modificationList, spectrumPeaks, svgFileName, ION_TYPES, type IonType } from '$lib/psm/psm'
   import { exportSpectrumSvg } from '$lib/psm/svg-export'
+  import { ACCEPTED, MAX_NOTE, NONE, REJECTED } from '$lib/results/curation'
   import { baseName, passesPeptideQ } from '$lib/results/model'
   import { formatQValue, parseAccession, parseDescription, spectrumName as nameOfSpectrum } from '$lib/results/display'
   import type { LoadedSpectra, PsmSpectra } from '$lib/results/read'
@@ -92,6 +96,20 @@
   const pt = $derived(m.tables.peptides)
   const xl = $derived(ps.xl)
   const row = $derived(view.psm?.row ?? 0)
+  /** The open PSM's curation mark (the marks change in place: read with their count of changes). */
+  const mark = $derived.by(() => {
+    void view.curationVersion
+    return view.curation[row]
+  })
+  /** The open PSM's note ('' none). */
+  const note = $derived.by(() => {
+    void view.curationVersion
+    return view.curationNotes.get(row) ?? ''
+  })
+  /** Marks the open PSM, or takes the mark away when it has it. */
+  function curate(next: typeof ACCEPTED | typeof REJECTED) {
+    view.curate(row, mark === next ? NONE : next)
+  }
   const k = $derived(ps.peptide[row])
   const charge = $derived(ps.charge[row])
   const sequence = $derived(pt.sequence[k])
@@ -446,6 +464,10 @@
       if (ownsKeys(event.target)) return
       event.preventDefault()
       void step(event.key === 'ArrowLeft' ? -1 : 1)
+    } else if (event.key === 'a' || event.key === 'A' || event.key === 'r' || event.key === 'R') {
+      if (ownsKeys(event.target) || event.repeat) return
+      event.preventDefault()
+      curate(event.key.toLowerCase() === 'a' ? ACCEPTED : REJECTED)
     } else if (event.key === 'm' || event.key === 'M' || event.key === 'l' || event.key === 'L') {
       if (ownsKeys(event.target) || !peaks) return
       event.preventDefault()
@@ -506,6 +528,27 @@
       <p class="sr-only" aria-live="polite">PSM {peptideCrumb}, {charge}+, {spectrumName} ({fileName})</p>
     </div>
     <div class="ml-auto flex flex-none items-center gap-1.5">
+      {#if view.curationError}
+        <span class="max-w-60 truncate text-xs text-destructive" role="alert" title={view.curationError}>{view.curationError}</span>
+      {/if}
+      <div class="flex items-center gap-1" role="group" aria-label="Curation" data-testid="psm-curation">
+        <Button
+          variant="outline"
+          size="sm"
+          class={cn('h-7 px-2.5 text-xs', mark === ACCEPTED && 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700 hover:text-white')}
+          aria-pressed={mark === ACCEPTED}
+          aria-keyshortcuts="A"
+          title={mark === ACCEPTED ? 'Accepted. Take the mark away (A)' : 'Accept the PSM (A)'}
+          onclick={() => curate(ACCEPTED)}>✓ Accept</Button>
+        <Button
+          variant="outline"
+          size="sm"
+          class={cn('h-7 px-2.5 text-xs', mark === REJECTED && 'border-destructive bg-destructive text-white hover:bg-destructive/90 hover:text-white')}
+          aria-pressed={mark === REJECTED}
+          aria-keyshortcuts="R"
+          title={mark === REJECTED ? 'Rejected. Take the mark away (R)' : 'Reject the PSM (R)'}
+          onclick={() => curate(REJECTED)}>✗ Reject</Button>
+      </div>
       <Button
         bind:ref={prevButton}
         variant="outline"
@@ -545,6 +588,20 @@
       {headerLine}{#if ps.decoy[row]}<Marker text="decoy" />{/if}
     </p>
   </div>
+  {#key row}
+    <label class="mb-2 flex max-w-xl items-center gap-2 text-xs" data-testid="psm-note">
+      <span class="text-muted-foreground">Note</span>
+      <input
+        type="text"
+        class="h-7 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
+        placeholder="Optional, e.g. why you accepted or rejected the PSM"
+        maxlength={MAX_NOTE}
+        spellcheck="false"
+        value={note}
+        onchange={(e) => view.setNote(row, e.currentTarget.value)}
+        onkeydown={(e) => e.key === 'Enter' && e.currentTarget.blur()} />
+    </label>
+  {/key}
   <!-- the cross-link: adduct, residue (the candidates of the localization marked), FDR group and q-value at its FDR -->
   <p class="mt-1 mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-muted-foreground tabular-nums" data-testid="psm-crosslink" title={crossLinkText}>
     <span class="sr-only">{crossLinkText}.</span>
