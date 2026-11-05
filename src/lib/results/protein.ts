@@ -5,6 +5,7 @@
 // The coverage is computed by `markCovered`, which `buildModel` uses for the Coverage column of the
 // table: the panel cannot disagree with it.
 
+import { ACCEPTED, REJECTED } from './curation'
 import { adductLabel, modTitle, peptideView, type ModInfo } from '../format/peptide'
 import { psmCutoff, psmPasses, type ResultModel } from './model'
 
@@ -218,6 +219,9 @@ export type CrossLinkedSite = {
   adducts: { adduct: string; psms: number }[]
   /** The best localization score of those PSMs (NuXL:best_localization_score, 0..1); NaN: none has one. */
   score: number
+  /** Of those PSMs, the ones the user accepted and rejected (`ResultModel.curation`). */
+  accepted: number
+  rejected: number
 }
 
 /** A site as the panel names it: "K123". */
@@ -263,7 +267,7 @@ export function crossLinkedSites(m: ResultModel, p: number): CrossLinkedSite[] {
   const ps = m.tables.psms
   const sequence = m.tables.proteins.sequence[p]
   const { offsets, peptide: members, ref } = m.protein.members
-  const sites = new Map<number, { residue: string; psms: number; adducts: Map<string, number>; score: number }>()
+  const sites = new Map<number, { residue: string; psms: number; adducts: Map<string, number>; score: number; accepted: number; rejected: number }>()
   for (let r = offsets[p]; r < offsets[p + 1]; r++) {
     const k = members[r]
     const rows = byPeptide.get(k)
@@ -275,8 +279,13 @@ export function crossLinkedSites(m: ResultModel, p: number): CrossLinkedSite[] {
       const position = start + at
       if (sequence.length > 0 && position >= sequence.length) continue
       let site = sites.get(position)
-      if (!site) sites.set(position, (site = { residue: sequence[position] ?? pt.sequence[k][at] ?? '?', psms: 0, adducts: new Map(), score: NaN }))
+      if (!site) {
+        site = { residue: sequence[position] ?? pt.sequence[k][at] ?? '?', psms: 0, adducts: new Map(), score: NaN, accepted: 0, rejected: 0 }
+        sites.set(position, site)
+      }
       site.psms++
+      if (m.curation[i] === ACCEPTED) site.accepted++
+      else if (m.curation[i] === REJECTED) site.rejected++
       const score = ps.xl.siteScore[i]
       if (score === score && !(score <= site.score)) site.score = score
       site.adducts.set(ps.xl.adduct[i], (site.adducts.get(ps.xl.adduct[i]) ?? 0) + 1)
@@ -292,6 +301,8 @@ export function crossLinkedSites(m: ResultModel, p: number): CrossLinkedSite[] {
         .map(([adduct, psms]) => ({ adduct, psms }))
         .sort((a, b) => b.psms - a.psms || (a.adduct < b.adduct ? -1 : a.adduct > b.adduct ? 1 : 0)),
       score: s.score,
+      accepted: s.accepted,
+      rejected: s.rejected,
     }))
 }
 

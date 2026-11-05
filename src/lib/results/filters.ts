@@ -3,7 +3,7 @@
 // copy of any such array. No row is ever turned into an object.
 
 import { columnDef } from './columns'
-import { passesCuration, type CurationFilter } from './curation'
+import { passesCuration, peptideMarks, peptidePassesCuration, type CurationFilter } from './curation'
 import { naturalKey, parseAccession, scanNumber } from './display'
 import { passesPeptideQ, passesQ, peptideCounts, psmPasses, qLimit, qLimits, type Level, type ResultModel } from './model'
 
@@ -42,7 +42,7 @@ export type FilterState = {
   proteinFilter?: number
   /** PSMs: only those of this peptide. */
   peptideFilter?: number
-  /** PSMs: by their curation mark (`ResultModel.curation`). */
+  /** PSMs: by their curation mark (`ResultModel.curation`); peptides: by the marks of their PSMs (curation.ts). */
   curation: CurationFilter
 }
 
@@ -245,6 +245,7 @@ export function applyFilters(m: ResultModel, level: Level, f: FilterState): Uint
     const limits = qLimits(m, f.maxQ, f.maxXlQ)
     const mask = peptideMask(m, f)
     const nucleotide = f.nucleotide
+    const marks = f.curation !== 'any' ? peptideMarks(m) : null
     for (let k = 0; k < pt.count; k++) {
       if (!mask[k] || (!f.showDecoys && pt.decoy[k])) continue
       const xl = pt.isXL[k] === 1
@@ -256,6 +257,7 @@ export function applyFilters(m: ResultModel, level: Level, f: FilterState): Uint
       )
         continue
       if (nucleotide && !m.peptide.nucleotides[k].split(',').includes(nucleotide)) continue
+      if (marks && !peptidePassesCuration(marks, k, f.curation)) continue
       out[kept++] = k
     }
     return out.slice(0, kept)

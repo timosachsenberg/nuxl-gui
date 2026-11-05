@@ -167,9 +167,9 @@ describe('ResultsView', () => {
     expect(Array.from(p.rows)).toEqual([0, 1]) // peptide 2's best PSM is at 0.005, peptide 3 is trypsin's
     const lines = csvLines(p.csv())
     expect(lines[0]).toBe(
-      'Peptide,Sequence,Adduct,Cross-link,Proteins,Protein start,Protein end,Protein site,PSMs,control 1,EGF 1,Found in,Best PSM q-value',
+      'Peptide,Sequence,Adduct,Cross-link,Proteins,Protein start,Protein end,Protein site,PSMs,control 1,EGF 1,Found in,Best PSM q-value,Accepted PSMs,Rejected PSMs',
     )
-    expect(lines[1]).toBe('M[Oxidation]KWVTF,MKWVTF,,0,sp|P02768|ALBU_HUMAN,1,6,,2,2,0,1,0.001')
+    expect(lines[1]).toBe('M[Oxidation]KWVTF,MKWVTF,,0,sp|P02768|ALBU_HUMAN,1,6,,2,2,0,1,0.001,0,0')
   })
 
   it('writes the visible columns only, and the rows of the filtered view', () => {
@@ -549,6 +549,52 @@ describe('ResultsView curation', () => {
     view.psms.filters.curation = 'any'
     view.curate(rows[1], REJECTED)
     expect(view.psm?.row).toBe(rows[1])
+  })
+})
+
+describe('ResultsView: notes and marking several', () => {
+  it('keeps a note per PSM, saves it, and reads it back', async () => {
+    const store = memoryStore()
+    const view = new ResultsView(result(1, 1), store)
+    await view.loaded
+    view.setNote(2, '  weak  ')
+    view.setNote(3, '')
+    await flush()
+    const saved = store.saved.at(-1)!
+    expect(JSON.parse(saved).psms.map((p: { note?: string; mark?: string }) => [p.note, p.mark])).toEqual([['weak', undefined]])
+    expect(view.curatedCount()).toBe(1)
+    expect(Array.from(view.curatedRows())).toEqual([2])
+    view.setNote(2, '')
+    expect(view.curatedCount()).toBe(0)
+
+    const again = new ResultsView(result(1, 1), memoryStore(saved))
+    await again.loaded
+    expect(again.curationNotes.get(2)).toBe('weak')
+    expect(again.model.curationNotes.get(2)).toBe('weak')
+  })
+
+  it('marks the PSMs shown at once, and takes it back', async () => {
+    const store = memoryStore()
+    const view = new ResultsView(result(1, 1), store)
+    await view.loaded
+    view.curate(0, REJECTED)
+    const shown = view.psms.rows
+    view.curateMany(shown, ACCEPTED)
+    expect(Array.from(shown).every((i) => view.curation[i] === ACCEPTED)).toBe(true)
+    expect(view.lastBulk?.rows.length).toBe(shown.length)
+    view.psms.filters.curation = 'accepted'
+    expect(view.psms.rows.length).toBe(shown.length)
+    // the peptides with an accepted PSM
+    view.peptides.filters.curation = 'accepted'
+    expect(view.peptides.rows.length).toBeGreaterThan(0)
+    view.undoCurateMany()
+    expect(view.curation[0]).toBe(REJECTED)
+    expect(Array.from(shown).filter((i) => i !== 0).every((i) => view.curation[i] === NONE)).toBe(true)
+    expect(view.lastBulk).toBeNull()
+    expect(view.psms.rows.length).toBe(0)
+    expect(view.peptides.rows.length).toBe(0)
+    await flush()
+    expect(JSON.parse(store.saved.at(-1)!).psms.map((p: { mark: string }) => p.mark)).toEqual(['rejected'])
   })
 })
 

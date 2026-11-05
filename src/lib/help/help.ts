@@ -56,8 +56,8 @@ export const helpSections: HelpSection[] = [
       { term: 'Peptide or PSM row', text: 'Opens the PSM view with the annotated spectrum (see PSM view).' },
       { term: 'Samples', text: 'Per sample of the design: its PSMs, cross-link PSMs, peptides and proteins.' },
       { term: 'QC', text: 'Score distributions of peptide and cross-link PSMs, the precursor mass errors and the PSMs per file.' },
-      { term: 'Curation', text: 'Mark PSMs as accepted or rejected in the PSM view. The PSM table shows the mark in its Curation column and filters by it (Curated, Accepted, Rejected, Not curated). The marks are saved with the search and go with its project file.' },
-      { term: 'Export menu', text: 'The current table as CSV or TSV, the curated PSMs as TSV (every marked PSM, whatever the filters, with its mark), the design (design.tsv), the open spectrum as SVG, the whole search as a project file (.nuxl), each file\'s idXML (every PSM before the FDR filter) and the search\'s folder. Spectral library (DIA-NN TSV) makes a library of the target peptides and localized cross-links with their b and y ions, at FDRs you choose, for DIA-NN, with DIA-NN\'s declarations of the adducts.' },
+      { term: 'Curation', text: 'Mark PSMs as accepted or rejected in the PSM view, with an optional note. The PSM table shows the mark in its Curation column (the note in its Note column, under Columns) and filters by it (Curated, Accepted, Rejected, Not curated); Mark shown accepts, rejects or unmarks every PSM the table shows (e.g. all PSMs of a cross-link after Open in PSM table), with Undo. The Peptides table counts the accepted (✓) and rejected (✗) PSMs of each peptide and filters by them (e.g. With an accepted PSM), and the protein panel\'s cross-linked sites count them too. The marks and notes are saved with the search and go with its project file.' },
+      { term: 'Export menu', text: 'The current table as CSV or TSV, the curated PSMs as TSV (every marked or noted PSM, whatever the filters, with its mark and note), the design (design.tsv), the open spectrum as SVG, the whole search as a project file (.nuxl), each file\'s idXML (every PSM before the FDR filter) and the search\'s folder. Spectral library (DIA-NN TSV) makes a library of the target peptides and localized cross-links with their b and y ions, at FDRs you choose, for DIA-NN, with DIA-NN\'s declarations of the adducts.' },
     ],
   },
   {
@@ -65,7 +65,7 @@ export const helpSections: HelpSection[] = [
     title: 'Protein panel',
     items: [
       { term: 'Coverage', text: 'The strip and the sequence map show which residues peptides with PSMs cover, the modified residues and, in violet, the cross-linked residues.' },
-      { term: 'Cross-linked sites', text: 'Under the map: each cross-linked residue with its adducts and their PSMs.' },
+      { term: 'Cross-linked sites', text: 'Under the map: each cross-linked residue with its adducts and their PSMs, and how many of them you accepted (✓) and rejected (✗).' },
       { term: 'On a 3D structure', text: 'ChimeraX script and PyMOL script save the sites as a script for these viewers. For a UniProt accession the script opens the AlphaFold DB model (the viewer downloads it from EBI, not this app); for any other protein, open a structure first, then run the script.' },
       { term: 'Peptides, PSMs', text: 'The protein\'s peptides (each opens to its PSMs) and its PSMs; Open in PSM table filters the PSMs tab by the protein.' },
     ],
@@ -80,6 +80,7 @@ export const helpSections: HelpSection[] = [
       { term: 'Measure, Label', text: 'Measure: click two peaks for their m/z difference (and what it may be). Label: click a peak to give it a text of your own. Both are part of Export spectrum (SVG).' },
       { term: 'Prev, Next', text: 'Step through the PSMs of the table below, which stays in sight.' },
       { term: 'Accept, Reject', text: 'Curate the PSM: accepted or rejected (A, R; again takes the mark away). With the table filtered to Not curated, the view goes on to the next PSM, so that you can work through them.' },
+      { term: 'Note', text: 'An optional note on the PSM, saved when you leave the field or press Enter, and exported with the curated PSMs.' },
       { term: 'Peaks', text: 'The peaks are read from your mzML file where it is. If it was moved (or for an imported project) the view shows only the peaks NuXL annotated, and says so.' },
     ],
   },

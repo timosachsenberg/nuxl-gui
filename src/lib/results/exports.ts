@@ -39,9 +39,9 @@ export async function exportCsv(view: ResultsView, format: 'csv' | 'tsv' = 'csv'
 }
 
 /**
- * The curated PSMs as `<name>-curated-psms.tsv`: every PSM with a mark, whatever the PSM table's filters, in its
- * order, with its visible columns and the Curation column (also when hidden). False when no PSM has a mark or while
- * an export runs.
+ * The curated PSMs as `<name>-curated-psms.tsv`: every PSM with a mark or a note, whatever the PSM table's filters,
+ * in its order, with its visible columns and the Curation and Curation note columns (also when hidden). False when no
+ * PSM has either or while an export runs.
  */
 export async function exportCurated(view: ResultsView): Promise<boolean> {
   if (view.exporting) return false
@@ -51,7 +51,7 @@ export async function exportCurated(view: ResultsView): Promise<boolean> {
   try {
     await painted()
     const columns = csvColumns(view.psms.visible)
-    if (!columns.includes('curation')) columns.push('curation')
+    for (const id of ['curation', 'curationNote']) if (!columns.includes(id)) columns.push(id)
     const text = toTsv(view.model, 'psms', rows, columns, view.psms.filters)
     await download(`${exportName(view.result)}-curated-psms.tsv`, text, 'text/tab-separated-values')
     return true

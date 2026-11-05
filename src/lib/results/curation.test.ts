@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { toTsv } from './csv'
-import { ACCEPTED, NONE, REJECTED, countMarks, passesCuration, readCuration, writeCuration } from './curation'
+import { ACCEPTED, NONE, REJECTED, cleanNote, countMarks, curationChanged, passesCuration, peptideMarks, readCuration, writeCuration } from './curation'
 import { cutoffs, sampleDesign, sampleTables } from './fixtures'
 import { applyFilters, defaultFilters, type FilterState } from './filters'
 import { buildModel } from './model'
@@ -25,8 +25,8 @@ describe('curation', () => {
     expect(Array.from(applyFilters(m, 'psms', { ...all, curation: 'accepted' }))).toEqual([1])
     expect(Array.from(applyFilters(m, 'psms', { ...all, curation: 'rejected' }))).toEqual([4])
     expect(applyFilters(m, 'psms', { ...all, curation: 'uncurated' })).toHaveLength(7)
-    // the other levels do not filter by it
-    expect(applyFilters(m, 'peptides', { ...all, curation: 'accepted' })).toEqual(applyFilters(m, 'peptides', all))
+    // the proteins do not filter by it
+    expect(applyFilters(m, 'proteins', { ...all, curation: 'accepted' })).toEqual(applyFilters(m, 'proteins', all))
     expect(countMarks(marks)).toEqual({ accepted: 1, rejected: 1 })
   })
 
@@ -98,7 +98,7 @@ describe('curation', () => {
     const { marks, unmatched } = readCuration(model(), text)
     expect(countMarks(marks)).toEqual({ accepted: 0, rejected: 0 })
     expect(unmatched).toEqual([stranger])
-    expect(JSON.parse(writeCuration(model(), marks, unmatched)).psms).toEqual([stranger])
+    expect(JSON.parse(writeCuration(model(), marks, new Map(), unmatched)).psms).toEqual([stranger])
 
     expect(() => readCuration(model(), '{')).toThrow('not valid JSON')
     expect(() => readCuration(model(), '[]')).toThrow('not a curation')
@@ -131,5 +131,55 @@ describe('toTsv', () => {
     expect(toTsv(m, 'proteins', Uint32Array.from([0]), ['accession', 'description', 'psms'], all)).toBe(
       'Accession\tDescription\tPSMs\nP1\tone two, "three" four\t1\n',
     )
+  })
+})
+
+describe('notes and the peptides', () => {
+  it('keeps a note with or without a mark, one line', () => {
+    const marks = new Uint8Array(9)
+    marks[0] = ACCEPTED
+    const notes = new Map([
+      [0, 'clear y ions'],
+      [2, 'check the site'],
+    ])
+    const text = writeCuration(model(), marks, notes)
+    const psms = JSON.parse(text).psms
+    expect(psms.map((p: { spectrum: string; mark?: string; note?: string }) => [p.spectrum, p.mark, p.note])).toEqual([
+      ['scan=1', 'accepted', 'clear y ions'],
+      ['scan=3', undefined, 'check the site'],
+    ])
+    const read = readCuration(model(), text)
+    expect(read.marks[0]).toBe(ACCEPTED)
+    expect(read.marks[2]).toBe(NONE)
+    expect([...read.notes]).toEqual([...notes])
+    expect(cleanNote('  two\nlines\tand a tab ')).toBe('two lines and a tab')
+    // in the exports
+    const m = model(marks)
+    m.curationNotes.set(0, 'clear y ions')
+    expect(toTsv(m, 'psms', Uint32Array.from([0, 1]), ['nativeId', 'curation', 'curationNote'], all)).toBe(
+      'Spectrum\tCuration\tCuration note\nscan=1\taccepted\tclear y ions\nscan=2\t\t\n',
+    )
+  })
+
+  it('counts the curated PSMs of each peptide and filters the peptides by them', () => {
+    const marks = new Uint8Array(9)
+    marks[0] = ACCEPTED // peptide 0
+    marks[2] = REJECTED // peptide 0
+    marks[4] = REJECTED // peptide 2
+    const m = model(marks)
+    const pm = peptideMarks(m)
+    expect(Array.from(pm.accepted)).toEqual([1, 0, 0, 0, 0])
+    expect(Array.from(pm.rejected)).toEqual([1, 0, 1, 0, 0])
+    expect(Array.from(applyFilters(m, 'peptides', { ...all, curation: 'accepted' }))).toEqual([0])
+    expect(Array.from(applyFilters(m, 'peptides', { ...all, curation: 'rejected' }))).toEqual([0, 2])
+    expect(Array.from(applyFilters(m, 'peptides', { ...all, curation: 'curated' }))).toEqual([0, 2])
+    expect(Array.from(applyFilters(m, 'peptides', { ...all, curation: 'uncurated' }))).toEqual([1, 3, 4])
+    expect(toTsv(m, 'peptides', Uint32Array.from([0]), ['peptide', 'acceptedPsms', 'rejectedPsms'], all)).toBe(
+      'Peptide\tAccepted PSMs\tRejected PSMs\nM[Oxidation]KWVTF\t1\t1\n',
+    )
+    // a change in place counts once announced
+    marks[1] = ACCEPTED
+    curationChanged()
+    expect(peptideMarks(m).accepted[0]).toBe(2)
   })
 })

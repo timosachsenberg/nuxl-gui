@@ -9,7 +9,8 @@
   import * as Popover from '$lib/components/ui/popover'
   import { formatPercent, formatQ } from '$lib/format/fdr'
   import { adductLabel } from '$lib/format/peptide'
-  import { CURATION_FILTERS, type CurationFilter } from '$lib/results/curation'
+  import { CURATION_FILTERS, PEPTIDE_CURATION_FILTERS, type CurationFilter } from '$lib/results/curation'
+  import CurationMenu from './CurationMenu.svelte'
   import { formatCount, parseAccession } from '$lib/results/display'
   import { crossLinkChoices, type Kind } from '$lib/results/filters'
   import type { LevelState, ResultsView } from '$lib/results/view.svelte'
@@ -226,12 +227,12 @@
     {/if}
   {/if}
 
-  {#if level.level === 'psms'}
+  {#if level.level !== 'proteins'}
     <ChoiceSelect
       class="w-auto"
       ariaLabel="Curation"
       value={level.filters.curation}
-      options={CURATION_FILTERS}
+      options={level.level === 'psms' ? CURATION_FILTERS : PEPTIDE_CURATION_FILTERS}
       onChange={(v) => (level.filters.curation = v as CurationFilter)} />
   {/if}
 
@@ -254,6 +255,9 @@
     <button type="button" class={chip} onclick={() => (level.filters.showDecoys = false)}>
       Decoys shown<XIcon class="size-3" aria-hidden="true" /><span class="sr-only">(hide them)</span>
     </button>
+  {/if}
+  {#if level.level === 'psms'}
+    <CurationMenu {view} {level} />
   {/if}
   <DropdownMenu.Root>
     <DropdownMenu.Trigger

@@ -61,10 +61,18 @@
     return m.curation[i]
   }
 
+  /** The PSM's note ('' none; read with the count of changes, as the marks). */
+  function noteOf(i: number): string {
+    void view.curationVersion
+    return m.curationNotes.get(i) ?? ''
+  }
+
   function cells(id: string): CellDef {
     switch (id) {
       case 'curation':
         return { cell: () => curationCell, cellTitle: (i) => MARK_NAMES[markOf(i)] || 'Not curated' }
+      case 'note':
+        return { cell: (i) => noteOf(i), cellTitle: (i) => noteOf(i) || undefined }
       case 'peptide':
         return { cell: () => peptideCell, cellTitle: (i) => withMarks(m.tables.peptides.proforma[ps.peptide[i]], i) }
       case 'sequence':
@@ -193,7 +201,7 @@
 {#snippet curationCell(i: number)}
   {@const mark = markOf(i)}
   {#if mark === ACCEPTED || mark === REJECTED}
-    <span class={mark === ACCEPTED ? 'text-emerald-700 dark:text-emerald-400' : 'text-destructive'}
+    <span title={m.curationNotes.get(i)} class={mark === ACCEPTED ? 'text-emerald-700 dark:text-emerald-400' : 'text-destructive'}
       ><span aria-hidden="true">{mark === ACCEPTED ? '✓' : '✗'}</span><span class={compact ? 'sr-only' : 'ml-1'}>{MARK_NAMES[mark]}</span></span>
   {/if}
 {/snippet}

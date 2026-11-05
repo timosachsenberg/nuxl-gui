@@ -8,6 +8,8 @@ const site = (position: number, residue: string, adducts: [string, number][], sc
   psms: adducts.reduce((n, [, k]) => n + k, 0),
   adducts: adducts.map(([adduct, psms]) => ({ adduct, psms })),
   score,
+  accepted: 0,
+  rejected: 0,
 })
 
 const albumin = (over: Partial<StructureInput> = {}): StructureInput => ({

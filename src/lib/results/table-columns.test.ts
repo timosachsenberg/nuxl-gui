@@ -46,11 +46,11 @@ describe('columnSpecs', () => {
   it('peptides: the best PSM q-value, counts per sample; PSMs: no sample counts', () => {
     expect(ids(columnSpecs(model(), 'peptides'))).toEqual([
       'peptide', 'sequence', 'adduct', 'proteins', 'proteinStart', 'proteinEnd', 'proteinSite', 'psms', 'sample:0', 'sample:1',
-      'foundIn', 'bestQ', 'length',
+      'foundIn', 'bestQ', 'curation', 'length',
     ])
     expect(ids(columnSpecs(model(), 'psms'))).toEqual([
       'peptide', 'sequence', 'adduct', 'site', 'proteins', 'proteinStart', 'proteinEnd', 'proteinSite', 'sample', 'scan', 'charge', 'mz', 'rt', 'precursorError', 'score', 'qValue',
-      'curation', 'pep', 'fdrGroup', 'file', 'isotopeError',
+      'curation', 'note', 'pep', 'fdrGroup', 'file', 'isotopeError',
     ])
   })
 
@@ -74,7 +74,7 @@ describe('defaultHidden', () => {
   it('hides the less common columns', () => {
     const m = model()
     expect(defaultHidden(columnSpecs(m, 'proteins'), m)).toEqual(['gene', 'score', 'length'])
-    expect(defaultHidden(columnSpecs(m, 'psms'), m)).toEqual(['pep', 'fdrGroup', 'file', 'isotopeError'])
+    expect(defaultHidden(columnSpecs(m, 'psms'), m)).toEqual(['note', 'pep', 'fdrGroup', 'file', 'isotopeError'])
   })
 
   it('shows the gene when the descriptions name one', () => {
@@ -110,7 +110,7 @@ describe('visibleSpecs and csvColumns', () => {
     expect(csvColumns(visibleSpecs(specs, []))).toEqual([
       'peptide', 'sequence', 'crossLink', 'adduct', 'adductMass', 'nucleotide', 'site', 'siteScore', 'proteins', 'proteinStart',
       'proteinEnd', 'proteinSite', 'sample', 'nativeId',
-      'charge', 'mz', 'rt', 'precursorErrorPpm', 'score', 'qValue', 'curation', 'pep', 'fdrGroup', 'file', 'isotopeError',
+      'charge', 'mz', 'rt', 'precursorErrorPpm', 'score', 'qValue', 'curation', 'curationNote', 'pep', 'fdrGroup', 'file', 'isotopeError',
     ])
   })
 })

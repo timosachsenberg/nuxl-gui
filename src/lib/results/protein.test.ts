@@ -340,6 +340,24 @@ describe('cross-linked sites', () => {
     expect(sites.map((s) => s.psms)).toEqual([2, 1, 1, 2])
     // the shared peptide's sites in P2
     expect(crossLinkedSites(m, 1).map(crossLinkTitle)).toEqual(['D2 (UU-H₂O ×1)', 'K4 (U-H₃PO₄ ×1)'])
+    // nothing curated yet
+    expect(sites.map((s) => [s.accepted, s.rejected])).toEqual([[0, 0], [0, 0], [0, 0], [0, 0]])
+  })
+
+  it('counts the accepted and rejected PSMs of a site', () => {
+    const m = crossLinked()
+    const at = (label: string) => crossLinkedSites(m, 0).find((s) => siteLabel(s) === label)!
+    const c6 = crossLinkedSites(m, 0)[0]
+    // C6's two PSMs: find them by their site, then curate one each way
+    const rows = Array.from({ length: m.tables.psms.count }, (_, i) => i).filter(
+      (i) => m.tables.psms.xl.site[i] >= 0 && m.curation[i] === 0,
+    )
+    expect(c6.psms).toBe(2)
+    for (const i of rows) m.curation[i] = 1
+    expect(at('C6').accepted).toBe(2)
+    expect(at('C6').rejected).toBe(0)
+    m.curation.fill(2)
+    expect([at('D10').accepted, at('D10').rejected]).toEqual([0, 1])
   })
 
   it('lists the adducts of a site by their PSMs', () => {
