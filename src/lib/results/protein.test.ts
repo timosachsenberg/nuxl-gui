@@ -352,6 +352,17 @@ describe('cross-linked sites', () => {
     ])
   })
 
+  it('gives each site the best localization score of its PSMs, NaN when none has one', () => {
+    const m = crossLinked()
+    const score = m.tables.psms.xl.siteScore
+    score.fill(NaN)
+    score[1] = 0.6 // CCCK's PSMs: C6 and C14
+    score[2] = 0.8
+    score[5] = 0.4 // DDDK's on K12 of P1
+    const m2 = buildModel(m.tables, m.design, { showTechReplicates: false, psmFdr: 0.01, xlFdr: 0.05, proteinFdr: 1 })
+    expect(crossLinkedSites(m2, 0).map((s) => s.score)).toEqual([0.8, NaN, 0.4, 0.8])
+  })
+
   it('puts no site where the peptide\'s place in the protein is unknown', () => {
     const m = crossLinked()
     const pt = m.tables.peptides

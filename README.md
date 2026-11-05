@@ -67,6 +67,9 @@ libGLESv2.so.2"). Install it with `sudo apt install libgles2` (Ubuntu, Debian) o
   - macOS: `~/Library/Application Support/org.openms.nuxl.desktop/`
   - Windows: `%APPDATA%\org.openms.nuxl.desktop\`
 - The log of the last search that failed: `logs/last-failure.log` there (the error names it).
+- To get to a search's folder from the app: "Show search folder" (the last item of the result's Export menu, the
+  folder button of a row of History, or Show beside the folder's path in the Overview) opens the system's file
+  manager (Finder, Explorer, the desktop's) with the search's folder selected.
 - Presets of the settings: the app's webview keeps them, on this computer.
 - The new-version check: a few seconds after the start the app asks GitHub for the latest release of NuXL, one
   `GET https://api.github.com/repos/timosachsenberg/nuxl-gui/releases/latest`, without cookies or credentials;
@@ -79,7 +82,9 @@ libGLESv2.so.2"). Install it with `sudo apt install libgles2` (Ubuntu, Debian) o
   new versions at start"; "Check for updates" there checks when asked (also with the setting off). Setting the
   environment variable `NUXL_NO_UPDATE_CHECK` (any non-empty value) turns the check at start off for every user of a
   computer.
-  Nothing else of the app uses the network (the CSP lets the page connect to `api.github.com` only).
+  Nothing else of the app uses the network (the CSP lets the page connect to `api.github.com` only). The ChimeraX
+  and PyMOL scripts of a protein's cross-linked sites ("Cross-linked sites on a 3D structure") download the
+  AlphaFold DB model when they are run in ChimeraX or PyMOL, not in the app.
 - The spectra (mzML, `.raw`, `.d`) and FASTA files are read where they are: never copied, and nothing is left
   beside them. After the search of a `.raw` or `.d` the app writes its spectra as mzML into the search's folder, for
   the PSM view. (On Windows, OpenNuXL writes a debug table `<name>.ambiguous_masses.csv` beside an input searched
@@ -97,6 +102,23 @@ paths), the database copy with the contaminants and `database.json` (the path of
 the project carries them as they are: share it where that is fine. The spectra are not in a project, nor the mzML
 the app wrote of a `.raw` or `.d` (it would make most such projects too large): where the input mzML cannot be read,
 and for every `.raw` or `.d` input, the PSM view shows the peaks NuXL annotated, and says why. A project file holds at most 3 GB (larger searches are refused with a message; they stay in History).
+
+## Cross-linked sites on a 3D structure
+
+The protein panel (Proteins, a protein's row, Coverage) lists the protein's cross-linked residues and saves them as a
+script for ChimeraX (`.cxc`: open it in ChimeraX) or PyMOL (`.pml`: File › Run Script). The script shows the
+structure as a grey cartoon and the sites as sticks, coloured by their PSMs (light to dark violet) and labelled with
+their adducts; a comment table at its top lists the sites with their PSMs, best localization score and adducts.
+
+- A protein with a UniProt accession (`sp|P02768|ALBU_HUMAN`, `tr|…|…`, a bare `P02768`): the script opens its
+  AlphaFold DB model (CC-BY 4.0), which ChimeraX or PyMOL downloads from EBI, sending the accession. AlphaFold
+  numbers the model as UniProt's canonical sequence, which is the FASTA's when the FASTA is UniProt's current one.
+- Any other accession (and an isoform, `P02768-2`): open a structure of the protein first, numbered as the FASTA's
+  sequence (e.g. from the PDB, renumbered if needed), then run the script; it marks the residues of every open model.
+  To use such a structure for a UniProt protein, delete the lines that fetch the model.
+- Each label starts with the structure's own residue ("LYS 123"): where it is not the site's residue (K123), the
+  structure is numbered otherwise (another isoform, sequence version or construct). The PyMOL script also checks every
+  site and prints a warning in its log.
 
 ## Known limitations
 

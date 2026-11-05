@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct Real {
     bin: PathBuf,
@@ -181,8 +181,9 @@ fn the_example_is_searched_run_by_run_through_start_search() {
 fn cancelling_the_real_tool_leaves_no_process_and_no_folder() {
     let Some(real) = real() else { return };
     let work = TempDir::new("real-cancel");
-    // (longer adducts and several runs: long enough to be cancelled)
-    let request = example_request_with(&real, &work, 3, json!({ "NuXL:length": 4 }));
+    // (longer adducts and several runs: long enough to be cancelled, also on a runner busy with the other
+    // real-data tests)
+    let request = example_request_with(&real, &work, 8, json!({ "NuXL:length": 4 }));
     let searches = Arc::new(Searches::default());
     let (sink, rx) = channel_sink();
     let crap = tool::bundled_crap(None).unwrap();
@@ -192,7 +193,20 @@ fn cancelling_the_real_tool_leaves_no_process_and_no_folder() {
         .unwrap();
     first_progress(&rx, Duration::from_secs(60));
     let folder = searches_dir.to_string_lossy().into_owned();
-    assert!(processes_with(&folder) >= 1, "the tool runs");
+    // a single look can fall between two runs, or come late on a busy runner (listing the processes takes a
+    // while on Windows): look until a process of the search shows
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while processes_with(&folder) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the tool runs: no process mentions {folder:?}; the OpenMS tools' processes: {:#?}",
+            process_lines()
+                .into_iter()
+                .filter(|l| l.contains("OpenNuXL") || l.contains("PercolatorAdapter"))
+                .collect::<Vec<_>>()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 
     searches.cancel(&id).unwrap();
     assert_eq!(
@@ -209,6 +223,15 @@ fn cancelling_the_real_tool_leaves_no_process_and_no_folder() {
 /// The number of live processes whose command line mentions `needle`.
 #[cfg(not(target_os = "linux"))]
 fn processes_with(needle: &str) -> usize {
+    process_lines()
+        .iter()
+        .filter(|l| l.contains(needle) && !l.contains("real_nuxl") && !l.contains("CimInstance"))
+        .count()
+}
+
+/// The command lines of the live processes (not zombies), for a failure's message too.
+#[cfg(not(target_os = "linux"))]
+fn process_lines() -> Vec<String> {
     #[cfg(windows)]
     let output = std::process::Command::new("powershell")
         .args([
@@ -226,8 +249,14 @@ fn processes_with(needle: &str) -> usize {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|l| !l.trim_start().starts_with('Z'))
-        .filter(|l| l.contains(needle) && !l.contains("real_nuxl") && !l.contains("CimInstance"))
-        .count()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The command lines of the live processes (Linux: not collected; `processes_with` reads /proc).
+#[cfg(target_os = "linux")]
+fn process_lines() -> Vec<String> {
+    Vec::new()
 }
 
 /// The number of live processes whose command line mentions `needle`.

@@ -99,6 +99,12 @@ A search lives in `<app data>/searches/<id>/` (`<id>.partial/` while it runs), a
   (OpenNuXL overwrites that one; the shim leaves it).
 - `search.json` and `proteins.fasta`: History's record and the identified proteins, as in ProSE desktop.
 
+Show search folder (the Export menu, History's rows, the Overview, which also shows the path: `search_folder`) opens
+the system's file manager at the folder of a search, by its id (`show_search_folder`, `history.rs` `show_folder`;
+the page never names a path): the opener plugin's `reveal_item_in_dir`, called from Rust only (the plugin is not
+registered, the page has none of its commands), which selects the folder in `searches/` (Finder, Explorer; Linux: the
+file manager's `org.freedesktop.FileManager1` on D-Bus, else the desktop portal, else `xdg-open` of the folder).
+
 A project (`.nuxl`, `project.rs`, `history.ts` `leftOut`) holds the folder but `database.fasta`, `database.json`,
 `nuxl.log` and the converted spectra (`nuxl/<stem>.spectra.mzML`, `.spectra.tmp.mzML`: about as large as the
 input, they would make most such projects too large for a zip without zip64). A search opened from a project shows
@@ -210,6 +216,13 @@ spectra after its run (§3) ends that run's part of the bar: "Preparing the spec
   "Protein end", "Protein site" with the accession). A position the protein's sequence does not confirm (no sequence,
   or the peptide is not there: read.ts keeps what the search recorded) has a "?" ("12?"); none recorded: "–" (empty in
   the CSV). The protein panel and the PSM view’s header ("· Cas7 K137") count from 1 as well;
+- the protein panel's Coverage tab saves the protein's cross-linked sites (`crossLinkedSites`, with their best
+  localization score) as a ChimeraX `.cxc` or PyMOL `.pml` script (`structure.ts`, through `save_text`): a UniProt
+  accession (`sp|…|…`, `tr|…|…`, bare; not an isoform) makes it fetch the AlphaFold DB model (`alphafold fetch` in
+  ChimeraX; PyMOL asks the AlphaFold API for the model's file, else tries the files of the newest versions), anything
+  else leaves opening a structure to the user. The viewer downloads the model, never the app (§7 stays its one
+  connection). Labels start with the structure's residue so that another numbering shows; the PyMOL script checks
+  the residues too;
 - the peaks of a PSM's spectrum come from the input mzML (by its index, else by scanning a file of at most 256 MB),
   read through `read_search_file` by byte range; arrays uncompressed, zlib or zstd (plain, byte-shuffled,
   dictionary-encoded, as OpenMS develop writes them), not MS-Numpress; when the file cannot be read (moved, an imported project), the

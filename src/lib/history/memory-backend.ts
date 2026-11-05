@@ -38,6 +38,8 @@ export class MemoryBackend implements HistoryBackend {
   saved: { name: string; bytes: Uint8Array }[] = []
   cancelSave = false
   imported = 0
+  /** The folders Show search folder showed, by id. */
+  revealed: string[] = []
   failures: Partial<Record<'list' | 'save' | 'proteins' | 'rename' | 'delete', string>> = {}
 
   /** A folder as the shim leaves it. */
@@ -48,7 +50,7 @@ export class MemoryBackend implements HistoryBackend {
     )
   }
 
-  private folder(id: string): Map<string, Uint8Array> {
+  private folderOf(id: string): Map<string, Uint8Array> {
     const folder = this.folders.get(id)
     if (!folder) throw new Error(`The search ${id} does not exist.`)
     return folder
@@ -107,27 +109,27 @@ export class MemoryBackend implements HistoryBackend {
   async read(id: string, name: string, range?: ByteRange): Promise<Uint8Array> {
     // (as `files::resolve_search_file`: an imported search reads only its own folder; a path names no file of it)
     if (name.startsWith('/')) {
-      const record = this.folder(id).get('search.json')
+      const record = this.folderOf(id).get('search.json')
       if (record && JSON.parse(new TextDecoder().decode(record)).imported === true) {
         throw new Error(`${name} is not a file of the search ${id}: an imported search reads only its own folder.`)
       }
       throw new NotFound(`${name} does not exist.`)
     }
-    const data = this.folder(id).get(name)
+    const data = this.folderOf(id).get(name)
     if (!data) throw new NotFound(`${name} does not exist.`)
     return bytesOfRange(data, range)
   }
 
   async saveRecord(id: string, record: string): Promise<void> {
     if (this.failures.save) throw new Error(this.failures.save)
-    const folder = this.folder(id)
+    const folder = this.folderOf(id)
     // (a search that has a record keeps it)
     if (!folder.has('search.json')) folder.set('search.json', new TextEncoder().encode(record))
   }
 
   async saveProteins(id: string, proteins: string): Promise<void> {
     if (this.failures.proteins) throw new Error(this.failures.proteins)
-    const folder = this.folder(id)
+    const folder = this.folderOf(id)
     if (!folder.has('search.json')) throw new Error(`The search ${id} is not saved (it has no search.json).`)
     folder.set('proteins.fasta', new TextEncoder().encode(proteins))
     folder.delete('database.fasta')
@@ -135,7 +137,7 @@ export class MemoryBackend implements HistoryBackend {
 
   async rename(id: string, name: string): Promise<void> {
     if (this.failures.rename) throw new Error(this.failures.rename)
-    const folder = this.folder(id)
+    const folder = this.folderOf(id)
     const json = JSON.parse(new TextDecoder().decode(folder.get('search.json')))
     json.name = name.trim()
     folder.set('search.json', new TextEncoder().encode(JSON.stringify(json)))
@@ -146,8 +148,19 @@ export class MemoryBackend implements HistoryBackend {
     this.folders.delete(id)
   }
 
+  /** As `history::search_folder`: the folder of an existing search. */
+  async folder(id: string): Promise<string> {
+    this.folderOf(id)
+    return `/data/searches/${id}`
+  }
+
+  async reveal(id: string): Promise<void> {
+    this.folderOf(id)
+    this.revealed.push(id)
+  }
+
   async files(id: string): Promise<{ name: string; size: number }[]> {
-    return [...this.folder(id)].map(([name, data]) => ({ name, size: data.length }))
+    return [...this.folderOf(id)].map(([name, data]) => ({ name, size: data.length }))
   }
 
   /**
@@ -155,7 +168,7 @@ export class MemoryBackend implements HistoryBackend {
    * zip, `search.json` first, `inputs.json` without paths, Parquet stored (here in memory, with fflate).
    */
   async saveProject(id: string, name: string, onProgress?: (fraction: number) => void): Promise<string | null> {
-    const folder = this.folder(id)
+    const folder = this.folderOf(id)
     if (!folder.has(RECORD_FILE)) throw new Error(`The search is not saved to History (it has no ${RECORD_FILE}), so there is no project to make.`)
     if (this.cancelSave) return null
     const names = [...folder.keys()]

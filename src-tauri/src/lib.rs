@@ -20,13 +20,16 @@
 //! - `cpu_count()` -> the cores the search's threads may use
 //! - `example_files()` -> `{ spectra: [path], database }`
 //! - `save_text(name, contents)` and `save_search_file(searchId, name, suggested)`: a save dialog of
-//!   the system, then the file written where the user chose (-> the path, or null if cancelled)
+//!   the system, then the file written where the user chose (-> the path, or null if cancelled);
+//!   `save_text_with_companion(name, contents, suffix, companion)`: the same, and `companion` written beside it as
+//!   `<chosen stem><suffix>` (`export`; -> `{ path, companion }`, or null if cancelled)
 //! - History (`history`): `history_list()` -> entries (a folder with a broken record, or none, has
 //!   `error`), `history_save_record(searchId, record)` (a finished search gets its `search.json`, right
 //!   after `search://done`), `history_save_proteins(searchId, proteins)` (its `proteins.fasta`, once the
 //!   results are read; the folder's `database.fasta` goes), `history_rename(searchId, name)`,
-//!   `history_delete(searchId)`, `history_files(searchId)` (the regular files of the folder, for a project
-//!   file), `save_project_file(searchId, name)` (a save dialog, then the search's project zip written there
+//!   `history_delete(searchId)`, `search_folder(searchId)` (the path of the search's folder),
+//!   `show_search_folder(searchId)` (the system's file manager at it), `history_files(searchId)` (the
+//!   regular files of the folder, for a project file), `save_project_file(searchId, name)` (a save dialog, then the search's project zip written there
 //!   entry by entry: `project`; events `project://progress` `{ searchId, written, total }`),
 //!   `open_project_file()` (the open dialog, then the bytes of the file chosen; empty if
 //!   cancelled) and `history_import(body)` (the entries of a project in a fresh folder -> the new id). At
@@ -45,6 +48,7 @@
 pub mod args;
 pub mod content;
 pub mod decoys;
+pub mod export;
 pub mod files;
 pub mod history;
 pub mod progress;
@@ -309,6 +313,29 @@ async fn save_text(
     .map_err(|e| e.to_string())?
 }
 
+/// An export and its companion (`export`): the save dialog for `name`, then `contents` written there and `companion`
+/// beside it under the chosen stem and `suffix` (checked before the dialog opens).
+#[tauri::command]
+async fn save_text_with_companion(
+    app: AppHandle,
+    name: String,
+    contents: String,
+    suffix: String,
+    companion: String,
+) -> Result<Option<export::Written>, String> {
+    if !export::valid_suffix(&suffix) {
+        return Err(format!("{suffix:?} is not a file name ending."));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = ask_save_path(&app, &name)? else {
+            return Ok(None);
+        };
+        export::write_with_companion(&path, &contents, &suffix, &companion).map(Some)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// A file of a search (e.g. an input's idXML) copied to where the user chooses.
 #[tauri::command]
 async fn save_search_file(
@@ -379,6 +406,40 @@ async fn history_rename(app: AppHandle, search_id: String, name: String) -> Resu
 #[tauri::command]
 async fn history_delete(app: AppHandle, search_id: String) -> Result<(), String> {
     on_searches(&app, move |dir| history::delete(&dir, &search_id)).await
+}
+
+/// The path of the search's folder (the Overview shows it).
+#[tauri::command]
+async fn search_folder(app: AppHandle, search_id: String) -> Result<String, String> {
+    on_searches(&app, move |dir| {
+        history::search_folder(&dir, &search_id).map(|f| f.to_string_lossy().into_owned())
+    })
+    .await
+}
+
+/// The system's file manager (Finder, Explorer, the desktop's) at the folder: the opener plugin's reveal, which
+/// selects it in the searches folder (Linux: the file manager's D-Bus service, else the desktop portal). Where
+/// neither answers (Linux, BSD), the folder itself is opened with `xdg-open`.
+fn reveal_folder(folder: &Path) -> Result<(), String> {
+    tauri_plugin_opener::reveal_item_in_dir(folder).or_else(|e| {
+        let shown = format!(
+            "The folder could not be shown ({e}). It is {}",
+            folder.display()
+        );
+        if cfg!(any(windows, target_os = "macos")) {
+            return Err(shown);
+        }
+        update::open_target(folder.as_os_str()).map_err(|_| shown)
+    })
+}
+
+/// Show search folder: the folder of the search, by its id (`history::show_folder`).
+#[tauri::command]
+async fn show_search_folder(app: AppHandle, search_id: String) -> Result<(), String> {
+    on_searches(&app, move |dir| {
+        history::show_folder(&dir, &search_id, reveal_folder)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -645,12 +706,15 @@ pub fn run() {
             cpu_count,
             example_files,
             save_text,
+            save_text_with_companion,
             save_search_file,
             history_list,
             history_save_record,
             history_save_proteins,
             history_rename,
             history_delete,
+            search_folder,
+            show_search_folder,
             history_files,
             history_import,
             open_project_file,

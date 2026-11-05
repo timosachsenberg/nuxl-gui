@@ -18,6 +18,8 @@ import {
   rename,
   restoreFromHistory,
   retrySave,
+  revealSearch,
+  searchFolderPath,
   saveFinished,
   saveProjectFile,
   useBackend,
@@ -56,6 +58,15 @@ async function finished(id: string, name: string, createdAt: string) {
 }
 
 describe('History', () => {
+  test('Show search folder asks the shim by the id, and says when the search is gone', async () => {
+    await finished('1-0', 'first', '2026-10-20T09:00:00.000Z')
+    await revealSearch('1-0')
+    expect(disk.revealed).toEqual(['1-0'])
+    expect(await searchFolderPath('1-0')).toBe('/data/searches/1-0')
+    await expect(revealSearch('9-9')).rejects.toThrow('The search 9-9 does not exist.')
+    expect(disk.revealed).toEqual(['1-0'])
+  })
+
   test('history lists, renames and deletes', async () => {
     await finished('1-0', 'first', '2026-10-20T09:00:00.000Z')
     await finished('2-0', 'second', '2026-10-20T11:00:00.000Z')

@@ -1,9 +1,9 @@
 // The state of History for the views: the saved searches, what became of the last save, and the actions
-// of the views (open from History, save and open a project file, rename, delete). A search is saved here
-// automatically: its record as soon as its OpenNuXL runs have ended (before its results are read, so that a search
-// whose results cannot be read stays in History and can be opened again), its proteins.fasta once its
-// results are read. Saving never breaks the results view, it only reports. A search that finished while it
-// was being cancelled has its folder removed at once.
+// of the views (open from History, save and open a project file, rename, delete, show the search's folder). A
+// search is saved here automatically: its record as soon as its OpenNuXL runs have ended (before its results are
+// read, so that a search whose results cannot be read stays in History and can be opened again), its
+// proteins.fasta once its results are read. Saving never breaks the results view, it only reports. A search that
+// finished while it was being cancelled has its folder removed at once.
 
 import { desktopBackend, errorText } from '../desktop'
 import { resultName } from '../results/display'
@@ -312,6 +312,19 @@ export async function rename(id: string, name: string): Promise<void> {
   if (trimmed === '') return
   await backend.rename(id, trimmed)
   await refreshHistory()
+}
+
+/**
+ * Show search folder: the system's file manager at the folder of search `id` (Finder, Explorer; selected in the
+ * searches folder where the platform can). The Export menu, History's rows and the Overview use it.
+ */
+export function revealSearch(id: string): Promise<void> {
+  return backend.reveal(id)
+}
+
+/** The path of the folder of search `id` (the Overview shows it). */
+export function searchFolderPath(id: string): Promise<string> {
+  return backend.folder(id)
 }
 
 /** Forgets the notice about the last save. */
