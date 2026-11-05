@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds the app's Linux packages, the .deb and the AppImage, with the bundled OpenNuXL (and PercolatorAdapter,
-# FileConverter, the .NET runtime of the .raw reader: bundle-nuxl.sh) in them.
+# the .NET runtime of the .raw reader: bundle-nuxl.sh) in them.
 #
 #   package-linux.sh        (src-tauri/resources/nuxl has to be filled first: bundle-nuxl.sh)
 #
@@ -42,7 +42,7 @@ TOOLS=${XDG_CACHE_HOME:-$HOME/.cache}/tauri
 NUXL=$ROOT/src-tauri/resources/nuxl
 
 die() { echo "error: $*" >&2; exit 1; }
-[ -x "$NUXL/bin/OpenNuXL" ] && [ -x "$NUXL/bin/PercolatorAdapter" ] && [ -x "$NUXL/bin/FileConverter" ] \
+[ -x "$NUXL/bin/OpenNuXL" ] && [ -x "$NUXL/bin/PercolatorAdapter" ] \
   && [ -d "$NUXL/dotnet/host/fxr" ] && [ -f "$NUXL/build.json" ] \
   || die "src-tauri/resources/nuxl holds no bundled OpenNuXL: run native/scripts/bundle-nuxl.sh <openms-build> src-tauri/resources/nuxl"
 sysroot_mode=false
@@ -154,7 +154,7 @@ for notices in "$resources/notices/THIRD-PARTY-NOTICES.txt" "$work/deb/usr/lib/$
 done
 [ -f "$resources/nuxl/share/OpenMS/NUXL/nuxl_presets.json" ] || die "OpenNuXL's presets are missing"
 for nuxl in "$resources/nuxl" "$work/deb/usr/lib/$product/resources/nuxl"; do
-  for exe in "$nuxl/bin/OpenNuXL" "$nuxl/bin/PercolatorAdapter" "$nuxl/bin/FileConverter"; do
+  for exe in "$nuxl/bin/OpenNuXL" "$nuxl/bin/PercolatorAdapter"; do
     [ -x "$exe" ] || die "$exe is missing or not executable"
     readelf -d "$exe" | grep -q 'RPATH.*\[\$ORIGIN/\.\./lib\]' || die "$exe lost its RPATH \$ORIGIN/../lib"
   done

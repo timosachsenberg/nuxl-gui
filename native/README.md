@@ -2,8 +2,7 @@
 
 The NuXL desktop app (Tauri 2) runs OpenNuXL of OpenMS, with PercolatorAdapter for its score recalibration, as its
 only native code (plus the .NET runtime that OpenMS's Thermo reader hosts); OpenNuXL keeps the spectra of its PSMs for
-the PSM view itself (`-out_qpx`, the QPX mz view). The bundle also has FileConverter, which the packages' start test
-reads a .raw and a .d with (the app does not run it). This directory holds the tooling for the two things the app needs: a user-space
+the PSM view itself (`-out_qpx`, the QPX mz view). This directory holds the tooling for the two things the app needs: a user-space
 toolchain for the Tauri and Rust side, and a native OpenMS build of the tools, bundled with their libraries and data.
 (It started as ProSE desktop's, whose toolchain sections below are unchanged.)
 
@@ -109,7 +108,7 @@ and a webview under Xvfb, for example a minimal Tauri 2 app built with
 ## Native OpenMS build
 
 `scripts/build-openms.sh <openms-src> <build-dir>` configures and builds libOpenMS, `OpenNuXL`,
-`PercolatorAdapter`, `FileConverter` and what their tests run, with the host toolchain (outside `in-env.sh`):
+`PercolatorAdapter` and what their tests run, with the host toolchain (outside `in-env.sh`):
 
 ```bash
 native/scripts/build-openms.sh <OpenMS checkout> <OpenMS checkout>/build
@@ -120,7 +119,7 @@ binary cache (`VCPKG_BINARY_CACHE`, default `/scratch/sachsenb/vcpkg-bincache-na
 directory does not rebuild the dependencies. `JOBS` (default 100) sets the parallelism. Notes on the
 configuration:
 
-- `WITH_THERMO_RAW=ON`: OpenNuXL and FileConverter read Thermo `.raw` files in process, through
+- `WITH_THERMO_RAW=ON`: OpenNuXL reads Thermo `.raw` files in process, through
   [openms-thermo-bridge](https://github.com/OpenMS/openms-thermo-bridge) (v1.0.0, fetched by CMake's FetchContent):
   a native library (`libopenms_thermo_bridge.so`/`.dylib`, `openms_thermo_bridge.dll`), which libOpenMS links,
   hosts the bridge's managed half (`ThermoWrapperManaged.dll` with Thermo's RawFileReader assemblies, net8.0) in a
@@ -140,10 +139,10 @@ configuration:
   the PercolatorAdapter it starts inherits it.
 - `PATH` is rebuilt without linuxbrew (its binutils are older than the toolchain's).
 - The targets: `OpenNuXL`, `PercolatorAdapter` (OpenNuXL runs it for the score recalibration, and looks for it
-  beside itself: `File::findSiblingTOPPExecutable`), `FileConverter` (the packages' start test converts a `.raw`
-  and a `.d` with it through the bundled .NET runtime; the app does not run it), `FuzzyDiff` (the `TOPP_OpenNuXL`
-  tests compare with it; without it they report "Not Run") and `Percolator_test`. CI builds
-  `OpenMS OpenNuXL PercolatorAdapter FileConverter`.
+  beside itself: `File::findSiblingTOPPExecutable`), `FuzzyDiff` (the `TOPP_OpenNuXL` tests compare with it;
+  without it they report "Not Run") and `Percolator_test`. CI builds `OpenMS OpenNuXL PercolatorAdapter`. (Before
+  the app 0.7 the bundle had FileConverter too, for the spectra of `.raw` and `.d` inputs; OpenNuXL keeps the spectra
+  of its PSMs itself now: `-out_qpx`.)
 
 Check the build with OpenNuXL's tests:
 
@@ -175,7 +174,7 @@ native/scripts/bundle-nuxl.sh <OpenMS checkout>/build src-tauri/resources/nuxl
 
 | Part | What |
 | --- | --- |
-| `bin/OpenNuXL`, `bin/PercolatorAdapter`, `bin/FileConverter` | stripped, `DT_RPATH` `$ORIGIN/../lib`; PercolatorAdapter beside OpenNuXL, where OpenNuXL looks for it |
+| `bin/OpenNuXL`, `bin/PercolatorAdapter` | stripped, `DT_RPATH` `$ORIGIN/../lib`; PercolatorAdapter beside OpenNuXL, where OpenNuXL looks for it |
 | `lib/` | the closure of the tools that `ldd` lists, each library once, under its sonames, stripped, `DT_RPATH` `$ORIGIN`: libOpenMS, `libopenms_thermo_bridge.so`, Arrow/Parquet, Xerces, HiGHS, ..., libgomp (the one OpenMP runtime; the script fails on any other) and the GCC runtime (libstdc++, libgcc_s: OpenMS needs GCC 13, newer than Ubuntu 22.04's). Left out: glibc only. |
 | `share/OpenMS/` | `CHEMISTRY` (without the 49 MB of HMDB tables), `CV`, `MAPPING`, `SCHEMAS`, the `TOOLS` registry (the set ProSE desktop's bundle had, checked with strace there) and `NUXL` (`nuxl_presets.json`: the cross-linking protocols of `NuXL:presets`, read when OpenNuXL registers its options) |
 | `share/OpenMS/openms_thermo_bridge/managed/` | the Thermo bridge's managed half (about 1.6 MB of IL assemblies, the same on every platform), from the build's `OpenMSThermoBridge_MANAGED_DIR` without `*.pdb` and `*.zip` (as OpenMS installs it); its `ThermoWrapperManaged.runtimeconfig.json` patched to `"rollForward": "Major"` |
@@ -188,9 +187,9 @@ native/scripts/bundle-nuxl.sh <OpenMS checkout>/build src-tauri/resources/nuxl
 every library of the tools resolves into the bundle, also with the build's library directories on
 `LD_LIBRARY_PATH`, that the tools run from an empty environment and are of one version, that OpenNuXL's help
 lists the presets (it read `share/OpenMS/NUXL`), and that `.raw` and `.d` are read natively: the build has
-`WITH_THERMO_RAW` and `WITH_OPENTIMS` on, the bridge library (Windows: and `nethost.dll`) is in the closure, the
-`-in` of OpenNuXL and FileConverter takes `d` and FileConverter offers `-RawToMzML:reader inprocess` (read from
-their `-write_ini` parameter files), the managed folder, the licences and `dotnet/host/fxr/<version>/` are there and
+`WITH_THERMO_RAW` and `WITH_OPENTIMS` on, the bridge library (Windows: and `nethost.dll`) is in the closure,
+OpenNuXL's `-in` takes `raw` and `d` and it has `-out_qpx` (read from its `-write_ini` parameter file), the managed
+folder, the licences and `dotnet/host/fxr/<version>/` are there and
 the bundled `dotnet --list-runtimes` lists the runtime. It refuses a build whose source is not at `OPENMS_COMMIT`
 (`ALLOW_PIN_MISMATCH=1` overrides).
 
@@ -230,8 +229,6 @@ Microsoft's signatures; `bundle-nuxl.sh` and `package-macos.sh` check them).
   machine OpenMS's data path is the source tree's `share/OpenMS`, which has no managed folder). A tool from an
   OpenMS build tree (`NUXL_TOOL`) has neither folder beside it and keeps the user's environment.
 - **Size**: about 70 MB unpacked per platform (the CI summary's "Package sizes" shows it as a row of its own).
-- FileConverter's `-RawToMzML:reader` defaults to ThermoRawFileParser (`external`) on Windows; the start test always
-  passes `inprocess`.
 
 **`tool_info`** is `{ version, path }` (`src-tauri/src/tool.rs`): the version from `OpenNuXL --help`. The app's
 `--smoke-test` also reports whether PercolatorAdapter is beside the tool. `NUXL_TOOL` names a tool to use
@@ -247,7 +244,7 @@ them. The same scripts run there:
 | --- | --- | --- |
 | OpenMS | `build-openms.sh` with `VCPKG_TRIPLET=arm64-osx-dynamic-sysroot-vcrel` (OpenMS's own macOS triplet, release builds only), `OPENMS_CMAKE_ARGS="-DOpenMP_ROOT=$(brew --prefix libomp) -DMT_REQUIRE_OPENMP=ON"`, `MACOSX_DEPLOYMENT_TARGET=15.0` | `build-openms.sh` in Git Bash inside Visual Studio's developer environment, `CC=CXX=cl`, `VCPKG_TRIPLET=x64-windows-static-md-release` (OpenMS's own Windows triplet: the dependencies static, the C runtime dynamic), `-DMT_REQUIRE_OPENMP=ON` |
 | .NET SDK (build only) | `actions/setup-dotnet` 8.0.x | `actions/setup-dotnet` 8.0.x |
-| bundle | `bundle-nuxl.sh`: `bin/OpenNuXL`, `bin/PercolatorAdapter`, `bin/FileConverter`, `lib/*.dylib` (with `libopenms_thermo_bridge.dylib`), `dotnet/` (`osx-arm64`) | `bundle-nuxl.sh`: `bin/OpenNuXL.exe`, `bin/PercolatorAdapter.exe`, `bin/FileConverter.exe`, `bin/*.dll` (with `openms_thermo_bridge.dll` and `nethost.dll`), `dotnet/` (`win-x64`) |
+| bundle | `bundle-nuxl.sh`: `bin/OpenNuXL`, `bin/PercolatorAdapter`, `lib/*.dylib` (with `libopenms_thermo_bridge.dylib`), `dotnet/` (`osx-arm64`) | `bundle-nuxl.sh`: `bin/OpenNuXL.exe`, `bin/PercolatorAdapter.exe`, `bin/*.dll` (with `openms_thermo_bridge.dll` and `nethost.dll`), `dotnet/` (`win-x64`) |
 | package | `package-macos.sh`: `NuXL.app`, `.dmg` | `package-windows.sh`: the NSIS installer `*-setup.exe` |
 | test | `start-test.sh <dmg>`; `cargo test --test real_nuxl` with the bundled tool, with the vendor test data (`.raw`, `.d`) | `start-test.sh <setup.exe>`; the same |
 
@@ -308,7 +305,7 @@ Windows OpenMS does not probe its install prefix at all (`File.cpp`: CMake's def
   `xattr -dr com.apple.quarantine`); an unsigned arm64 app counts as damaged. The .NET runtime's dylibs in
   `resources/nuxl/dotnet` keep Microsoft's signatures (`package-macos.sh` verifies them inside the app); without
   the hardened runtime, the tools load them beside the ad-hoc signed bundle. (Should the app ever get the hardened
-  runtime and notarization, OpenNuXL and FileConverter would need the `allow-jit` and
+  runtime and notarization, OpenNuXL would need the `allow-jit` and
   `disable-library-validation` entitlements to host CoreCLR.)
 - **Windows**: the NSIS installer, per user (`installMode: currentUser`, no administrator rights), unsigned
   (SmartScreen asks once). The tools go to `<install folder>/resources/nuxl/bin`, the .NET runtime to
@@ -318,12 +315,11 @@ Windows OpenMS does not probe its install prefix at all (`File.cpp`: CMake's def
 
 1. The package is opened as a user would: the `.dmg` is mounted and `NuXL.app` copied out; the installer is
    run silently (`/S /D=<folder>`). The bundle inside is verified (`macho-verify`, `pe-verify`).
-2. The bundled OpenNuXL, PercolatorAdapter and FileConverter print their version (the same) from an empty
-   environment (Windows: only Windows' folders on `PATH`). The package has the managed folder, `dotnet/` of the
-   version in `build.json` and the licences of Thermo, the bridge and .NET. With `NUXL_RAW_EXAMPLE` and
-   `NUXL_D_EXAMPLE` set (CI sets them, below), FileConverter converts both to indexed mzML with the options and the
-   environment the app uses (`DOTNET_ROOT` the package's `dotnet/`, ...): spectra with `scan=` (Thermo) and `frame=`
-   (Bruker) native IDs.
+2. The bundled OpenNuXL and PercolatorAdapter print their version (the same) from an empty environment
+   (Windows: only Windows' folders on `PATH`). The package has the managed folder, `dotnet/` of the version in
+   `build.json` and the licences of Thermo, the bridge and .NET. With `NUXL_RAW_EXAMPLE` and `NUXL_D_EXAMPLE` set (CI
+   sets them, below), OpenNuXL searches both (with the example's FASTA) with the command line and the environment the
+   app uses (`DOTNET_ROOT` the package's `dotnet/`, ...): exit 0, and the QPX mz view of `-out_qpx` written.
 3. OpenNuXL searches the example (`OpenNuXL_1_input.mzML`, `OpenNuXL_1_input.fasta`) from the command line as
    the app runs it, in a folder with a space in its name, with the preset `RNA-UV (U)` and Percolator: exit 0, the
    outputs the app reads (the idXML of all PSMs, the cross-links and peptides, the protein report, the TSV report)
@@ -382,8 +378,8 @@ copy the tools' closure a second time into `usr/lib` and turn its `DT_RPATH` int
 the script also answers the GTK plugin's `pkg-config --variable` queries with `/usr` paths and puts WebKit's
 helper processes into the AppDir with the relative helper path the GTK plugin writes on a normal system (details
 in the script). linuxdeploy thus never sees the .NET runtime's ELF files either; the script checks that the
-AppImage's and the `.deb`'s `nuxl/dotnet` are the bundle's files unchanged, and that both have FileConverter and the
-Thermo bridge's managed folder.
+AppImage's and the `.deb`'s `nuxl/dotnet` are the bundle's files unchanged, and that both have the Thermo bridge's
+managed folder.
 
 ## AppImage smoke test
 
@@ -429,7 +425,7 @@ steps: x64 on `ubuntu-22.04` (vcpkg triplet `x64-linux-dynamic`, artifact `nuxl-
 triplet, which builds OpenBLAS for any ARMv8 CPU; artifact `nuxl-desktop-linux-arm64`). Both are Ubuntu 22.04, so
 both packages need glibc 2.35. Each job checks out OpenMS at `OPENMS_COMMIT`, builds the vcpkg dependencies (a
 configure step of their own, saved before OpenMS is built, as on macOS and Windows) and libOpenMS, OpenNuXL,
-PercolatorAdapter and FileConverter with GCC 13 (toolchain PPA) through `build-openms.sh`, bundles them, runs
+PercolatorAdapter with GCC 13 (toolchain PPA) through `build-openms.sh`, bundles them, runs
 svelte-check, vitest and `cargo test` (with the bundled OpenNuXL, so the `real_nuxl` tests run too), builds the packages with
 `package-linux.sh`, runs the smoke test and uploads the AppImage and the `.deb` (kept 14 days). Tauri downloads
 linuxdeploy, its AppImage plugin and AppRun for the machine's architecture (none of them checksum-verified, on
@@ -445,9 +441,9 @@ runs `scripts/fetch-test-data.sh`: PNNL's Thermo `Angiotensin_AllScans.raw` (BSD
 else from PNNL-Comp-Mass-Spec/Thermo-Raw-File-Reader at commit 1d8ff309) and the Bruker `DDA_HeLa_50ng_5_6min.d`
 (the zip from archive.openms.de, unpacked), as OpenMS's own tests use them, checked against pinned SHA-256s and
 cached (key: the script's hash; saved only when both are there). It exports `NUXL_RAW_EXAMPLE` and `NUXL_D_EXAMPLE`
-for the later steps: the `real_nuxl` tests search each through the shim with the bundled OpenNuXL and convert its
-spectra with the bundled FileConverter (so every platform's bundled .NET runtime reads a real `.raw`), and on macOS
-and Windows `start-test.sh` converts both with the installed package. A file that cannot be downloaded (the server
+for the later steps: the `real_nuxl` tests search each through the shim with the bundled OpenNuXL and check its mz
+view (so every platform's bundled .NET runtime reads a real `.raw`), and on macOS and Windows `start-test.sh` searches
+both with the installed package. A file that cannot be downloaded (the server
 has answered on plain HTTP only, and not to every network) skips the tests that need it, with a `::warning::` and a
 line in the run's summary, instead of failing the build.
 

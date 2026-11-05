@@ -180,10 +180,9 @@ removed, and `DOTNET_ROLL_FORWARD=Major` (the Thermo bridge targets .NET 8, the 
 bridge's managed part (`<tool dir>/../share/OpenMS/openms_thermo_bridge/managed`), `OPENMS_THERMO_MANAGED_DIR` names
 it. A tool without these folders (a build tree's, `NUXL_TOOL`) keeps the user's environment for them.
 
-The packaged app's `--smoke-test` reports, beside the tool's version, whether PercolatorAdapter and FileConverter are
-beside it (`percolatorAdapter`, `fileConverter`: the bundle keeps FileConverter for the packages' start test, which
-converts a `.raw` and a `.d` with it through the bundled .NET runtime; the app does not run it) and whether the bundle
-has `dotnet/` and the managed part (`dotnet`, `thermoBridge`); it fails without PercolatorAdapter.
+The packaged app's `--smoke-test` reports, beside the tool's version, whether PercolatorAdapter is beside it
+(`percolatorAdapter`) and whether the bundle has `dotnet/` and the managed part (`dotnet`, `thermoBridge`); it fails
+without PercolatorAdapter.
 
 ## 4. Progress
 

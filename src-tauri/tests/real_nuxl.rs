@@ -54,11 +54,18 @@ fn check_mz_view(folder: &Path, stem: &str, outputs: &Value) -> usize {
         .next_back()
         .unwrap_or_else(|| panic!("no -out_qpx line in the log: {log}"));
     let counts = &wrote[wrote.rfind('(').unwrap() + 1..];
-    counts
+    let rows: usize = counts
         .split(' ')
         .next()
         .and_then(|n| n.parse().ok())
-        .unwrap_or_else(|| panic!("{wrote}"))
+        .unwrap_or_else(|| panic!("{wrote}"));
+    // (the size of the view, for docs: README's disk figures)
+    eprintln!(
+        "mz view {mz}: {rows} spectra, {} bytes, {:.2} MB per thousand spectra; {wrote}",
+        bytes.len(),
+        bytes.len() as f64 / rows.max(1) as f64 / 1000.0
+    );
+    rows
 }
 
 struct Real {

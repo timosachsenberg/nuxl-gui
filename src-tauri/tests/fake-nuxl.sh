@@ -32,19 +32,6 @@
 # <stem>.argv.txt (one argument per line) and <stem>.env.txt (its DOTNET_* and OPENMS_* variables, sorted).
 # `--help` prints OpenMS' version line (to stderr, as TOPPBase does).
 #
-# Started as FileConverter (a link or copy of this script of that name, beside the fake OpenNuXL: the shim runs the
-# FileConverter beside its tool; e2e/fake/FileConverter) it is a stand-in for OpenMS' FileConverter, as the shim runs it
-# after the search of a .raw or .d input: it reads -in and -out, leaves <stem>.FileConverter.argv.txt and
-# <stem>.FileConverter.env.txt beside -out (<stem>: the name of -out without .spectra.tmp.mzML) and converter.pid in the
-# search folder, prints the reader's progress label, and writes a small indexed mzML to -out: a copy of OpenMS'
-# OpenNuXL test run (src/lib/results/fixtures/spectra/OpenNuXL_1_input.indexed.mzML of this repository), so that the
-# PSM view has peaks. By the input's stem (after "<n>__", up to the first "."):
-#
-#   convfail  writes OpenMS' error of a file it cannot read to stderr and exits with code 6 (also for any input
-#             with FAKE_FILECONVERTER_FAIL=1)
-#   convhang  waits for a signal (its child's pid in converter-children.pid of the search folder)
-#   convnone  exits 0 without writing -out
-#
 # With FAKE_NUXL_RESULTS set to a folder of OpenNuXL outputs (the e2e specs' fake: e2e/fake/OpenNuXL, with
 # src/lib/results/fixtures/example/nuxl) a search writes real ones: <dir>/<n>__<name>_1.0000_XLs.idXML and
 # <dir>/<n>__<name>_0.0000_peptides.idXML of the input's name (without .mzML, .raw or .d; else the first such pair of the
@@ -71,55 +58,6 @@ loading_label() {
 
 # the variables of .NET and OpenMS of this process, sorted
 tool_env() { env | grep -E '^(DOTNET_|OPENMS_)' | LC_ALL=C sort; }
-
-file_converter() {
-  local input="" out="" k=0 count=$#
-  local args=("$@")
-  while [ "$k" -lt "$count" ]; do
-    case "${args[$k]}" in
-      -in) input="${args[$((k + 1))]}" ;;
-      -out) out="${args[$((k + 1))]}" ;;
-    esac
-    k=$((k + 1))
-  done
-  [ -n "$out" ] || { echo "Error: The required parameter '-out' was not given or is empty!" >&2; exit 2; }
-  local dir stem name mode here spectra
-  dir=$(dirname "$out")
-  stem=$(basename "$out")
-  stem=${stem%.mzML}
-  stem=${stem%.spectra.tmp}
-  printf '%s\n' "$@" > "$dir/$stem.FileConverter.argv.txt"
-  tool_env > "$dir/$stem.FileConverter.env.txt"
-  echo $$ > "$(dirname "$dir")/converter.pid"
-  [ -e "$input" ] || { echo "Error: File not found (the file '$input' could not be found)" >&2; exit 6; }
-  name=$(basename "$input")
-  name=${name#*__}
-  mode=${name%%.*}
-  progress "$(loading_label "$input")"
-  if [ "${FAKE_FILECONVERTER_FAIL:-}" = 1 ] || [ "$mode" = convfail ]; then
-    echo "Error: Unable to read file (the fake FileConverter cannot read $input)" >&2
-    exit 6
-  fi
-  case "$mode" in
-    convhang)
-      sleep 300 &
-      echo $! > "$(dirname "$dir")/converter-children.pid"
-      wait
-      exit 0
-      ;;
-    convnone) exit 0 ;;
-  esac
-  here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
-  spectra="$here/../../src/lib/results/fixtures/spectra/OpenNuXL_1_input.indexed.mzML"
-  [ -f "$spectra" ] || spectra="$here/../resources/example/OpenNuXL_1_input.mzML"
-  cp "$spectra" "$out" || { echo "Error: Unable to write file (the file '$out' could not be created)" >&2; exit 12; }
-  done_line
-  exit 0
-}
-
-if [ "$(basename "$0")" = FileConverter ]; then
-  file_converter "$@"
-fi
 
 if [ "${1:-}" = --help ]; then
   # 9.9.9; with FAKE_NUXL_RESULTS the version of the OpenNuXL that wrote those outputs (their search_engine_version,

@@ -3,10 +3,8 @@
 //!
 //! OpenNuXL rescores with Percolator through another OpenMS tool, `PercolatorAdapter`, which it looks for
 //! beside its own executable (`File::findSiblingTOPPExecutable`), then on the PATH. The bundle has both in
-//! one `bin/` (`native/scripts/bundle-nuxl.sh`); a tool of a build tree has its sibling there too. The bundle has
-//! `FileConverter` there as well ([`file_converter`]), which its start test converts a `.raw` and a `.d` with
-//! (`native/scripts/start-test.sh`); the app does not run it (OpenNuXL writes the spectra of its PSMs for the PSM
-//! view itself: `-out_qpx`). OpenMS finds its data (`share/OpenMS`: CHEMISTRY, the NUXL presets) next to the executable,
+//! one `bin/` (`native/scripts/bundle-nuxl.sh`); a tool of a build tree has its sibling there too. OpenNuXL keeps
+//! the spectra of its PSMs for the PSM view itself (`-out_qpx`): no other tool runs. OpenMS finds its data (`share/OpenMS`: CHEMISTRY, the NUXL presets) next to the executable,
 //! `bin/../share/OpenMS`, which the bundle provides (and whose compiled-in alternatives it rules out), so the app
 //! sets no data path.
 //!
@@ -38,13 +36,6 @@ pub const PERCOLATOR_ADAPTER: &str = if cfg!(windows) {
     "PercolatorAdapter.exe"
 } else {
     "PercolatorAdapter"
-};
-
-/// The OpenMS tool that writes the spectra of a `.raw` or `.d` input as mzML after its run (beside OpenNuXL).
-pub const FILE_CONVERTER: &str = if cfg!(windows) {
-    "FileConverter.exe"
-} else {
-    "FileConverter"
 };
 
 /// The variable that names the tool to use instead of the bundled one (a development build, a test).
@@ -127,14 +118,6 @@ pub fn has_percolator_adapter(path: &Path) -> bool {
         .is_some_and(|bin| bin.join(PERCOLATOR_ADAPTER).is_file())
 }
 
-/// `FileConverter` beside the tool at `path` (the bundle's `bin/`, a build tree's), if it is there: the smoke test
-/// reports it (the packages' start test converts with it).
-pub fn file_converter(path: &Path) -> Option<PathBuf> {
-    path.parent()
-        .map(|bin| bin.join(FILE_CONVERTER))
-        .filter(|p| p.is_file())
-}
-
 /// The folder above the tool's `bin/` (the bundle's `resources/nuxl`, a build tree), where the bundle's other
 /// parts are.
 fn tool_root(path: &Path) -> Option<&Path> {
@@ -193,7 +176,7 @@ pub const LOADER_VARIABLES: &[&str] = &[
 /// it). Any value but `OFF` turns the check off.
 pub const NO_UPDATE_CHECK: (&str, &str) = ("OPENMS_DISABLE_UPDATE_CHECK", "ON");
 
-/// The command that runs the tool at `path` (OpenNuXL, FileConverter: an OpenMS tool of the bundle's `bin/`):
+/// The command that runs the tool at `path` (OpenNuXL, an OpenMS tool of the bundle's `bin/`):
 /// `OPENBLAS_NUM_THREADS=1` unless the user has set it (Percolator's linear algebra would otherwise start a thread
 /// per core inside the tool's own threads), as the FASTag shim does. `openblas` is the variable's current value.
 /// Always with [`NO_UPDATE_CHECK`] (a user's `OFF` included: the tool makes no network contact). On macOS without

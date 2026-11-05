@@ -262,8 +262,8 @@ mod tests {
         );
         // the spectra conversion's tool by its name
         assert_eq!(
-            how_tool_ended("FileConverter", &ExitStatus::from_raw(6 << 8)).as_deref(),
-            Some("FileConverter ended with exit code 6")
+            how_tool_ended("PercolatorAdapter", &ExitStatus::from_raw(6 << 8)).as_deref(),
+            Some("PercolatorAdapter ended with exit code 6")
         );
     }
 
@@ -1180,9 +1180,8 @@ impl Searches {
     }
 
     /// Checks the request, makes the search folder and starts the first run of the tool; returns the search
-    /// id. The events go to `sink`. `crap` is the contaminant FASTA, needed if the request asks for them. The
-    /// spectra of `.raw` and `.d` inputs are converted by the FileConverter beside the tool
-    /// ([`tool::file_converter`]); without one they are not (a note says so).
+    /// id. The events go to `sink`. `crap` is the contaminant FASTA, needed if the request asks for them. Each run
+    /// writes the QPX mz view of its PSMs' spectra for the PSM view ([`take_mz_view`]).
     pub fn start(
         self: &Arc<Self>,
         tool_path: &Path,
@@ -1584,11 +1583,11 @@ struct RunContext<'a> {
     log: Option<&'a Arc<Mutex<fs::File>>>,
 }
 
-/// One run of a tool: OpenNuXL's of an input, or FileConverter's after it.
+/// One run of a tool: OpenNuXL's of an input.
 struct ToolRun<'a> {
     /// The executable.
     exe: &'a Path,
-    /// Its name in messages ("OpenNuXL", "FileConverter").
+    /// Its name in messages ("OpenNuXL").
     name: &'a str,
     args: &'a [OsString],
     /// Whether its stdout is OpenNuXL's: its progress ([`ProgressTracker::feed`]) and its notes ([`note_of`]).

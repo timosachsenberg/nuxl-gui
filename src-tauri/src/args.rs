@@ -3,8 +3,8 @@
 //!
 //! The front end sends a [`SearchRequest`] (camelCase JSON). [`build_runs`] checks it and turns it into the
 //! arguments of one run of the tool per input (`docs/design.md` §3), which `run.rs` starts one after the other;
-//! [`build_search_with`] also gives FileConverter's command line that converts the spectra of a `.raw` or `.d`
-//! input after its run ([`conversion_args`]). Nothing here runs a process or writes to the search folder; the
+//! [`build_search_with`] adds `-out_qpx` to each (the QPX mz view of the spectra of its PSMs, for the PSM view:
+//! [`mz_view_output`]). Nothing here runs a process or writes to the search folder; the
 //! folder is made by [`mod@crate::run`], which also creates the links and the database that these arguments name.
 //! The one thing read is the user's FASTA, for its decoys ([`plan_database`]), and of a `.d` which files it has
 //! ([`bruker_files`]).

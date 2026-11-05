@@ -15,15 +15,15 @@
 #
 # Checks: the bundle's minimum macOS (build.json, minimumMacos) is not newer than the app's
 # (minimumSystemVersion); the bundle inside the app is the same files, still relocatable and validly
-# signed (bundle_closure.py macho-verify), with FileConverter, the Thermo bridge's managed half and the .NET
-# runtime (its dylibs validly signed, by Microsoft).
+# signed (bundle_closure.py macho-verify), with the Thermo bridge's managed half and the .NET runtime (its dylibs
+# validly signed, by Microsoft).
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 NUXL=$ROOT/src-tauri/resources/nuxl
 BUNDLE_DIR=$ROOT/src-tauri/target/release/bundle
 die() { echo "error: $*" >&2; exit 1; }
-[ -x "$NUXL/bin/OpenNuXL" ] && [ -x "$NUXL/bin/PercolatorAdapter" ] && [ -x "$NUXL/bin/FileConverter" ] \
+[ -x "$NUXL/bin/OpenNuXL" ] && [ -x "$NUXL/bin/PercolatorAdapter" ] \
   && [ -d "$NUXL/dotnet/host/fxr" ] && [ -f "$NUXL/build.json" ] \
   || die "src-tauri/resources/nuxl holds no bundled OpenNuXL: run native/scripts/bundle-nuxl.sh <openms-build> src-tauri/resources/nuxl"
 
@@ -50,7 +50,7 @@ done
 app=$(find "$BUNDLE_DIR/macos" -maxdepth 1 -name '*.app' | head -n 1)
 [ -n "$app" ] || die "no .app in $BUNDLE_DIR/macos"
 inside=$app/Contents/Resources/resources/nuxl
-for exe in OpenNuXL PercolatorAdapter FileConverter; do
+for exe in OpenNuXL PercolatorAdapter; do
   [ -x "$inside/bin/$exe" ] || die "$inside/bin/$exe is missing"
 done
 diff <(cd "$NUXL" && find . -type f | sort) <(cd "$inside" && find . -type f | sort) \

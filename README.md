@@ -5,8 +5,8 @@ around the OS webview, the native `OpenNuXL` tool (with `PercolatorAdapter` for 
 native code, and the screens of ProSE desktop (same theme, shadcn-svelte components and colours). Design:
 `docs/design.md`.
 
-The packages come from CI (`.github/workflows/desktop.yml`); they bundle OpenNuXL, PercolatorAdapter and FileConverter
-(which the packages' start test reads a `.raw` and a `.d` with; the app does not run it) with their libraries and data, the cross-linking protocols (NuXL presets) among them, and the .NET runtime that
+The packages come from CI (`.github/workflows/desktop.yml`); they bundle OpenNuXL and PercolatorAdapter with their
+libraries and data, the cross-linking protocols (NuXL presets) among them, and the .NET runtime that
 reads Thermo `.raw` files (`native/README.md`). Everything runs on the
 computer. The app's only network connection is its new-version check: one request to GitHub at start (on by
 default) and one each time "Check for updates" is clicked ("Where the data is" says what it sends and how to turn

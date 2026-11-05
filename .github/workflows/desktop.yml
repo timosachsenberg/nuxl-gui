@@ -1,5 +1,5 @@
 # The NuXL desktop app on Linux (x64, arm64), macOS (arm64) and Windows (x64): the pinned OpenMS
-# (native/OPENMS_COMMIT) built (OpenNuXL, PercolatorAdapter and FileConverter, with Thermo .raw and Bruker .d
+# (native/OPENMS_COMMIT) built (OpenNuXL and PercolatorAdapter, with Thermo .raw and Bruker .d
 # reading; a .NET SDK from actions/setup-dotnet for the Thermo bridge) and bundled (with a .NET runtime for the
 # .raw reader, native/scripts/fetch-dotnet-runtime.sh), the app's unit tests and packages.
 # - linux (x64 and arm64, a matrix): the .deb and the AppImage, and the AppImage's smoke test (the example
@@ -9,9 +9,9 @@
 #   and exits); the real_nuxl tests with the bundled tool.
 # - every platform's packaging job: the real_nuxl tests of a Thermo .raw and a Bruker .d input
 #   (native/scripts/fetch-test-data.sh downloads them; NUXL_RAW_EXAMPLE, NUXL_D_EXAMPLE), so that the bundled .NET
-#   runtime of each platform reads a real .raw; on macOS and Windows start-test.sh also converts both with the
-#   installed package's FileConverter. A download that fails skips those tests with a warning (in the log and the
-#   run's summary) instead of failing the build.
+#   runtime of each platform reads a real .raw; on macOS and Windows start-test.sh also searches both with the
+#   installed package's OpenNuXL, as the app does (its mz view of the PSMs' spectra too). A download that fails
+#   skips those tests with a warning (in the log and the run's summary) instead of failing the build.
 # - shim: the shim's tests (cargo test) on macOS and Windows, which need no OpenMS, for quick answers.
 # A tag desktop-native-v* makes a draft release with the packages of the tested main run of the tagged
 # commit (a tag run builds nothing: it releases the packages that main's run built and tested).
@@ -197,7 +197,7 @@ jobs:
           path: vcpkg-bincache
           key: ${{ steps.vcpkg.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-bincache/**') }}
 
-      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter, FileConverter)
+      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter)
         if: steps.bundle.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
         id: openms
         env:
@@ -208,7 +208,7 @@ jobs:
           VCPKG_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
           VCPKG_INSTALL_OPTIONS: --clean-after-build
           VCPKG_TRIPLET: ${{ env.TRIPLET }}
-          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter FileConverter
+          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter
         run: |
           native/scripts/build-openms.sh openms openms/build
           df -h /
@@ -244,7 +244,7 @@ jobs:
       - name: The bundled OpenNuXL
         run: |
           cat src-tauri/resources/nuxl/build.json
-          for tool in OpenNuXL PercolatorAdapter FileConverter; do
+          for tool in OpenNuXL PercolatorAdapter; do
             echo "$tool $(src-tauri/resources/nuxl/bin/$tool --help 2>&1 | grep -m1 'Version:')"
           done
           src-tauri/resources/nuxl/dotnet/dotnet --list-runtimes
@@ -282,7 +282,7 @@ jobs:
           key: ${{ steps.testdata-cache.outputs.cache-primary-key }}
 
       # (with NUXL_RAW_EXAMPLE and NUXL_D_EXAMPLE from the step above, the real_nuxl tests also search a .raw and a
-      # .d with the bundled OpenNuXL and FileConverter, the .raw through the bundled .NET runtime)
+      # .d with the bundled OpenNuXL, the .raw through the bundled .NET runtime, and check their mz views)
       - name: Unit tests (cargo test, with the bundled OpenNuXL)
         working-directory: src-tauri
         env:
@@ -482,7 +482,7 @@ jobs:
           path: vcpkg-bincache
           key: ${{ steps.vcpkg.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-bincache/**') }}
 
-      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter, FileConverter)
+      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter)
         if: steps.bundle.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
         id: openms
         env:
@@ -491,7 +491,7 @@ jobs:
           VCPKG_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
           VCPKG_INSTALL_OPTIONS: --clean-after-build
           VCPKG_TRIPLET: ${{ env.TRIPLET }}
-          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter FileConverter
+          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
           CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -546,7 +546,7 @@ jobs:
       - name: The bundled OpenNuXL
         run: |
           cat src-tauri/resources/nuxl/build.json
-          for tool in OpenNuXL PercolatorAdapter FileConverter; do
+          for tool in OpenNuXL PercolatorAdapter; do
             echo "$tool $(src-tauri/resources/nuxl/bin/$tool --help 2>&1 | grep -m1 'Version:')"
           done
           src-tauri/resources/nuxl/dotnet/dotnet --list-runtimes
@@ -579,7 +579,7 @@ jobs:
           key: ${{ steps.testdata-cache.outputs.cache-primary-key }}
 
       # (with NUXL_RAW_EXAMPLE and NUXL_D_EXAMPLE from the step above, also a .raw and a .d search with the bundled
-      # OpenNuXL and FileConverter, the .raw through the bundled .NET runtime)
+      # OpenNuXL, the .raw through the bundled .NET runtime, and their mz views)
       - name: The shim with the bundled OpenNuXL (real_nuxl)
         working-directory: src-tauri
         env:
@@ -748,7 +748,7 @@ jobs:
           path: vcpkg-bincache
           key: ${{ steps.vcpkg.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-bincache/**') }}
 
-      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter, FileConverter)
+      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter)
         if: steps.bundle.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
         id: openms
         env:
@@ -760,7 +760,7 @@ jobs:
           VCPKG_INSTALL_OPTIONS: --clean-after-build;--x-buildtrees-root=D:/vb;--x-packages-root=D:/vp
           VCPKG_TRIPLET: ${{ env.TRIPLET }}
           OPENMS_CMAKE_ARGS: -DMT_REQUIRE_OPENMP=ON
-          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter FileConverter
+          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
           CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -811,7 +811,7 @@ jobs:
       - name: The bundled OpenNuXL
         run: |
           cat src-tauri/resources/nuxl/build.json
-          for tool in OpenNuXL PercolatorAdapter FileConverter; do
+          for tool in OpenNuXL PercolatorAdapter; do
             echo "$tool $(src-tauri/resources/nuxl/bin/$tool.exe --help 2>&1 | grep -m1 'Version:')"
           done
           src-tauri/resources/nuxl/dotnet/dotnet.exe --list-runtimes
@@ -845,7 +845,7 @@ jobs:
           key: ${{ steps.testdata-cache.outputs.cache-primary-key }}
 
       # (with NUXL_RAW_EXAMPLE and NUXL_D_EXAMPLE from the step above, also a .raw and a .d search with the bundled
-      # OpenNuXL and FileConverter, the .raw through the bundled .NET runtime)
+      # OpenNuXL, the .raw through the bundled .NET runtime, and their mz views)
       - name: The shim with the bundled OpenNuXL (real_nuxl)
         working-directory: src-tauri
         env:

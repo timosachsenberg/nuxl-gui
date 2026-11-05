@@ -1,8 +1,7 @@
 #!/bin/bash
 # Bundles OpenNuXL for the desktop app (Linux, macOS, Windows): the OpenNuXL executable, PercolatorAdapter
-# (which OpenNuXL runs for its score recalibration and looks for beside itself, File::findSiblingTOPPExecutable)
-# and FileConverter (the app converts the spectra of a Thermo .raw or Bruker .d input to mzML with it, for its PSM
-# view), their shared-library closure, the OpenMS share/ data they read, the managed half of the Thermo .raw reader
+# (which OpenNuXL runs for its score recalibration and looks for beside itself, File::findSiblingTOPPExecutable),
+# their shared-library closure, the OpenMS share/ data they read, the managed half of the Thermo .raw reader
 # and a .NET runtime to host it (fetch-dotnet-runtime.sh), the licences, plus a build manifest.
 #
 #   bundle-nuxl.sh <openms-build> <out>
@@ -10,14 +9,14 @@
 # <openms-build> is a build directory made by build-openms.sh; <out> is normally
 # src-tauri/resources/nuxl (tauri.conf.json bundles that folder). <out> is emptied first. The layout:
 #
-#   Linux    bin/OpenNuXL, bin/PercolatorAdapter, bin/FileConverter     RPATH $ORIGIN/../lib
+#   Linux    bin/OpenNuXL, bin/PercolatorAdapter     RPATH $ORIGIN/../lib
 #            lib/*.so*                the closure of the tools (with libopenms_thermo_bridge.so), RPATH $ORIGIN;
 #                                     system libraries left out (below)
-#   macOS    bin/OpenNuXL, bin/PercolatorAdapter, bin/FileConverter     LC_RPATH @loader_path/../lib, ad-hoc signed
+#   macOS    bin/OpenNuXL, bin/PercolatorAdapter     LC_RPATH @loader_path/../lib, ad-hoc signed
 #            lib/*.dylib              the closure (one libomp, libopenms_thermo_bridge.dylib), ids and references
 #                                     @rpath/<name>, LC_RPATH @loader_path, ad-hoc signed; /usr/lib and /System
 #                                     left out
-#   Windows  bin/OpenNuXL.exe, bin/PercolatorAdapter.exe, bin/FileConverter.exe, bin/*.dll
+#   Windows  bin/OpenNuXL.exe, bin/PercolatorAdapter.exe, bin/*.dll
 #                                     the closure beside the exes (Windows has no RPATH; the exe's folder
 #                                     is searched first), with the Visual C++ runtime and vcomp140 (the one
 #                                     OpenMP runtime), openms_thermo_bridge.dll and the nethost.dll it imports
@@ -64,9 +63,8 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CACHE=$BUILD/CMakeCache.txt
 SUFFIX=
 [ "$PLATFORM" = windows ] && SUFFIX=.exe
-# the tools, OpenNuXL first; PercolatorAdapter has to be beside it; FileConverter writes the spectra of a .raw or
-# .d input as mzML for the PSM view (src-tauri/src/run.rs)
-TOOL_NAMES=(OpenNuXL PercolatorAdapter FileConverter)
+# the tools, OpenNuXL first; PercolatorAdapter has to be beside it
+TOOL_NAMES=(OpenNuXL PercolatorAdapter)
 EXES=()
 for name in "${TOOL_NAMES[@]}"; do EXES+=("$BUILD/bin/$name$SUFFIX"); done
 # (Windows has python, not always python3)
@@ -445,8 +443,8 @@ PY
     run_empty() { env -i SYSTEMROOT="$SYSTEMROOT" WINDIR="$WINDIR" PATH="/c/Windows/System32:/c/Windows" "$@"; }
     ;;
 esac
-# (all: PercolatorAdapter runs only at the end of a search and FileConverter after it, so a broken one would show
-# late; the three are one build, of one version. OpenNuXL's help lists the presets among the valid values of
+# (both: PercolatorAdapter runs only at the end of a search, so a broken one would show late; the two are one build,
+# of one version. OpenNuXL's help lists the presets among the valid values of
 # NuXL:presets, which it reads from share/OpenMS/NUXL; the help wraps its lines, so line ends and indentation are
 # squeezed to one space first.)
 version=
@@ -460,16 +458,15 @@ done
 run_empty "$OUT/bin/OpenNuXL$SUFFIX" --help 2>&1 | tr -s ' \n' '  ' | grep -q 'RNA-UV (U)' \
   || die "the bundled OpenNuXL does not list the presets of share/OpenMS/NUXL/nuxl_presets.json"
 
-# Native .raw and .d reading is compiled in: OpenNuXL's and FileConverter's -in take 'd' (WITH_OPENTIMS), and
-# FileConverter offers the in-process Thermo reader (RawToMzML:reader inprocess, WITH_THERMO_RAW; OpenNuXL reads
-# .raw through the same reader then, and through ThermoRawFileParser, which the app does not bundle, otherwise).
-# Read from the tools' parameter files (-write_ini), not from the help, whose wording and wrapping may change.
+# Native .raw and .d reading is compiled in: OpenNuXL's -in takes 'raw' and 'd' (WITH_OPENTIMS), and it writes the
+# QPX mz view the app's PSM view reads (-out_qpx). The in-process Thermo reader (WITH_THERMO_RAW) is checked above:
+# the build's cache and the bridge library in the closure (without it OpenNuXL reads .raw through
+# ThermoRawFileParser, which the app does not bundle). Read from the tool's parameter file (-write_ini), not from the
+# help, whose wording and wrapping may change.
 inis=$(mktemp -d)
-for name in OpenNuXL FileConverter; do
-  run_empty "$OUT/bin/$name$SUFFIX" -write_ini "$(native "$inis/$name.ini")" >/dev/null 2>&1 \
-    || die "the bundled $name could not write its parameters (-write_ini)"
-done
-"$PY" -I - "$(native "$inis/OpenNuXL.ini")" "$(native "$inis/FileConverter.ini")" <<'PY' || { rm -rf "$inis"; die "the bundled tools do not read .raw and .d natively"; }
+run_empty "$OUT/bin/OpenNuXL$SUFFIX" -write_ini "$(native "$inis/OpenNuXL.ini")" >/dev/null 2>&1 \
+  || die "the bundled OpenNuXL could not write its parameters (-write_ini)"
+"$PY" -I - "$(native "$inis/OpenNuXL.ini")" <<'PY' || { rm -rf "$inis"; die "the bundled OpenNuXL does not read .raw and .d natively, or has no -out_qpx"; }
 import sys
 import xml.etree.ElementTree as ET
 def instance(path):
@@ -485,19 +482,16 @@ def item(node, name):
     return found
 def values(element, attribute):
     return {v.strip().lstrip("*.").lower() for v in element.get(attribute, "").split(",") if v.strip()}
-nuxl, converter = (instance(p) for p in sys.argv[1:])
+nuxl = instance(sys.argv[1])
 failed = []
-for tool, node in (("OpenNuXL", nuxl), ("FileConverter", converter)):
-    formats = values(item(node, "in"), "supported_formats")
-    if not {"raw", "d"} <= formats:
-        failed.append(f"{tool} -in takes {sorted(formats)}: no 'raw' and 'd' (Bruker .d: WITH_OPENTIMS)")
-raw = converter.find("NODE[@name='RawToMzML']")
-readers = values(item(raw, "reader"), "restrictions") if raw is not None else set()
-if "inprocess" not in readers:
-    failed.append(f"FileConverter -RawToMzML:reader offers {sorted(readers)}: no 'inprocess' (WITH_THERMO_RAW)")
+formats = values(item(nuxl, "in"), "supported_formats")
+if not {"raw", "d"} <= formats:
+    failed.append(f"OpenNuXL -in takes {sorted(formats)}: no 'raw' and 'd' (Bruker .d: WITH_OPENTIMS)")
+if nuxl.find("ITEM[@name='out_qpx']") is None:
+    failed.append("OpenNuXL has no -out_qpx (the QPX mz view of the PSM view: OpenMS#10829)")
 if failed:
     sys.exit("\n".join(failed))
-print("  OpenNuXL and FileConverter read .raw (in process) and .d natively")
+print("  OpenNuXL reads .raw and .d natively and writes the mz view (-out_qpx)")
 PY
 rm -rf "$inis"
 

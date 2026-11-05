@@ -722,11 +722,10 @@ fn answer_close(
 /// The flag of the packaged app's start test (CI: `native/scripts/start-test.sh`). The app starts as
 /// usual; once its page has loaded it prints one line of JSON, `{"page": <url>, "resources": <the
 /// resource folder the app uses>, "tauriResources": <Tauri's, or why there is none>, "tool":
-/// <tool_info>, "percolatorAdapter": <whether PercolatorAdapter is beside the tool>, "fileConverter": <whether
-/// FileConverter is beside it (the packages' start test converts with it; the app does not run it)>, "dotnet":
-/// <whether the bundle has its .NET runtime beside bin/>, "thermoBridge": <whether it has the Thermo bridge's managed
-/// part in share/OpenMS>}` (or `"error"` in place of `"tool"`), and exits: 0, or 1 when the tool cannot be used (or has
-/// no PercolatorAdapter beside it). A page that has not loaded after [`SMOKE_TIMEOUT`] ends the app with 2. It reads
+/// <tool_info>, "percolatorAdapter": <whether PercolatorAdapter is beside the tool>, "dotnet": <whether the bundle
+/// has its .NET runtime beside bin/>, "thermoBridge": <whether it has the Thermo bridge's managed part in
+/// share/OpenMS>}` (or `"error"` in place of `"tool"`), and exits: 0, or 1 when the tool cannot be used (or has no
+/// PercolatorAdapter beside it). A page that has not loaded after [`SMOKE_TIMEOUT`] ends the app with 2. It reads
 /// nothing and writes nothing else.
 pub const SMOKE_TEST: &str = "--smoke-test";
 const SMOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -736,20 +735,19 @@ fn smoke_report(app: &AppHandle, page: &str) -> (i32, String) {
     let tool = tool::resolve(resource_dir(app).as_deref()).and_then(|path| {
         let siblings = [
             tool::has_percolator_adapter(&path),
-            tool::file_converter(&path).is_some(),
             tool::bundled_dotnet(&path).is_some(),
             tool::bundled_thermo_bridge(&path).is_some(),
         ];
         Ok((tool::probe(&path)?, siblings))
     });
-    let (code, key, value, [adapter, converter, dotnet, bridge]) = match tool {
+    let (code, key, value, [adapter, dotnet, bridge]) = match tool {
         Ok((info, siblings)) => (
             if siblings[0] { 0 } else { 1 },
             "tool",
             serde_json::to_value(info).unwrap_or_default(),
             siblings,
         ),
-        Err(e) => (1, "error", serde_json::Value::String(e), [false; 4]),
+        Err(e) => (1, "error", serde_json::Value::String(e), [false; 3]),
     };
     let resources = resource_dir(app).map(|dir| dir.to_string_lossy().into_owned());
     let tauri_resources = match app.path().resource_dir() {
@@ -762,7 +760,6 @@ fn smoke_report(app: &AppHandle, page: &str) -> (i32, String) {
         "tauriResources": tauri_resources,
         key: value,
         "percolatorAdapter": adapter,
-        "fileConverter": converter,
         "dotnet": dotnet,
         "thermoBridge": bridge,
     })

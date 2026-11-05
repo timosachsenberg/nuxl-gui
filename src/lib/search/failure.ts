@@ -1,8 +1,8 @@
 // An error of a search for people: where it happened (the stage and file of the last progress report)
 // and what happened, led by how OpenNuXL ended (a crash's signal, an exit code), with its last lines on
 // stderr (or OpenMS' own text) as a secondary detail and the path of the kept log. OpenNuXL runs once per input
-// file, so the file of the last report is where it happened. After a run of a Thermo .raw or Bruker .d input, the shim
-// writes its spectra as mzML for the PSM view (FileConverter, in that file's part of the progress).
+// file, so the file of the last report is where it happened. At the end of each run OpenNuXL keeps the spectra of its
+// PSMs for the PSM view (-out_qpx), in that file's part of the progress.
 
 import { isRaw, isTimsD } from './files'
 

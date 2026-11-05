@@ -1455,7 +1455,7 @@ fn the_tool_never_runs_the_update_check_of_openms() {
 struct Run {
     work: TempDir,
     searches: Arc<Searches>,
-    /// The fake OpenNuXL, in a folder laid out as the bundle (with the fake FileConverter beside it).
+    /// The fake OpenNuXL, in a folder laid out as the bundle.
     tool: PathBuf,
 }
 
@@ -1466,13 +1466,7 @@ impl Run {
 
     /// With the inputs reaching the tool as `links` says (Windows' way on any platform).
     fn with_links(links: InputLinks) -> Run {
-        Run::with(
-            links,
-            FakeBundle {
-                converter: true,
-                runtime: false,
-            },
-        )
+        Run::with(links, FakeBundle { runtime: false })
     }
 
     /// With the bundle's parts `bundle` beside the fake tool.
@@ -2055,13 +2049,7 @@ fn an_mz_view_opennuxl_could_not_write_leaves_a_note_and_not_a_failed_search() {
 /// without them (a build tree's) with the user's environment.
 #[test]
 fn the_tools_run_with_the_bundles_dotnet_and_thermo_bridge() {
-    let run = Run::with(
-        InputLinks::PLATFORM,
-        FakeBundle {
-            converter: true,
-            runtime: true,
-        },
-    );
+    let run = Run::with(InputLinks::PLATFORM, FakeBundle { runtime: true });
     let i = inputs();
     let raw = i.dir.write("data/b.raw", "raw");
     let (_, rx) = run.start(request(&[&raw], &i.fasta, false, json!({})), None);
@@ -2093,13 +2081,7 @@ fn the_tools_run_with_the_bundles_dotnet_and_thermo_bridge() {
 #[test]
 fn the_tools_command_names_the_bundles_dotnet_and_thermo_bridge() {
     let dir = TempDir::new("bundle-env");
-    let bundled = fake_tools(
-        &dir.path().join("bundle"),
-        FakeBundle {
-            converter: true,
-            runtime: true,
-        },
-    );
+    let bundled = fake_tools(&dir.path().join("bundle"), FakeBundle { runtime: true });
     let env_of = |path: &Path| -> Vec<(String, Option<String>)> {
         tool::command_with(path, None)
             .get_envs()
@@ -2140,13 +2122,6 @@ fn the_tools_command_names_the_bundles_dotnet_and_thermo_bridge() {
                 .into_owned()
         ))
     );
-    // FileConverter of the bundle: the same
-    let converter = tool::file_converter(&bundled).unwrap();
-    assert_eq!(
-        converter,
-        bundled.parent().unwrap().join(tool::FILE_CONVERTER)
-    );
-    assert_eq!(env_of(&converter), env);
     // a build tree's tool: nothing of .NET or the bridge is set or removed
     let plain = fake_tools(&dir.path().join("build"), FakeBundle::default());
     let env = env_of(&plain);
@@ -2155,7 +2130,6 @@ fn the_tools_command_names_the_bundles_dotnet_and_thermo_bridge() {
             .all(|(k, _)| !k.starts_with("DOTNET_") && k != tool::THERMO_MANAGED_DIR),
         "{env:?}"
     );
-    assert_eq!(tool::file_converter(&plain), None);
 }
 
 #[test]
