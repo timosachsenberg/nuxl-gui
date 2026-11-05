@@ -21,8 +21,10 @@
 //! - `example_files()` -> `{ spectra: [path], database }`
 //! - `save_text(name, contents)` and `save_search_file(searchId, name, suggested)`: a save dialog of
 //!   the system, then the file written where the user chose (-> the path, or null if cancelled);
-//!   `save_text_with_companion(name, contents, suffix, companion)`: the same, and `companion` written beside it as
-//!   `<chosen stem><suffix>` (`export`; -> `{ path, companion }`, or null if cancelled)
+//!   `save_text_with_companion(name, contents, suffix, companion, replace)`: the same, and `companion` written beside
+//!   it as `<chosen stem><suffix>` (`export`; -> `{ status: 'written', path, companion }`, or null if cancelled; a
+//!   companion that exists writes nothing: `{ status: 'companionExists', ... }`, and `replace` true then writes both
+//!   to the file chosen, without a dialog)
 //! - History (`history`): `history_list()` -> entries (a folder with a broken record, or none, has
 //!   `error`), `history_save_record(searchId, record)` (a finished search gets its `search.json`, right
 //!   after `search://done`), `history_save_proteins(searchId, proteins)` (its `proteins.fasta`, once the
@@ -72,6 +74,8 @@ use tauri_plugin_dialog::DialogExt;
 struct AppState {
     searches: Arc<Searches>,
     closing: std::sync::Mutex<Closing>,
+    /// The file of an export whose companion exists, until the page answers (`save_text_with_companion`).
+    pending_save: Arc<export::PendingSave>,
 }
 
 impl Default for AppState {
@@ -87,6 +91,7 @@ impl Default for AppState {
         AppState {
             searches: Arc::new(searches),
             closing: Default::default(),
+            pending_save: Default::default(),
         }
     }
 }
@@ -314,23 +319,39 @@ async fn save_text(
 }
 
 /// An export and its companion (`export`): the save dialog for `name`, then `contents` written there and `companion`
-/// beside it under the chosen stem and `suffix` (checked before the dialog opens).
+/// beside it under the chosen stem and `suffix` (checked before the dialog opens). A companion that exists writes
+/// nothing and keeps the chosen file (`companionExists`); `replace` then writes to that file without a dialog.
 #[tauri::command]
 async fn save_text_with_companion(
     app: AppHandle,
+    state: State<'_, AppState>,
     name: String,
     contents: String,
     suffix: String,
     companion: String,
-) -> Result<Option<export::Written>, String> {
+    replace: bool,
+) -> Result<Option<export::Saved>, String> {
     if !export::valid_suffix(&suffix) {
         return Err(format!("{suffix:?} is not a file name ending."));
     }
+    let pending = state.pending_save.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let Some(path) = ask_save_path(&app, &name)? else {
-            return Ok(None);
+        let path = if replace {
+            pending
+                .take()
+                .ok_or("There is nothing to replace: save the export again.")?
+        } else {
+            pending.set(None);
+            let Some(path) = ask_save_path(&app, &name)? else {
+                return Ok(None);
+            };
+            path
         };
-        export::write_with_companion(&path, &contents, &suffix, &companion).map(Some)
+        let saved = export::write_with_companion(&path, &contents, &suffix, &companion, replace)?;
+        if matches!(saved, export::Saved::CompanionExists { .. }) {
+            pending.set(Some(path));
+        }
+        Ok(Some(saved))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -419,17 +440,21 @@ async fn search_folder(app: AppHandle, search_id: String) -> Result<String, Stri
 
 /// The system's file manager (Finder, Explorer, the desktop's) at the folder: the opener plugin's reveal, which
 /// selects it in the searches folder (Linux: the file manager's D-Bus service, else the desktop portal). Where
-/// neither answers (Linux, BSD), the folder itself is opened with `xdg-open`.
+/// neither answers (Linux, BSD), the folder itself is opened with `xdg-open`, waited for briefly: its failure (no
+/// file manager) is an error too.
 fn reveal_folder(folder: &Path) -> Result<(), String> {
     tauri_plugin_opener::reveal_item_in_dir(folder).or_else(|e| {
-        let shown = format!(
-            "The folder could not be shown ({e}). It is {}",
-            folder.display()
-        );
+        let shown = |why: String| {
+            format!(
+                "The folder could not be shown ({why}). It is {}",
+                folder.display()
+            )
+        };
         if cfg!(any(windows, target_os = "macos")) {
-            return Err(shown);
+            return Err(shown(e.to_string()));
         }
-        update::open_target(folder.as_os_str()).map_err(|_| shown)
+        update::open_target_checked(folder.as_os_str(), update::OPENER_WAIT)
+            .map_err(|opened| shown(format!("{e}; {opened}")))
     })
 }
 

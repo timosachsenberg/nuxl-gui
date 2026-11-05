@@ -1,8 +1,9 @@
-// The exports of the Export menu: the current view as CSV, the design, the idXML of a searched file; each saved
-// where the user chooses (the system's save dialog).
+// The exports of the Export menu: the current view as CSV, the design, the idXML of a searched file, the spectral
+// library (with its DIA-NN declarations beside it); each saved where the user chooses (the system's save dialog).
 
 import { writeDesignTsv } from '../design/design-tsv'
-import { errorText, saveSearchFile, searchFiles } from '../desktop'
+import { errorText, saveSearchFile, saveText, saveTextWithCompanion, searchFiles, type SavedWithCompanion } from '../desktop'
+import { MODS_SUFFIX } from './library/mods'
 import type { SearchFiles } from './read'
 import { download } from '../download'
 import type { OpenResult } from '../search/session.svelte'
@@ -69,4 +70,24 @@ export async function exportIdXML(result: OpenResult, input = 0, files: SearchFi
   if (!record || typeof record.stem !== 'string' || record.stem === '') throw new Error(`The search has no input ${input + 1}.`)
   const name = result.design.rows[input]?.fileName ?? record.stem
   await saveSearchFile(result.id, `nuxl/${record.stem}.idXML`, `${stemOf(name)}.idXML`)
+}
+
+/**
+ * The spectral library `tsv` saved as `name` where the user chooses, and DIA-NN's declarations of its adducts `mods`
+ * beside it (`<chosen stem>_diann_mods.txt`; none when '': a library without cross-links). A declarations file that
+ * exists is replaced only when `replace` (asked with its path) says so. Resolves with the paths (`companion` '' when
+ * none was written), or null if the user cancelled.
+ */
+export async function saveLibrary(
+  name: string,
+  tsv: string,
+  mods: string,
+  replace: (path: string) => Promise<boolean>,
+): Promise<SavedWithCompanion | null> {
+  await painted()
+  if (mods === '') {
+    const path = await saveText(name, tsv)
+    return path === null ? null : { path, companion: '' }
+  }
+  return saveTextWithCompanion(name, tsv, MODS_SUFFIX, mods, replace)
 }

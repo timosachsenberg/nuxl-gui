@@ -254,20 +254,33 @@ export function saveText(name: string, contents: string): Promise<string | null>
   return oneDialog(null, () => invoke<string | null>('save_text', { name, contents }))
 }
 
+/** Where an export and its companion were written. */
+export type SavedWithCompanion = { path: string; companion: string }
+
 /**
  * Saves text where the user chooses (as `saveText`, suggesting `name`) and `companion` beside it, named after the
  * chosen file's stem and `suffix` (`lib.tsv` and `_diann_mods.txt`: `lib_diann_mods.txt`; the suffix is a plain file
- * name ending, src-tauri/src/export.rs). Resolves with both paths, or null if the user cancelled.
+ * name ending, src-tauri/src/export.rs). When the companion exists, nothing is written yet: `replace` is asked with
+ * its path (the save dialog asked about the chosen file only); true writes both there (the shim kept the chosen file),
+ * false writes nothing. Resolves with both paths, or null if the user cancelled.
  */
 export function saveTextWithCompanion(
   name: string,
   contents: string,
   suffix: string,
   companion: string,
-): Promise<{ path: string; companion: string } | null> {
-  return oneDialog(null, () =>
-    invoke<{ path: string; companion: string } | null>('save_text_with_companion', { name, contents, suffix, companion }),
-  )
+  replace: (companion: string) => Promise<boolean>,
+): Promise<SavedWithCompanion | null> {
+  type Saved = SavedWithCompanion & { status: 'written' | 'companionExists' }
+  const save = (again: boolean) => invoke<Saved | null>('save_text_with_companion', { name, contents, suffix, companion, replace: again })
+  return oneDialog(null, async () => {
+    let saved = await save(false)
+    if (saved?.status === 'companionExists') {
+      if (!(await replace(saved.companion))) return null
+      saved = await save(true)
+    }
+    return saved && { path: saved.path, companion: saved.companion }
+  })
 }
 
 /** Copies a file of a search (e.g. `nuxl/run.idXML`) to where the user chooses, suggesting `suggested`. */

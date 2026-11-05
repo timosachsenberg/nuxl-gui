@@ -347,6 +347,8 @@ const P = {
   // FalseDiscoveryRate's peptide-level q-value (Constants::UserParam::PEPTIDE_Q_VALUE), which NuXLFDR also filters on
   peptideQValue: 'peptide q-value',
   annotation: 'fragment_annotation',
+  // the precursor's CCS (OpenNuXL, spectra with ion mobility)
+  ccs: 'IM',
 } as const
 
 /** A value of NuXL:NA or NuXL:NT that means none. */
@@ -467,6 +469,8 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     fdrGroup: new Array<string>(count),
     peptideQValue: new Float64Array(count),
     annotation: new Array<string>(count),
+    nuxlScore: new Float64Array(count),
+    ccs: new Float64Array(count),
   }
 
   const peptideRow = new Map<string, number>()
@@ -517,6 +521,7 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     const fdrGroup = txt(P.fdrGroup)
     const peptideQValue = num(P.peptideQValue)
     const annotation = txt(P.annotation)
+    const ccs = num(P.ccs)
     const featureColumns = featureNames.map((f) => (hits.params.has(f) ? num(f) : null))
     // the custom modifications of the run: OpenNuXL's precursor adducts by id, with their masses
     const definitions = new Map<string, number>()
@@ -573,6 +578,8 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
       xl.fdrGroup[i] = part.kind === 'peptides' ? PEPTIDE_GROUP : fdrGroup[h] || 'XL'
       xl.peptideQValue[i] = peptideQValue[h]
       xl.annotation[i] = annotation[h]
+      xl.nuxlScore[i] = nuxlScore[h]
+      xl.ccs[i] = ccs[h]
 
       // its peptide, unique by the OpenMS string and the adduct
       const openms = hits.sequence[h]
