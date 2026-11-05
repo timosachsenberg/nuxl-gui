@@ -6,7 +6,8 @@
 // inspect_files, cpu_count, example_files, save_text, save_text_with_companion, save_search_file, history_list,
 // history_save_record, history_save_proteins, history_rename, history_delete, search_folder, show_search_folder,
 // history_files, history_import, open_project_file,
-// save_project_file, answer_close, update_check_at_start, open_release_page. Events: search://progress, search://done, search://failed,
+// save_project_file, answer_close, searches_location, choose_searches_folder, use_default_searches_folder,
+// update_check_at_start, open_release_page. Events: search://progress, search://done, search://failed,
 // project://progress, app://close-requested. The system's dialogs open one at a time (`oneDialog`). The window's
 // theme (`windowTheme`, `onWindowThemeChanged`, `setWindowTheme`). The app's version (`appVersion`).
 
@@ -17,7 +18,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
 import { oneDialog } from './dialogs'
-import type { HistoryBackend, HistoryEntry } from './history/history'
+import type { HistoryBackend, HistoryEntry, SearchesLocation } from './history/history'
 import type { ByteRange, SearchFiles } from './results/read'
 import { errorText } from './format/error'
 
@@ -312,6 +313,10 @@ export const desktopBackend: HistoryBackend = {
       return bytes.length === 0 ? null : bytes
     }),
   importEntries: (body) => invoke<string>('history_import', body),
+  location: () => invoke<SearchesLocation>('searches_location'),
+  // the dialog and the check are one command: the page never names a path
+  chooseLocation: () => oneDialog(null, () => invoke<SearchesLocation | null>('choose_searches_folder')),
+  defaultLocation: () => invoke<SearchesLocation>('use_default_searches_folder'),
 }
 
 /**

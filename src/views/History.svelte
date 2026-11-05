@@ -1,12 +1,14 @@
 <script lang="ts">
-  // History: the searches kept on this computer, each a folder of the app's data (the tool's outputs and a
+  // History: the searches kept on this computer, each a folder of a searches folder (the tool's outputs and a
   // record of the settings and the design; the input files stay where they are). Open, rename and delete;
   // "Open project…" unpacks a .nuxl file into History. It stays usable while a search runs, and reads the
   // list again when it is shown. Beside each name: the search's database and, for searches of the same name,
   // what tells them apart (history/details.ts). A folder that is no search (no record, or a name that is not one
   // of a search) is listed with what is wrong, and can be deleted. The folder button shows a search's folder in the
-  // system's file manager (Show search folder).
+  // system's file manager (Show search folder). Under the title: where new searches are saved, which can be changed
+  // (SearchesFolder); History lists the searches of every folder they were saved in.
   import SaveNotice from '$lib/components/history/SaveNotice.svelte'
+  import SearchesFolder from '$lib/components/history/SearchesFolder.svelte'
   import * as Alert from '$lib/components/ui/alert'
   import { Button } from '$lib/components/ui/button'
   import * as Dialog from '$lib/components/ui/dialog'
@@ -127,12 +129,13 @@
 
 <section data-testid="view-history" class="flex flex-col gap-4">
   <div class="flex flex-wrap items-end justify-between gap-3">
-    <div>
+    <div class="min-w-0">
       <h1 class="mb-1 text-xl font-semibold tracking-tight">History</h1>
       <p class="text-muted-foreground">
         Finished searches are saved on this computer with their results. Your spectra files stay where they are: the
         PSM view reads the spectra from them (of a .raw or .d, from the copy as mzML the search keeps).
       </p>
+      <SearchesFolder class="mt-1" />
     </div>
     <div>
       <Button variant="outline" size="sm" disabled={busy !== null} onclick={openFile} data-testid="open-project">

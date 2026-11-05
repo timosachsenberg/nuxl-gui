@@ -9,12 +9,14 @@ import { exampleFolder, exampleResult } from './fixtures'
 import { MemoryBackend } from './memory-backend'
 import {
   canRetrySave,
+  chooseLocation,
   dismissSaveStatus,
   history,
   openFromHistory,
   openProjectFile,
   refreshHistory,
   removeFromHistory,
+  refreshLocation,
   rename,
   restoreFromHistory,
   retrySave,
@@ -22,9 +24,11 @@ import {
   searchFolderPath,
   saveFinished,
   saveProjectFile,
+  searchesFolder,
   useBackend,
+  useDefaultLocation,
 } from './history.svelte'
-import { ProjectError, ProjectVersionError } from './history'
+import { ProjectError, ProjectVersionError, type SearchesLocation } from './history'
 
 // (the router reads the window's location: here only where the app goes)
 const router = vi.hoisted(() => ({ route: { view: 'search' } as Route, forgotten: [] as string[] }))
@@ -253,5 +257,61 @@ describe('History', () => {
     disk.chosen = '/p/absent.nuxl'
     await expect(openProjectFile()).rejects.toBeInstanceOf(ProjectError)
     await expect(openProjectFile()).rejects.toThrow(/cannot be read/)
+  })
+})
+
+describe('where searches are saved', () => {
+  const own: SearchesLocation = { folder: '/data/searches', isDefault: true, defaultFolder: '/data/searches' }
+  const mine: SearchesLocation = { folder: '/mnt/big/NuXL', isDefault: false, defaultFolder: '/data/searches' }
+
+  /** The disk with folders to choose: the dialog gives `answer` (null: cancelled; an Error: the shim refused). */
+  function withFolders(answer: () => SearchesLocation | null | Error) {
+    let current = own
+    Object.assign(disk, {
+      location: async () => current,
+      chooseLocation: async () => {
+        const next = answer()
+        if (next instanceof Error) throw next
+        if (next) current = next
+        return next
+      },
+      defaultLocation: async () => (current = own),
+    })
+    return vi.spyOn(disk, 'list')
+  }
+
+  test("is read, changed to a folder of the user's and back, and History is read again after each change", async () => {
+    let answer: SearchesLocation | null | Error = mine
+    const lists = withFolders(() => answer)
+    await refreshLocation()
+    expect(searchesFolder.location).toEqual(own)
+    expect(await chooseLocation()).toBe(true)
+    expect(searchesFolder.location).toEqual(mine)
+    expect(lists).toHaveBeenCalledTimes(1)
+    // cancelled: nothing changes
+    answer = null
+    expect(await chooseLocation()).toBe(false)
+    expect(searchesFolder.location).toEqual(mine)
+    expect(lists).toHaveBeenCalledTimes(1)
+    expect(await useDefaultLocation()).toBe(true)
+    expect(searchesFolder.location).toEqual(own)
+    expect(lists).toHaveBeenCalledTimes(2)
+    expect(searchesFolder.problem).toBeNull()
+    expect(searchesFolder.busy).toBe(false)
+  })
+
+  test("a folder the shim refuses says why, and the folder stays", async () => {
+    withFolders(() => new Error('/mnt/big holds other files or folders ("notes.txt").'))
+    await refreshLocation()
+    expect(await chooseLocation()).toBe(false)
+    expect(searchesFolder.location).toEqual(own)
+    expect(searchesFolder.problem).toBe('/mnt/big holds other files or folders ("notes.txt").')
+  })
+
+  test('a disk without folders to choose has no location', async () => {
+    await refreshLocation()
+    expect(searchesFolder.location).toBeNull()
+    expect(await chooseLocation()).toBe(false)
+    expect(await useDefaultLocation()).toBe(false)
   })
 })

@@ -2,6 +2,8 @@
   // New search (mockup 1): spectra with the experimental design, the protein database, the search
   // settings and rescoring, with a sticky footer to start the search. mzML, Thermo .raw and FASTA files
   // and Bruker timsTOF .d folders can be dropped anywhere on the window (from the file manager: their paths, desktop.ts).
+  // Under the title: where the search will be saved, which can be changed (SearchesFolder).
+  import SearchesFolder from '$lib/components/history/SearchesFolder.svelte'
   import DatabaseCard from '$lib/components/search/DatabaseCard.svelte'
   import DesignTable from '$lib/components/search/DesignTable.svelte'
   import EmptyState from '$lib/components/search/EmptyState.svelte'
@@ -43,9 +45,10 @@
 
 <section data-testid="view-search" class="flex flex-col gap-4">
   <div class="flex flex-wrap items-start gap-x-4 gap-y-2">
-    <div class="flex-1">
+    <div class="min-w-0 flex-1">
       <h1 class="mb-1 text-xl font-semibold tracking-tight">New search</h1>
       <p class="text-muted-foreground">Spectra and database stay on this computer.</p>
+      <SearchesFolder class="mt-1" />
     </div>
     {#if form.files.length > 0 || form.database}
       <!-- the next search from scratch: no files, no database, the settings kept -->

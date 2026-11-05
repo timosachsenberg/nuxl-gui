@@ -38,7 +38,21 @@ the sum of its `analysis.*` files, and neither a spectrum count (nothing of them
 
 ## 2. The search folder
 
-A search lives in `<app data>/searches/<id>/` (`<id>.partial/` while it runs), as in ProSE desktop:
+A search lives in `<searches>/<id>/` (`<id>.partial/` while it runs), as in ProSE desktop. `<searches>` is the
+searches folder: `<app data>/searches`, unless the user chose a folder of their own for the searches to come, e.g. on
+a drive with more room (`location.rs`; New search and History show the folder under their title with "Change…" and,
+for a folder of the user's, "Use the default folder": `SearchesFolder.svelte`, through `searches_location`,
+`choose_searches_folder` and `use_default_searches_folder`). The choice is kept in
+`<app data>/searches-folder.json` (`{ "folder": <path>, "previous": [<path>, ...] }`). The folder dialog is the shim's
+(the page never names a path), and the shim takes a folder only when it is empty or holds searches of the app only
+(besides hidden files and `desktop.ini`/`Thumbs.db`), is not inside a searches folder, and takes files; else it says
+why. New searches and opened projects go to the current folder; History lists the searches of every folder the app has
+kept them in (the current one, `<app data>/searches`, and those chosen before that still held searches when another
+was chosen), and the commands find a search by its id in them, in that order. So the searches saved so far stay where
+they are and in History, and a search moved by hand (the app closed) from one of these folders to another is found
+there. In a folder of the user's, History lists only the folders that are searches (`search.json` or `inputs.json` in
+them), the startup sweep removes only partial folders that have the app's lock file, and Delete removes only a search:
+nothing else the user puts there is ever listed, swept or deleted. The folder cannot be changed while a search runs.
 
 - `inputs.json`: the inputs in order, `[{ id, index, link, stem, name, path }]` (`args.rs` `InputRecord`); `link`
   is `<n>__<name>` (a symbolic link to the user's file or `.d` folder in the folder; on Windows the user's own path
@@ -223,6 +237,11 @@ spectra after its run (§3) ends that run's part of the bar: "Preparing the spec
   else leaves opening a structure to the user. The viewer downloads the model, never the app (§7 stays its one
   connection). Labels start with the structure's residue so that another numbering shows; the PyMOL script checks
   the residues too;
+- the PSM view marks the PSM's precursor in the spectrum at its m/z (the identification's `MZ`, which the header
+  shows), whether a peak is there or not: a dashed line through the upper half, a triangle and "precursor 2+" at its
+  top, which the peak labels keep clear of; the m/z axis reaches it, and it is part of the exported SVG. NuXL's
+  annotated precursor peaks (`[M+2H]++`, with their losses and nucleotide shifts) are shown unless the toolbar's
+  "precursor" is switched off;
 - the peaks of a PSM's spectrum come from the input mzML (by its index, else by scanning a file of at most 256 MB),
   read through `read_search_file` by byte range; arrays uncompressed, zlib or zstd (plain, byte-shuffled,
   dictionary-encoded, as OpenMS develop writes them), not MS-Numpress; when the file cannot be read (moved, an imported project), the

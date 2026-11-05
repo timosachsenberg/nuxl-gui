@@ -56,16 +56,25 @@ libGLESv2.so.2"). Install it with `sudo apt install libgles2` (Ubuntu, Debian) o
   mzML when a PSM is opened. Of a `.raw` or `.d` input the search keeps its spectra as mzML
   (`nuxl/<stem>.spectra.mzML`, MS2 only for a `.d`), which can take about as much disk as the input. How much disk
   a search takes per thousand PSMs is not measured yet; History shows each search's
-  size.
+  size. For many or large inputs, choose a searches folder on a drive with room before searching ("Where the data
+  is").
 
 ## Where the data is
 
-- The searches (History): a folder per search in the app's data folder, `searches/<id>/`: OpenNuXL's outputs in
-  `nuxl/`, its log `nuxl.log`, the record `search.json`, `proteins.fasta` (the proteins of the result, so that the
-  search opens without its database) and links to the inputs. The app's data folder is
+- The searches (History): a folder per search, `<id>/`: OpenNuXL's outputs in `nuxl/`, its log `nuxl.log`, the
+  record `search.json`, `proteins.fasta` (the proteins of the result, so that the search opens without its database)
+  and links to the inputs. They are in the searches folder, which New search and History show under their title:
+  by default `searches/` in the app's data folder, which is
   - Linux: `~/.local/share/org.openms.nuxl.desktop/` (`$XDG_DATA_HOME`)
   - macOS: `~/Library/Application Support/org.openms.nuxl.desktop/`
-  - Windows: `%APPDATA%\org.openms.nuxl.desktop\`
+  - Windows: `%APPDATA%\org.openms.nuxl.desktop\` (on the system drive, C:)
+- **Another searches folder** (e.g. on a drive with more room, before searching many `.raw` files): "Change…" beside
+  the folder, in New search or History, and choose an empty folder (the dialog can make a new one) or one that holds
+  NuXL's searches only. The searches to come, and projects opened, go there; "Use the default folder" goes back. The
+  searches saved so far stay where they are, and History keeps listing them (with their size, and Delete to free the
+  space). To move them as well, close NuXL and move their folders (Show search folder) into the new folder: History
+  finds them there. NuXL keeps nothing but its searches in that folder, and never lists, deletes or cleans up
+  anything else in it.
 - The log of the last search that failed: `logs/last-failure.log` there (the error names it).
 - To get to a search's folder from the app: "Show search folder" (the last item of the result's Export menu, the
   folder button of a row of History, or Show beside the folder's path in the Overview) opens the system's file

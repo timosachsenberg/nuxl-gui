@@ -60,3 +60,51 @@ describe('the error strip', () => {
     expect(strip([dot], 0).desc).toContain('the mass error in ppm of the annotated ion shown is drawn')
   })
 })
+
+describe('the precursor', () => {
+  let shown: Record<string, unknown> | null = null
+  afterEach(() => {
+    if (shown) unmount(shown)
+    shown = null
+    document.body.innerHTML = ''
+  })
+
+  function spectrum(precursor: { mz: number; charge: number } | null) {
+    const target = document.createElement('div')
+    document.body.append(target)
+    shown = mount(SpectrumMirror, {
+      target,
+      props: {
+        mz: Float32Array.from([175.119, 500]),
+        intensity: Float32Array.from([100, 50]),
+        groups: [],
+        reference: { intensity: 100, text: 'base peak' },
+        legend: [],
+        bottom: { kind: 'status', label: 'Theoretical', message: '' },
+        title: 'Spectrum',
+        description: 'A spectrum.',
+        precursor,
+      },
+    })
+    flushSync()
+    return target
+  }
+
+  it('is marked at its m/z with its charge, also beyond the peaks', () => {
+    const target = spectrum({ mz: 912.4567, charge: 2 })
+    const mark = target.querySelector('[data-testid="precursor-mark"]')
+    expect(mark?.getAttribute('data-mz')).toBe('912.4567')
+    expect(target.querySelector('[data-testid="precursor-label"]')?.textContent).toBe('precursor 2+')
+    // (the m/z axis reaches it)
+    const [, hi] = target.querySelector('[data-testid="spectrum"]')!.getAttribute('data-mz-domain')!.split(' ').map(Number)
+    expect(hi).toBeGreaterThan(912.4567)
+    expect(target.querySelector('desc')?.textContent).toContain('A dashed line marks the precursor at m/z 912.4567 (2+).')
+  })
+
+  it('is not marked without a known m/z', () => {
+    expect(spectrum(null).querySelector('[data-testid="precursor-mark"]')).toBeNull()
+    unmount(shown!)
+    shown = null
+    expect(spectrum({ mz: NaN, charge: 2 }).querySelector('[data-testid="precursor-mark"]')).toBeNull()
+  })
+})

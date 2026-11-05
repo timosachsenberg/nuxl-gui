@@ -143,7 +143,7 @@ export class ResultsView {
    */
   psm = $state.raw<OpenPsm | null>(null)
   /** The toggles of the PSM view's spectrum, kept from one PSM to the next. */
-  psmOptions = $state<PsmOptionState>({ ions: ['b', 'y'], charges: null, losses: null, precursor: false })
+  psmOptions = $state<PsmOptionState>({ ions: ['b', 'y'], charges: null, losses: null, precursor: true })
   /**
    * The measurements and labels the user made on the PSM view's spectra ("Measure", "Label"), by spectrum ("<file>
    * <native ID>", as the viewers keep them: the PSMs of one spectrum share them), or by PSM on NuXL's annotated peaks
