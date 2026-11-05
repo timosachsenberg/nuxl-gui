@@ -134,6 +134,10 @@ export interface HistoryBackend {
   saveProteins(id: string, proteins: string): Promise<void>
   rename(id: string, name: string): Promise<void>
   delete(id: string): Promise<void>
+  /** The path of the search's folder (`<data>/searches/<id>`). */
+  folder(id: string): Promise<string>
+  /** Show search folder: the system's file manager at the search's folder, the folder selected where it can. */
+  reveal(id: string): Promise<void>
   /** The regular files of the folder (no links to the inputs). */
   files(id: string): Promise<{ name: string; size: number }[]>
   /**

@@ -99,6 +99,12 @@ A search lives in `<app data>/searches/<id>/` (`<id>.partial/` while it runs), a
   (OpenNuXL overwrites that one; the shim leaves it).
 - `search.json` and `proteins.fasta`: History's record and the identified proteins, as in ProSE desktop.
 
+Show search folder (the Export menu, History's rows, the Overview, which also shows the path: `search_folder`) opens
+the system's file manager at the folder of a search, by its id (`show_search_folder`, `history.rs` `show_folder`;
+the page never names a path): the opener plugin's `reveal_item_in_dir`, called from Rust only (the plugin is not
+registered, the page has none of its commands), which selects the folder in `searches/` (Finder, Explorer; Linux: the
+file manager's `org.freedesktop.FileManager1` on D-Bus, else the desktop portal, else `xdg-open` of the folder).
+
 A project (`.nuxl`, `project.rs`, `history.ts` `leftOut`) holds the folder but `database.fasta`, `database.json`,
 `nuxl.log` and the converted spectra (`nuxl/<stem>.spectra.mzML`, `.spectra.tmp.mzML`: about as large as the
 input, they would make most such projects too large for a zip without zip64). A search opened from a project shows

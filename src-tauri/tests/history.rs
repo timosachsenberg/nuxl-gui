@@ -6,8 +6,8 @@ mod common;
 use common::{set_folder_modified, TempDir};
 use nuxl_desktop_lib::history::{
     delete, finish_partial, folder_files, frame, import, list, lock_partial, read_chosen_project,
-    remove_partial, rename, save_proteins, save_record, sweep, with_backoff, BACKOFF_TRIES,
-    LOCK_FILE, NOT_A_SEARCH, NO_RECORD, SWEEP_GRACE,
+    remove_partial, rename, save_proteins, save_record, search_folder, show_folder, sweep,
+    with_backoff, BACKOFF_TRIES, LOCK_FILE, NOT_A_SEARCH, NO_RECORD, SWEEP_GRACE,
 };
 use std::fs;
 use std::io;
@@ -483,6 +483,52 @@ fn frames_have_a_fixed_layout() {
         frame(&[("ab", b"xyz")]),
         [0, 0, 0, 2, b'a', b'b', 0, 0, 0, 0, 0, 0, 0, 3, b'x', b'y', b'z']
     );
+}
+
+#[test]
+fn show_search_folder_shows_only_a_search_folder_by_its_id() {
+    let (_tmp, dir) = searches();
+    saved(&dir, "1-0", "first");
+    // the folder, by the id (the page names no path); the file manager is the test's
+    assert_eq!(search_folder(&dir, "1-0").unwrap(), dir.join("1-0"));
+    let mut shown = Vec::new();
+    show_folder(&dir, "1-0", |folder| {
+        shown.push(folder.to_path_buf());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(shown, [dir.join("1-0")]);
+    // what the file manager says is the command's error
+    let failed = show_folder(&dir, "1-0", |_| Err("no file manager".to_string()));
+    assert_eq!(failed.unwrap_err(), "no file manager");
+    // a running search (its partial folder), one that is gone, a file, ids that are paths: refused, nothing shown
+    fs::create_dir_all(dir.join("2-0.partial")).unwrap();
+    fs::write(dir.join("3-0"), "").unwrap();
+    for id in [
+        "2-0",
+        "2-0.partial",
+        "9-9",
+        "3-0",
+        "",
+        ".",
+        "..",
+        "../searches/1-0",
+        "1-0/nuxl",
+        "/etc",
+    ] {
+        assert!(search_folder(&dir, id).is_err(), "{id:?}");
+        assert!(
+            show_folder(&dir, id, |f| panic!("{} shown", f.display())).is_err(),
+            "{id:?}"
+        );
+    }
+    // an imported project's folder is a search folder as any
+    let id = import(
+        &dir,
+        &frame(&[("search.json", record("x", "imported").as_bytes())]),
+    )
+    .unwrap();
+    assert_eq!(search_folder(&dir, &id).unwrap(), dir.join(&id));
 }
 
 #[test]

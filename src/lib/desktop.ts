@@ -3,8 +3,9 @@
 // plain types below, so that the screens stay the web app's and the tests need no Tauri.
 //
 // Commands (src-tauri/src/lib.rs): tool_info, start_search, cancel_search, read_search_file,
-// inspect_files, cpu_count, example_files, save_text, save_search_file, history_list, history_save_record,
-// history_save_proteins, history_rename, history_delete, history_files, history_import, open_project_file,
+// inspect_files, cpu_count, example_files, save_text, save_text_with_companion, save_search_file, history_list,
+// history_save_record, history_save_proteins, history_rename, history_delete, search_folder, show_search_folder,
+// history_files, history_import, open_project_file,
 // save_project_file, answer_close, update_check_at_start, open_release_page. Events: search://progress, search://done, search://failed,
 // project://progress, app://close-requested. The system's dialogs open one at a time (`oneDialog`). The window's
 // theme (`windowTheme`, `onWindowThemeChanged`, `setWindowTheme`). The app's version (`appVersion`).
@@ -253,6 +254,22 @@ export function saveText(name: string, contents: string): Promise<string | null>
   return oneDialog(null, () => invoke<string | null>('save_text', { name, contents }))
 }
 
+/**
+ * Saves text where the user chooses (as `saveText`, suggesting `name`) and `companion` beside it, named after the
+ * chosen file's stem and `suffix` (`lib.tsv` and `_diann_mods.txt`: `lib_diann_mods.txt`; the suffix is a plain file
+ * name ending, src-tauri/src/export.rs). Resolves with both paths, or null if the user cancelled.
+ */
+export function saveTextWithCompanion(
+  name: string,
+  contents: string,
+  suffix: string,
+  companion: string,
+): Promise<{ path: string; companion: string } | null> {
+  return oneDialog(null, () =>
+    invoke<{ path: string; companion: string } | null>('save_text_with_companion', { name, contents, suffix, companion }),
+  )
+}
+
 /** Copies a file of a search (e.g. `nuxl/run.idXML`) to where the user chooses, suggesting `suggested`. */
 export function saveSearchFile(searchId: string, name: string, suggested: string): Promise<string | null> {
   return oneDialog(null, () => invoke<string | null>('save_search_file', { searchId, name, suggested }))
@@ -270,6 +287,9 @@ export const desktopBackend: HistoryBackend = {
   saveProteins: (searchId, proteins) => invoke('history_save_proteins', { searchId, proteins }),
   rename: (searchId, name) => invoke('history_rename', { searchId, name }),
   delete: (searchId) => invoke('history_delete', { searchId }),
+  folder: (searchId) => invoke<string>('search_folder', { searchId }),
+  // the shim finds the folder by the id and opens the file manager (the page never names a path)
+  reveal: (searchId) => invoke('show_search_folder', { searchId }),
   files: (searchId) => invoke('history_files', { searchId }),
   // the dialog and the writing are one command: the zip goes to disk entry by entry, `project://progress` says how far
   saveProject: (searchId, name, onProgress) =>

@@ -67,6 +67,9 @@ libGLESv2.so.2"). Install it with `sudo apt install libgles2` (Ubuntu, Debian) o
   - macOS: `~/Library/Application Support/org.openms.nuxl.desktop/`
   - Windows: `%APPDATA%\org.openms.nuxl.desktop\`
 - The log of the last search that failed: `logs/last-failure.log` there (the error names it).
+- To get to a search's folder from the app: "Show search folder" (the last item of the result's Export menu, the
+  folder button of a row of History, or Show beside the folder's path in the Overview) opens the system's file
+  manager (Finder, Explorer, the desktop's) with the search's folder selected.
 - Presets of the settings: the app's webview keeps them, on this computer.
 - The new-version check: a few seconds after the start the app asks GitHub for the latest release of NuXL, one
   `GET https://api.github.com/repos/timosachsenberg/nuxl-gui/releases/latest`, without cookies or credentials;

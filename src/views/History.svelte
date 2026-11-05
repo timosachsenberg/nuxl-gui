@@ -4,7 +4,8 @@
   // "Open project…" unpacks a .nuxl file into History. It stays usable while a search runs, and reads the
   // list again when it is shown. Beside each name: the search's database and, for searches of the same name,
   // what tells them apart (history/details.ts). A folder that is no search (no record, or a name that is not one
-  // of a search) is listed with what is wrong, and can be deleted.
+  // of a search) is listed with what is wrong, and can be deleted. The folder button shows a search's folder in the
+  // system's file manager (Show search folder).
   import SaveNotice from '$lib/components/history/SaveNotice.svelte'
   import * as Alert from '$lib/components/ui/alert'
   import { Button } from '$lib/components/ui/button'
@@ -13,16 +14,18 @@
   import * as Table from '$lib/components/ui/table'
   import { formatBytes } from '$lib/format/bytes'
   import { formatCount } from '$lib/results/display'
-  import { history, openFromHistory, openProjectFile, refreshHistory, removeFromHistory, rename } from '$lib/history/history.svelte'
+  import { history, openFromHistory, openProjectFile, refreshHistory, removeFromHistory, rename, revealSearch } from '$lib/history/history.svelte'
+  import { canShowFolder, showFolderTitle } from '$lib/history/folder'
   import type { HistoryEntry } from '$lib/history/history'
   import { distinguishing, entryFacts } from '$lib/history/details'
   import { searchForm } from '$lib/search/form.svelte'
   import CircleAlertIcon from '@lucide/svelte/icons/circle-alert'
+  import FolderOpenIcon from '@lucide/svelte/icons/folder-open'
   import { onMount } from 'svelte'
 
   onMount(() => void refreshHistory())
 
-  /** What went wrong with the last action: open (a stored search or a project file), rename or delete. */
+  /** What went wrong with the last action: open (a stored search or a project file), rename, delete or show its folder. */
   let problem = $state<{ title: string; text: string } | null>(null)
   /** The search being read from storage, or 'project'. */
   let busy = $state<string | null>(null)
@@ -90,6 +93,15 @@
       await rename(entry.id, draft)
     } catch (e) {
       problem = { title: 'Could not rename', text: `${entry.name ?? entry.id} could not be renamed: ${message(e)}` }
+    }
+  }
+
+  async function showFolder(entry: HistoryEntry) {
+    problem = null
+    try {
+      await revealSearch(entry.id)
+    } catch (e) {
+      problem = { title: 'Could not show the folder', text: `The folder of ${entry.name ?? entry.id} could not be shown: ${message(e)}` }
     }
   }
 
@@ -171,7 +183,7 @@
             <Table.Head scope="col" class="{head} text-left max-lg:hidden">Files</Table.Head>
             <Table.Head scope="col" class="{head} w-[4.5rem] text-right" title="Target PSMs that pass the search's FDRs: peptide PSMs the peptide FDR, cross-link PSMs the cross-link FDR">PSMs</Table.Head>
             <Table.Head scope="col" class="{head} w-[4.5rem] text-right" title="Disk space the search takes on this computer">Size</Table.Head>
-            <Table.Head scope="col" class="{head} w-[13rem] text-right"><span class="sr-only">Actions</span></Table.Head>
+            <Table.Head scope="col" class="{head} w-[15rem] text-right"><span class="sr-only">Actions</span></Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -231,6 +243,16 @@
                     >Rename</Button>
                   <Button variant="outline" size="xs" disabled={busy === entry.id} aria-label="Delete {entry.name ?? entry.id}" onclick={() => askDelete(entry)}
                     >Delete</Button>
+                  <!-- (a folder whose name is no search's cannot be shown; the span keeps the disabled button's tooltip) -->
+                  <span title={canShowFolder(entry.id) ? showFolderTitle() : 'This folder is not a search of NuXL, so it cannot be shown'}>
+                    <Button
+                      variant="outline"
+                      size="icon-xs"
+                      disabled={!canShowFolder(entry.id)}
+                      aria-label="Show search folder of {entry.name ?? entry.id}"
+                      data-testid="history-show-folder"
+                      onclick={() => showFolder(entry)}><FolderOpenIcon aria-hidden="true" /></Button>
+                  </span>
                 </div>
               </Table.Cell>
             </Table.Row>

@@ -4,7 +4,8 @@
 //! for its schema, version 1). The app writes the record right after `search://done`, before it reads the
 //! results ([`save_record`]), and `proteins.fasta` once it has read them ([`save_proteins`], which also
 //! drops the folder's `database.fasta`); from then on Rust owns the folder: [`list`], [`rename`],
-//! [`delete`], and [`import`], which makes a folder of a project file's entries. A finished folder
+//! [`delete`], [`show_folder`] (the file manager at it), and [`import`], which makes a folder of a project file's
+//! entries. A finished folder
 //! without a record (the app ended, or the record could not be written, as the search finished) is
 //! listed with an `error`, so that it can be deleted, as is a folder with an unreadable or unknown record;
 //! none fails the list. [`sweep`] (at startup) removes only the partial folders of interrupted searches:
@@ -297,6 +298,22 @@ fn existing_folder(dir: &Path, id: &str) -> Result<PathBuf, String> {
         }
         Err(e) => Err(format!("The search {id} cannot be read ({e}).")),
     }
+}
+
+/// The folder of the finished search `id` (`<searches>/<id>/`, not a link): what Show search folder opens and the
+/// Overview shows. The id is checked here; the page never names a path.
+pub fn search_folder(dir: &Path, id: &str) -> Result<PathBuf, String> {
+    existing_folder(dir, id)
+}
+
+/// Show search folder: the system's file manager at the folder of search `id`, the folder selected where the
+/// platform can (`reveal`, lib.rs: the opener plugin's; the tests give one that records the path).
+pub fn show_folder(
+    dir: &Path,
+    id: &str,
+    reveal: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    reveal(&search_folder(dir, id)?)
 }
 
 /// Puts the finished search `id` into History: writes its `search.json`. The app does so right after the

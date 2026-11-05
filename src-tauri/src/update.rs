@@ -69,8 +69,9 @@ pub const APPIMAGE_VARIABLES: &[&str] = &[
 
 /// The command that opens `url` in the system's browser: `xdg-open` (Linux and other Unix), `open` (macOS),
 /// `rundll32 url.dll,FileProtocolHandler` (Windows: no shell, so nothing of the URL is interpreted). The URL is one
-/// argument; [`release_page_url`]'s have only letters, digits, `.`, `-`, `/` and `:`.
-pub fn opener(url: &str, appimage: bool) -> Command {
+/// argument; [`release_page_url`]'s have only letters, digits, `.`, `-`, `/` and `:`. (Also a folder's path, which
+/// the file manager opens: [`open_target`].)
+pub fn opener(url: impl AsRef<OsStr>, appimage: bool) -> Command {
     let mut command = if cfg!(target_os = "macos") {
         Command::new("open")
     } else if cfg!(windows) {
@@ -96,10 +97,15 @@ pub fn opener(url: &str, appimage: bool) -> Command {
 /// Opens `url` in the system's browser. The opener is waited for on a thread of its own (it may wait for the
 /// browser), so that it leaves no zombie behind; only a failure to start it is an error.
 pub fn open_url(url: &str) -> Result<(), String> {
+    open_target(OsStr::new(url))
+        .map_err(|e| format!("The browser could not be opened ({e}). The page: {url}"))
+}
+
+/// Opens `target` (a URL, or a folder's path: the file manager) with the system's opener ([`opener`]), as
+/// [`open_url`] does.
+pub fn open_target(target: &OsStr) -> Result<(), std::io::Error> {
     let appimage = std::env::var_os("APPIMAGE").is_some_and(|v| !v.is_empty());
-    let mut child = opener(url, appimage)
-        .spawn()
-        .map_err(|e| format!("The browser could not be opened ({e}). The page: {url}"))?;
+    let mut child = opener(target, appimage).spawn()?;
     std::thread::spawn(move || {
         let _ = child.wait();
     });
@@ -185,7 +191,7 @@ mod tests {
 
     #[test]
     fn from_an_appimage_the_browser_gets_the_systems_libraries() {
-        let command = opener(&release_page_url("1.2.3").unwrap(), true);
+        let command = opener(release_page_url("1.2.3").unwrap(), true);
         let removed: Vec<_> = command
             .get_envs()
             .filter(|(_, v)| v.is_none())

@@ -3,10 +3,14 @@
   // protocol preset, the two FDRs, the rescoring, and the engine: OpenNuXL's version), a table of the
   // searched files with what OpenNuXL reports of each run (its peptide and cross-link PSMs, Percolator
   // applied or skipped and why, its notes), and two charts of the cross-link PSMs: their adducts and the
-  // amino acids they are cross-linked to. The key figures stand above the tabs.
+  // amino acids they are cross-linked to. The key figures stand above the tabs. Under the settings: the search's
+  // folder (its path, to copy, and Show, which opens it in the system's file manager).
   import ChartCard from '$lib/components/charts/ChartCard.svelte'
   import FileBars from '$lib/components/charts/FileBars.svelte'
+  import { Button } from '$lib/components/ui/button'
   import * as Table from '$lib/components/ui/table'
+  import { showFolderTitle } from '$lib/history/folder'
+  import { revealSearch, searchFolderPath } from '$lib/history/history.svelte'
   import { COLORS } from '$lib/psm/psm'
   import { formatCount } from '$lib/results/display'
   import { adductLabel } from '$lib/format/peptide'
@@ -80,6 +84,29 @@
     { name: 'Engine', ...engine },
   ])
 
+  // the search's folder: its path (null until the shim says it, or when it cannot), and what went wrong with Show
+  let folder = $state<string | null>(null)
+  let folderProblem = $state<string | null>(null)
+  $effect(() => {
+    const id = result.id
+    let current = true
+    folder = null
+    folderProblem = null
+    searchFolderPath(id).then(
+      (path) => current && (folder = path),
+      (e) => current && (folderProblem = `The folder cannot be found: ${String((e as Error)?.message ?? e)}`),
+    )
+    return () => (current = false)
+  })
+  async function showFolder() {
+    folderProblem = null
+    try {
+      await revealSearch(result.id)
+    } catch (e) {
+      folderProblem = `The folder could not be shown: ${String((e as Error)?.message ?? e)}`
+    }
+  }
+
   // the cross-link PSMs: their adducts and residues
   const xlCutoff = $derived(cutoffText(m.xlFdr))
   const adducts = $derived(adductCounts(m))
@@ -119,6 +146,15 @@
         </div>
       {/each}
     </dl>
+    <div class="mt-3 flex min-w-0 items-center gap-2 text-xs" data-testid="search-folder">
+      <span class="shrink-0 text-muted-foreground">Search folder</span>
+      <span class="min-w-0 truncate font-mono text-[11px] select-text" title={folder ?? undefined} data-testid="search-folder-path"
+        >{folder ?? (folderProblem ? '' : '…')}</span>
+      <Button variant="outline" size="xs" class="shrink-0" title={showFolderTitle()} onclick={showFolder} data-testid="search-folder-show">Show</Button>
+    </div>
+    {#if folderProblem}
+      <p class="mt-1 text-xs text-destructive" role="alert">{folderProblem}</p>
+    {/if}
   </section>
 
   <section aria-labelledby="overview-files">

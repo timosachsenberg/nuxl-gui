@@ -217,6 +217,8 @@ fn a_search_folder_that_is_a_link_is_refused_by_the_reader_and_by_history() {
     );
     assert!(history::save_proteins(&searches, "1-0", ">A\nB\n").is_err());
     assert!(history::delete(&searches, "1-0").is_err());
+    assert!(history::search_folder(&searches, "1-0").is_err());
+    assert!(history::show_folder(&searches, "1-0", |_| panic!("shown")).is_err());
     // the list leaves it out, and nothing behind the link was touched
     assert!(history::list(&searches).is_empty());
     assert!(elsewhere.join("inputs.json").exists());
