@@ -276,10 +276,17 @@ describe('project files', () => {
     // (saving the proteins removed database.fasta; a folder still has it before its results are read)
     expect(backend.folders.get('100-0')!.has('database.fasta')).toBe(false)
     backend.folders.get('100-0')!.set('database.fasta', strToU8('>sp|P1|X\nPEPTIDE\n'))
+    // the spectra converted from a .raw or .d input stay too (only those: OpenNuXL's other outputs go)
+    backend.folders.get('100-0')!.set('nuxl/1__run.spectra.mzML', strToU8('<indexedmzML/>'))
+    backend.folders.get('100-0')!.set('nuxl/1__run.spectra.tmp.mzML', strToU8('<indexedmzML'))
+    backend.folders.get('100-0')!.set('nuxl/1__run.spectra.mzML.txt', strToU8('kept'))
     await exportProject(backend, '100-0', 'x')
     const files = Object.fromEntries(unpackProject(backend.saved[0].bytes).map((e) => [e.name, e.data]))
     expect(Object.keys(files)).not.toContain('database.fasta')
     expect(Object.keys(files)).not.toContain('nuxl.log')
+    expect(Object.keys(files)).not.toContain('nuxl/1__run.spectra.mzML')
+    expect(Object.keys(files)).not.toContain('nuxl/1__run.spectra.tmp.mzML')
+    expect(Object.keys(files)).toContain('nuxl/1__run.spectra.mzML.txt')
     expect(Object.keys(files)).toContain('proteins.fasta')
     const inputs = JSON.parse(new TextDecoder().decode(files['inputs.json']))
     expect(inputs.map((r: { path: string; name: string }) => r.path)).toEqual(['OpenNuXL_1_input.mzML'])
@@ -308,6 +315,9 @@ describe('project files', () => {
     expect(backend.saved).toEqual([])
     // the files left out of a project do not count (nuxl.log, database.fasta)
     backend.files = async (id: string) => [...(await files(id)), { name: 'database.fasta', size: MAX_UNPACKED }]
+    expect(await exportProject(backend, '100-0', 'x')).toBe('/saved/x.nuxl')
+    // nor the spectra the shim converted from a .raw or .d input (as large as the input)
+    backend.files = async (id: string) => [...(await files(id)), { name: 'nuxl/1__run.spectra.mzML', size: MAX_UNPACKED }]
     expect(await exportProject(backend, '100-0', 'x')).toBe('/saved/x.nuxl')
     // a project of more files than a zip without zip64 holds
     backend.files = async () => Array.from({ length: MAX_ZIP_ENTRIES + 1 }, (_, i) => ({ name: i === 0 ? 'search.json' : `f/${i}`, size: 1 }))

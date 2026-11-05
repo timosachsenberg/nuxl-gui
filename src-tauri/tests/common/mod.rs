@@ -67,6 +67,64 @@ pub fn fake_nuxl_exe() -> PathBuf {
     exe
 }
 
+/// What [`fake_tools`] puts into its folder beside the fake OpenNuXL.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FakeBundle {
+    /// `bin/FileConverter`, the fake's stand-in for OpenMS' FileConverter.
+    pub converter: bool,
+    /// `dotnet/` (a .NET runtime's folder, empty) and `share/OpenMS/openms_thermo_bridge/managed/` (the Thermo
+    /// bridge's managed part, empty): the bundle's parts that the tools' environment names.
+    pub runtime: bool,
+}
+
+/// A folder `dir` laid out as the bundle (`resources/nuxl`): `bin/OpenNuXL` (the fake tool: a link to
+/// `tests/fake-nuxl.sh`, or a copy of the fake executable) and what `bundle` asks for beside it (FileConverter: a
+/// link of that name to the same script, or a copy of the executable of that name; the fake is the one or the
+/// other by the name it is started under). Returns the path of the fake OpenNuXL.
+pub fn fake_tools(dir: &Path, bundle: FakeBundle) -> PathBuf {
+    let bin = dir.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let place = |name: &str| {
+        let target = bin.join(format!("{name}{suffix}"));
+        let fake = fake_nuxl();
+        #[cfg(unix)]
+        if fake.extension().is_some_and(|e| e == "sh") {
+            std::os::unix::fs::symlink(&fake, &target).unwrap();
+            return target;
+        }
+        // (an executable knows itself by its own path, which a link would resolve to: a copy)
+        fs::copy(&fake, &target).unwrap();
+        target
+    };
+    let tool = place("OpenNuXL");
+    if bundle.converter {
+        place("FileConverter");
+    }
+    if bundle.runtime {
+        fs::create_dir_all(dir.join("dotnet/host/fxr")).unwrap();
+        fs::create_dir_all(dir.join("share/OpenMS/openms_thermo_bridge/managed")).unwrap();
+    }
+    tool
+}
+
+/// A Bruker timsTOF `.d` folder at `relative` in `dir` (empty TDF files: the shim reads nothing of them).
+pub fn bruker_d(dir: &TempDir, relative: &str) -> PathBuf {
+    dir.write(&format!("{relative}/analysis.tdf"), "");
+    dir.write(&format!("{relative}/analysis.tdf_bin"), "");
+    dir.path().join(relative)
+}
+
+/// The `NAME=value` lines a fake tool wrote of its environment (`<stem>.env.txt`).
+pub fn env_dump(path: &Path) -> Vec<(String, String)> {
+    fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
 pub fn fixture(name: &str) -> String {
     fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))

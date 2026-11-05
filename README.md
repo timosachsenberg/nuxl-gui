@@ -1,22 +1,23 @@
 # NuXL desktop
 
 A desktop app for protein–RNA and protein–DNA cross-link searches with **OpenNuXL** of OpenMS: [Tauri 2](https://tauri.app)
-around the OS webview, the native `OpenNuXL` tool (with `PercolatorAdapter` for the score recalibration) as the only
-native code, and the screens of ProSE desktop (same theme, shadcn-svelte components and colours). Design:
-`docs/design.md`.
+around the OS webview, the native `OpenNuXL` tool (with `PercolatorAdapter` for the score recalibration, and
+`FileConverter` for the spectra of Thermo `.raw` and Bruker `.d` inputs) as the only native code, and the screens
+of ProSE desktop (same theme, shadcn-svelte components and colours). Design: `docs/design.md`.
 
-The packages come from CI (`.github/workflows/desktop.yml`); they bundle OpenNuXL and PercolatorAdapter with their
-libraries and data, the cross-linking protocols (NuXL presets) among them (`native/README.md`). Everything runs on the
+The packages come from CI (`.github/workflows/desktop.yml`); they bundle OpenNuXL, PercolatorAdapter and FileConverter
+with their libraries and data, the cross-linking protocols (NuXL presets) among them, and the .NET runtime that
+reads Thermo `.raw` files (`native/README.md`). Everything runs on the
 computer. The app's only network connection is its new-version check: one request to GitHub at start (on by
 default) and one each time "Check for updates" is clicked ("Where the data is" says what it sends and how to turn
 it off). OpenMS' own update check is off
 (`native/README.md`).
 
-What it does: New search takes mzML files, a FASTA and a protocol (RNA-UV (U), DNA-UV, RNA-DEB, ...), runs OpenNuXL
-once per input file, one after the other, with its own decoys and, from 1000 PSMs on, Percolator, and shows the
-results: proteins with their cross-linked residues, peptides and PSMs, each PSM marked as cross-link or peptide with
-its nucleic acid adduct and its cross-linked residue, and the spectrum of a PSM with NuXL's own annotation (shifted
-ions, marker ions).
+What it does: New search takes mzML or Thermo `.raw` files and Bruker timsTOF `.d` folders, a FASTA and a protocol
+(RNA-UV (U), DNA-UV, RNA-DEB, ...), runs OpenNuXL once per input, one after the other, with its own decoys and,
+from 1000 PSMs on, Percolator, and shows the results: proteins with their cross-linked residues, peptides and PSMs,
+each PSM marked as cross-link or peptide with its nucleic acid adduct and its cross-linked residue, and the spectrum
+of a PSM with NuXL's own annotation (shifted ions, marker ions).
 
 ## Install
 
@@ -45,13 +46,16 @@ libGLESv2.so.2"). Install it with `sudo apt install libgles2` (Ubuntu, Debian) o
 ## System requirements
 
 - A 64-bit processor and system as above. The size of the packages, and of the bundled tools in them, is not
-  measured yet.
+  measured yet; the bundled .NET runtime takes about 70 MB of it unpacked. Nothing needs to be installed for `.raw`
+  files (no .NET, no ThermoRawFileParser).
 - Memory as the search needs it: OpenNuXL has no limit of its own, and its memory grows with the database, the
   protocol's adducts (`NuXL:length`, the longest nucleotide adduct) and the variable modifications. How much a
   typical search needs is not measured yet; the example takes very little.
 - Disk: each search keeps OpenNuXL's outputs (idXML of all PSMs and of the filtered cross-links and peptides, the TSV
-  reports; docs/design.md §2). The spectra are not copied: the PSM view reads the peaks from the input mzML when
-  a PSM is opened. How much disk a search takes per thousand PSMs is not measured yet; History shows each search's
+  reports; docs/design.md §2). The spectra of an mzML are not copied: the PSM view reads the peaks from the input
+  mzML when a PSM is opened. Of a `.raw` or `.d` input the search keeps its spectra as mzML
+  (`nuxl/<stem>.spectra.mzML`, MS2 only for a `.d`), which can take about as much disk as the input. How much disk
+  a search takes per thousand PSMs is not measured yet; History shows each search's
   size.
 
 ## Where the data is
@@ -76,10 +80,12 @@ libGLESv2.so.2"). Install it with `sudo apt install libgles2` (Ubuntu, Debian) o
   environment variable `NUXL_NO_UPDATE_CHECK` (any non-empty value) turns the check at start off for every user of a
   computer.
   Nothing else of the app uses the network (the CSP lets the page connect to `api.github.com` only).
-- The mzML and FASTA files are read where they are: never copied, and nothing is left beside them. (On Windows,
-  OpenNuXL writes a debug table `<name>.mzML.ambiguous_masses.csv` beside an mzML while it searches it; the app
-  removes it when the run ends, but leaves, and OpenNuXL overwrites, a file of that name that was there before.) Deleting a
-  search in History removes its folder; uninstalling leaves the data folder, which can be deleted by hand.
+- The spectra (mzML, `.raw`, `.d`) and FASTA files are read where they are: never copied, and nothing is left
+  beside them. After the search of a `.raw` or `.d` the app writes its spectra as mzML into the search's folder, for
+  the PSM view. (On Windows, OpenNuXL writes a debug table `<name>.ambiguous_masses.csv` beside an input searched
+  by its own path, e.g. `run.mzML.ambiguous_masses.csv`; the app removes it when the run ends, but leaves, and
+  OpenNuXL overwrites, a file of that name that was there before.) Deleting a search in History removes its folder;
+  uninstalling leaves the data folder, which can be deleted by hand.
 
 ## Project files
 
@@ -88,8 +94,9 @@ holds the search's folder as the app keeps it: OpenNuXL's outputs (`nuxl/`), `se
 `inputs.json` with the files' names only. Left out are OpenNuXL's log (its command lines carry this computer's
 paths), the database copy with the contaminants and `database.json` (the path of a database searched without them).
 **OpenNuXL's outputs name folders of the computer that searched** (the input and database paths in the idXML), and
-the project carries them as they are: share it where that is fine. The spectra are not in a project: where the
-input mzML cannot be read, the PSM view shows the peaks NuXL annotated, and says why. A project file holds at most 3 GB (larger searches are refused with a message; they stay in History).
+the project carries them as they are: share it where that is fine. The spectra are not in a project, nor the mzML
+the app wrote of a `.raw` or `.d` (it would make most such projects too large): where the input mzML cannot be read,
+and for every `.raw` or `.d` input, the PSM view shows the peaks NuXL annotated, and says why. A project file holds at most 3 GB (larger searches are refused with a message; they stay in History).
 
 ## Known limitations
 
@@ -100,7 +107,13 @@ input mzML cannot be read, the PSM view shows the peaks NuXL annotated, and says
 - **Percolator** rescores a run of 1000 PSMs or more only; below that OpenNuXL skips it, and Overview says so with
   OpenNuXL's note. The score columns show Percolator's score only when every file was rescored; otherwise they show
   NuXL's score for all PSMs, so that they compare on one scale (the q-values stay those of each file).
-- **Input** is mzML only: `.raw` would need ThermoRawFileParser, which is not bundled. PeptDeep and open search
+- **Input** is mzML, Thermo `.raw` (a file) or Bruker timsTOF `.d` (a folder with `analysis.tdf` and
+  `analysis.tdf_bin`, or the `.tsf` pair). Not taken: `.mzML.gz` and `.d.zip` (unpack them first), Waters `.raw`
+  folders, `.d` folders of other vendors (Agilent, Waters) and mzPeak; convert those to mzML. On Windows a `.d`
+  cannot be linked into the search folder: a `.d` whose name is too long, or whose results would clash with an
+  earlier `.d` of the same name, is refused with what to rename. If the spectra of a `.raw` or `.d` cannot be
+  converted after its search, the search still ends, and the PSM view shows the annotated peaks only (Overview says
+  so). PeptDeep and open search
   (ProSE desktop's) are not part of NuXL desktop, nor OpenNuXL's `optimize`, `RTpredict` and `pcrecalibration`
   filters and custom presets files (docs/design.md §6).
 - **Large results.** The page reads a search's PSM rows into memory. How large a result opens, and how fast, is not
@@ -153,7 +166,8 @@ in it; on a machine without that toolchain (no sysroot) it uses the host's (carg
 
 Without OpenNuXL, `NUXL_FAKE=1 e2e/run.sh` runs the specs that search against a stand-in (`e2e/fake/OpenNuXL`, i.e.
 `src-tauri/tests/fake-nuxl.sh`, which writes the example's outputs of `src/lib/results/fixtures/example` for every
-input; an input named `crash.mzML` fails as OpenNuXL does). Screenshots for `docs/screens` at device scale factor 2:
+input; an input named `crash.mzML` fails as OpenNuXL does; the spectra of `.raw` and `.d` inputs are converted by
+the stand-in for FileConverter beside it, `e2e/fake/FileConverter`, the same script). Screenshots for `docs/screens` at device scale factor 2:
 `GDK_SCALE=2 E2E_SCREEN=3000x2000x24 NUXL_FAKE=1 e2e/run.sh e2e/screens.shot.ts`; for them the fake writes
 `src/lib/results/fixtures/screens` instead (`FAKE_NUXL_RESULTS=screens`: OpenMS' OpenNuXL test 3 at 10 ppm, made by
 `node scripts/results-fixtures.mjs`).
@@ -161,7 +175,10 @@ input; an input named `crash.mzML` fails as OpenNuXL does). Screenshots for `doc
 The specs that run searches need the tool: `NUXL_TOOL=/path/to/OpenNuXL` (without it they skip), with
 PercolatorAdapter beside it (`src-tauri/resources/nuxl/bin/OpenNuXL`, or `<build>/bin/OpenNuXL`). Each spec file gets
 an app of its own with its own data folder (`XDG_DATA_HOME`, made per run, removed at its end); port 4444 must be free
-(a leftover `tauri-driver` stops the run with a message). Debug builds read `NUXL_TEST_DIALOG_PATH` in place of the
+(a leftover `tauri-driver` stops the run with a message). The shim's tests against the real tool
+(`cargo test --test real_nuxl`, gated by `NUXL_TOOL`) also search a Thermo `.raw` file and a Bruker `.d` folder when
+`NUXL_RAW_EXAMPLE` and `NUXL_D_EXAMPLE` name them (FileConverter beside the tool; `native/scripts/fetch-test-data.sh
+<dir>` downloads the files CI uses). Debug builds read `NUXL_TEST_DIALOG_PATH` in place of the
 system's save and open dialogs (`e2e/app.sh` sets it), since WebDriver cannot reach a dialog. The large search
 (`e2e/big.spec.ts`) runs only with `NUXL_BIG=1` and the data of `NUXL_BIG_DIR`; the measurement of large results
 (`e2e/large.spec.ts`) only with `NUXL_LARGE_DIR` (both headers say how).

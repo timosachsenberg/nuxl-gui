@@ -40,31 +40,48 @@ export function sampleHeader(sample: ResultSample): string {
   return condition !== null && label.startsWith(`${condition} `) ? label.slice(condition.length + 1) : label
 }
 
-const scanTerm = /(?:^|\s)(?:scan|spectrum|index)=(\d+)(?=\s|$)/
+const scanTerm = /(?:^|\s)(scan|spectrum|index)=(\d+)(?=\s|$)/
+const frameTerm = /(?:^|\s)frame=(\d+)(?=\s|$)/
+const precursorTerm = /(?:^|\s)precursor=(\d+)(?=\s|$)/
 
 /**
- * What the Spectrum column shows of a native ID: the number of its `scan=`, `spectrum=` or `index=`
- * term (Thermo "controllerType=0 controllerNumber=1 scan=4711" is 4711), else the native ID.
+ * The term of a native ID that tells its spectrum apart: `precursor=` of a Bruker timsTOF ID ("frame=12 scan=301
+ * precursor=4711": the `scan=` there is a mobility scan of the frame, which other precursors share); else its
+ * `scan=` (Thermo "controllerType=0 controllerNumber=1 scan=4711"; a timsTOF window without a precursor,
+ * "frame=12 scan=301", has no better number), `spectrum=` or `index=` term. Null: none.
  */
-export function spectrumLabel(nativeId: string): string {
-  return scanTerm.exec(nativeId)?.[1] ?? nativeId
+export function spectrumTerm(nativeId: string): { term: 'scan' | 'spectrum' | 'index' | 'precursor'; number: string } | null {
+  const precursor = frameTerm.test(nativeId) ? precursorTerm.exec(nativeId)?.[1] : undefined
+  if (precursor !== undefined) return { term: 'precursor', number: precursor }
+  const m = scanTerm.exec(nativeId)
+  return m ? { term: m[1] as 'scan' | 'spectrum' | 'index', number: m[2] } : null
 }
 
-/** The number of the `scan=`, `spectrum=` or `index=` term of a native ID, or null if it has none. */
+/**
+ * What the Spectrum column shows of a native ID: the number of its term (`spectrumTerm`: Thermo
+ * "controllerType=0 controllerNumber=1 scan=4711" is 4711, Bruker "frame=12 scan=301 precursor=4711" too), else the
+ * native ID.
+ */
+export function spectrumLabel(nativeId: string): string {
+  return spectrumTerm(nativeId)?.number ?? nativeId
+}
+
+/** The number of the term of a native ID (`spectrumTerm`: scan, spectrum, index, a timsTOF precursor), or null if it has none. */
 export function scanNumber(nativeId: string): number | null {
-  const digits = scanTerm.exec(nativeId)?.[1]
+  const digits = spectrumTerm(nativeId)?.number
   return digits === undefined ? null : Number(digits)
 }
 
-const termName: Record<string, string> = { scan: 'scan', spectrum: 'spectrum', index: 'index' }
-
 /**
  * A native ID in words: "scan 4711" of a `scan=` term, "spectrum 19" of `spectrum=` and "index 19" of `index=`
- * (those two count the file's spectra from 0, no scan number of the instrument); else "spectrum <native ID>".
+ * (those two count the file's spectra from 0, no scan number of the instrument), "precursor 4711" of a timsTOF ID
+ * with one, "frame 12, scan 301" of one without; else "spectrum <native ID>".
  */
 export function spectrumName(nativeId: string): string {
-  const m = /(?:^|\s)(scan|spectrum|index)=(\d+)(?=\s|$)/.exec(nativeId)
-  if (m) return `${termName[m[1]]} ${m[2]}`
+  const t = spectrumTerm(nativeId)
+  const frame = frameTerm.exec(nativeId)?.[1]
+  if (t?.term === 'scan' && frame !== undefined) return `frame ${frame}, scan ${t.number}`
+  if (t) return `${t.term} ${t.number}`
   return nativeId ? `spectrum ${nativeId}` : 'spectrum not referenced'
 }
 

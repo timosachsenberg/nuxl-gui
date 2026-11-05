@@ -1,7 +1,7 @@
 //! Project files (`.nuxl`): a search folder as one zip, written entry by entry from the folder's files
 //! straight to the file the user chose (`save_project_file`), so that nothing of it is held in memory and
 //! the save dialog comes first. What a project holds is what `src/lib/history/history.ts` describes: the
-//! folder's regular files ([`history::folder_files`]) but [`LEFT_OUT`], `search.json` first, and
+//! folder's regular files ([`history::folder_files`]) but those [`left_out`], `search.json` first, and
 //! `inputs.json` with the searched files by name only ([`without_paths`]).
 //!
 //! The zip is the one the front end reads (fflate, `unpackProject`): no zip64 (so at most 4 GiB and 65,535
@@ -27,6 +27,14 @@ pub const INPUTS: &str = "inputs.json";
 /// the path of a database searched without contaminants, and the tool's log (its first line is the full
 /// command line, with paths of this computer).
 pub const LEFT_OUT: [&str; 3] = ["database.fasta", "database.json", crate::args::LOG_FILE];
+
+/// Whether a project leaves out the file `name` of the folder (relative, `/`-separated): [`LEFT_OUT`], and the
+/// spectra the shim converted from a `.raw` or `.d` input (`nuxl/<stem>.spectra.mzML`, about as large as the
+/// input: they would make most such projects too large, [`MAX_UNPACKED`]). The search imported from the project
+/// shows the annotated peaks only.
+pub fn left_out(name: &str) -> bool {
+    LEFT_OUT.contains(&name) || crate::args::is_converted_spectra(name)
+}
 /// The most a project may unpack to (the front end reads it into memory).
 pub const MAX_UNPACKED: u64 = 3 * 1024 * 1024 * 1024;
 /// The most entries of a zip without zip64.
@@ -56,10 +64,7 @@ pub fn project_files(dir: &Path, id: &str) -> Result<Vec<FolderFile>, String> {
             "The search is not saved to History (it has no {RECORD}), so there is no project to make."
         ));
     }
-    let mut kept: Vec<FolderFile> = listed
-        .into_iter()
-        .filter(|f| !LEFT_OUT.contains(&f.name.as_str()))
-        .collect();
+    let mut kept: Vec<FolderFile> = listed.into_iter().filter(|f| !left_out(&f.name)).collect();
     let total: u64 = kept.iter().map(|f| f.size).sum();
     if total > MAX_UNPACKED || kept.len() > MAX_ENTRIES {
         return Err(TOO_LARGE.to_string());

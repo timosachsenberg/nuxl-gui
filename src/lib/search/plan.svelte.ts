@@ -74,7 +74,7 @@ class SearchPlan {
 
   /** Why the search cannot start yet. */
   problem = $derived.by(() => {
-    if (form.files.length === 0) return 'Add mzML files to start.'
+    if (form.files.length === 0) return 'Add spectra (mzML, .raw or .d) to start.'
     if (form.adding > 0) return 'Adding files…'
     const unsearchable = form.files.filter((r) => r.problem)
     if (unsearchable.length === 1) return `${unsearchable[0].problem} Remove it to start the search.`

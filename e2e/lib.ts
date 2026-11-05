@@ -2,13 +2,34 @@
 // and the steps of a search through the screens. Not a spec (no `.spec.` in the name).
 import { execFileSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /** The example's run and FASTA, as the app bundles them (src-tauri/resources/example). */
 export const EXAMPLE_DIR = resolve(fileURLToPath(new URL('../src-tauri/resources/example', import.meta.url)))
 export const EXAMPLE_MZML = join(EXAMPLE_DIR, 'OpenNuXL_1_input.mzML')
 export const EXAMPLE_FASTA = join(EXAMPLE_DIR, 'OpenNuXL_1_input.fasta')
+
+/**
+ * A stand-in for a Thermo .raw file at `path` (the fake tools read no vendor data: e2e/fake; the shim checks only that
+ * it is a file that is not empty). Returns `path`.
+ */
+export function fakeRaw(path: string): string {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, Buffer.concat([Buffer.from([0x01, 0xa1]), Buffer.from('Finnigan', 'utf16le'), Buffer.alloc(1024)]))
+  return path
+}
+
+/**
+ * A stand-in for a Bruker timsTOF .d folder at `path`: analysis.tdf (the start of an SQLite file) and
+ * analysis.tdf_bin, which the shim looks for (the fake tools read neither). Returns `path`.
+ */
+export function fakeTimsD(path: string): string {
+  mkdirSync(path, { recursive: true })
+  writeFileSync(join(path, 'analysis.tdf'), Buffer.concat([Buffer.from('SQLite format 3\0'), Buffer.alloc(4080)]))
+  writeFileSync(join(path, 'analysis.tdf_bin'), Buffer.alloc(8192, 7))
+  return path
+}
 
 /** The spec's own data folder (XDG_DATA_HOME of its app; wdio.conf.ts sets it). */
 export function dataHome(): string {

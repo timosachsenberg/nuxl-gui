@@ -4,9 +4,10 @@ mod common;
 
 use common::*;
 use nuxl_desktop_lib::args::{
-    build_runs, build_runs_with, database_decoys, humanize, input_placements, input_records_with,
-    input_stem, is_input_link, link_name, max_stem, plan_database, stems_clash, write_database,
-    DatabasePlan, InputLinks, Placement, SearchRequest, FILTER_STEPS, MAX_STEM,
+    build_runs, build_runs_with, build_search_with, database_decoys, humanize, input_placements,
+    input_records_with, input_stem, is_converted_spectra, is_input_link, link_name, max_stem,
+    plan_database, spectra_output, stems_clash, write_database, DatabasePlan, InputLinks,
+    Placement, SearchRequest, FILTER_STEPS, MAX_STEM,
 };
 use nuxl_desktop_lib::decoys::Marker;
 use nuxl_desktop_lib::run::{SearchEvent, Searches};
@@ -483,7 +484,6 @@ fn input_paths_are_validated() {
     let out = i.dir.path().join("o");
     let missing = i.dir.path().join("data/missing.mzML");
     let folder = i.dir.path().join("data");
-    let raw = i.dir.write("data/a.raw", "x");
     let gz = i.dir.write("data/b.MZML.GZ", "gz");
     let text = i.dir.write("data/db.txt", ">a\nMK\n");
     assert!(
@@ -494,11 +494,6 @@ fn input_paths_are_validated() {
     assert!(
         build_runs(&request(&[&folder], &i.fasta, false, json!({})), &out).is_err(),
         "a folder is not a file"
-    );
-    assert!(
-        build_runs(&request(&[&raw], &i.fasta, false, json!({})), &out)
-            .unwrap_err()
-            .contains("a.raw")
     );
     // OpenNuXL reads no compressed mzML: unpack it first
     let err = build_runs(&request(&[&i.mzml, &gz], &i.fasta, false, json!({})), &out).unwrap_err();
@@ -533,6 +528,235 @@ fn input_paths_are_validated() {
     for db in [&fa, &faa] {
         assert!(build_runs(&request(&[&i.mzml, &upper], db, false, json!({})), &out).is_ok());
     }
+}
+
+/// Thermo .raw files and Bruker timsTOF .d folders are searched as they are; what is neither, or not what its
+/// name says, is refused with what to do.
+#[test]
+fn raw_files_and_bruker_d_folders_are_inputs() {
+    let i = inputs();
+    let out = i.dir.path().join("o");
+    let raw = i.dir.write("data/a.raw", "x");
+    let upper = i.dir.write("data/B.RAW", "x");
+    let tdf = bruker_d(&i.dir, "data/c.d");
+    i.dir.write("data/tsf.D/analysis.tsf", "");
+    i.dir.write("data/tsf.D/analysis.tsf_bin", "");
+    let tsf = i.dir.path().join("data/tsf.D");
+    let runs = runs_of(
+        &request(
+            &[&i.mzml, &raw, &upper, &tdf, &tsf],
+            &i.fasta,
+            false,
+            json!({}),
+        ),
+        &out,
+    );
+    let ins: Vec<OsString> = runs.iter().map(|r| values_of(r, "-in").remove(0)).collect();
+    assert_eq!(
+        ins,
+        ["1__a.mzML", "2__a.raw", "3__B.RAW", "4__c.d", "5__tsf.D"]
+            .map(|l| out.join(l).into_os_string())
+    );
+    let outs: Vec<OsString> = runs
+        .iter()
+        .map(|r| values_of(r, "-out").remove(0))
+        .collect();
+    assert_eq!(
+        outs,
+        ["1__a", "2__a", "3__B", "4__c", "5__tsf"]
+            .map(|stem| out.join(format!("nuxl/{stem}.idXML")).into_os_string())
+    );
+
+    let refused =
+        |path: &Path| build_runs(&request(&[path], &i.fasta, false, json!({})), &out).unwrap_err();
+    // a folder named .raw (Waters)
+    i.dir.write("data/waters.raw/_FUNC001.DAT", "");
+    let err = refused(&i.dir.path().join("data/waters.raw"));
+    assert!(
+        err.contains("waters.raw") && err.contains("Waters"),
+        "{err}"
+    );
+    // a .d without timsTOF data (Agilent), or with half of it
+    i.dir.write("data/agilent.d/AcqData/MSScan.bin", "");
+    let err = refused(&i.dir.path().join("data/agilent.d"));
+    assert!(
+        err.contains(
+            "agilent.d is not a Bruker timsTOF .d folder (no analysis.tdf or analysis.tsf)"
+        ),
+        "{err}"
+    );
+    i.dir.write("data/half.d/analysis.tdf", "");
+    let err = refused(&i.dir.path().join("data/half.d"));
+    assert!(
+        err.contains("half.d") && err.contains("analysis.tdf_bin"),
+        "{err}"
+    );
+    // a file named .d, a zipped .d
+    let err = refused(&i.dir.write("data/file.d", "x"));
+    assert!(err.contains("file.d") && err.contains("folder"), "{err}");
+    let err = refused(&i.dir.write("data/run.d.zip", "PK"));
+    assert!(
+        err.contains("run.d.zip") && err.contains("unzip it first"),
+        "{err}"
+    );
+    // anything else
+    let err = refused(&i.dir.write("data/run.wiff", "x"));
+    assert!(
+        err.contains("run.wiff")
+            && err
+                .contains("an mzML file (.mzML), a Thermo .raw file or a Bruker timsTOF .d folder"),
+        "{err}"
+    );
+}
+
+/// A folder given with a trailing separator (`run.d/`, as shell completion writes it) is the folder: its name, its
+/// stem and the path OpenNuXL and inputs.json get are without the separator.
+#[test]
+fn a_d_folder_with_a_trailing_separator_is_the_folder() {
+    let i = inputs();
+    let out = i.dir.path().join("o");
+    let d = bruker_d(&i.dir, "data/run.d");
+    let given = format!("{}{}", d.display(), std::path::MAIN_SEPARATOR);
+    let req = request(&[Path::new(&given)], &i.fasta, false, json!({}));
+    let records = input_records_with(&req, InputLinks::Symlinks, &out);
+    assert_eq!(records[0].name, "run.d");
+    assert_eq!(records[0].link, "1__run.d");
+    assert_eq!(records[0].stem, "1__run");
+    assert_eq!(records[0].path, d.to_string_lossy());
+    let own = input_records_with(&req, InputLinks::PathsOrHardLinks, &out);
+    assert_eq!(own[0].stem, "run");
+    let plan = plan_database(&req).unwrap();
+    let runs = build_runs_with(&req, &out, InputLinks::PathsOrHardLinks, &plan).unwrap();
+    assert_eq!(values_of(&runs[0], "-in"), [d.clone().into_os_string()]);
+    assert_eq!(nuxl_desktop_lib::args::input_path("/a/b.d//"), "/a/b.d");
+    assert_eq!(
+        nuxl_desktop_lib::args::input_path("C:\\a\\b.d\\"),
+        "C:\\a\\b.d"
+    );
+    assert_eq!(nuxl_desktop_lib::args::input_path("/"), "/");
+}
+
+/// The spectra conversion after the run of a .raw or .d input: FileConverter with the input OpenNuXL got, writing
+/// into nuxl/ under a temporary name, in the reader of OpenNuXL (.raw) or without the MS1 frames (.d); none for
+/// an mzML.
+#[test]
+fn raw_and_d_inputs_get_a_conversion_of_their_spectra() {
+    let i = inputs();
+    let out = i.dir.path().join("o");
+    let raw = i.dir.write("data/a.raw", "x");
+    let d = bruker_d(&i.dir, "data/b.d");
+    let req = request(
+        &[&i.mzml, &raw, &d],
+        &i.fasta,
+        false,
+        json!({ "threads": 3 }),
+    );
+    let plan = plan_database(&req).unwrap();
+    let search = build_search_with(&req, &out, InputLinks::Symlinks, &plan).unwrap();
+    assert_eq!(search.runs.len(), 3);
+    assert_eq!(search.conversions[0], None, "an mzML is read where it is");
+    let common = |input: &str, stem: &str| -> Vec<OsString> {
+        vec![
+            "-in".into(),
+            out.join(input).into_os_string(),
+            "-out".into(),
+            out.join(format!("nuxl/{stem}.spectra.tmp.mzML"))
+                .into_os_string(),
+            "-out_type".into(),
+            "mzML".into(),
+            "-threads".into(),
+            "3".into(),
+            "-process_lowmemory".into(),
+            "-zstd_compression".into(),
+        ]
+    };
+    let mut raw_args = common("2__a.raw", "2__a");
+    raw_args.extend(strings(&["-RawToMzML:reader", "inprocess"]));
+    assert_eq!(search.conversions[1].as_ref(), Some(&raw_args));
+    let mut d_args = common("3__b.d", "3__b");
+    d_args.extend(strings(&["-bruker:load_ms1", "false"]));
+    assert_eq!(search.conversions[2].as_ref(), Some(&d_args));
+    // the same -in as OpenNuXL's run, never a lossy compression (Numpress, which the PSM view cannot decode)
+    for (run, conversion) in search.runs.iter().zip(&search.conversions) {
+        if let Some(conversion) = conversion {
+            assert_eq!(values_of(run, "-in"), values_of(conversion, "-in"));
+            assert!(!has(conversion, "-lossy_compression"));
+        }
+    }
+    assert_eq!(spectra_output("2__a"), "nuxl/2__a.spectra.mzML");
+    for name in ["nuxl/2__a.spectra.mzML", "nuxl/x.spectra.tmp.mzML"] {
+        assert!(is_converted_spectra(name), "{name}");
+    }
+    for name in [
+        "2__a.spectra.mzML",
+        "nuxl/sub/a.spectra.mzML",
+        "nuxl/a.mzML",
+        "nuxlx/a.spectra.mzML",
+    ] {
+        assert!(!is_converted_spectra(name), "{name}");
+    }
+}
+
+/// Windows: a .d folder cannot be hard-linked, so it keeps its own path when its name clashes with a file's (the
+/// file goes as a link), and one that would need a link (a second .d of its name, too long a name) is refused.
+#[test]
+fn on_windows_a_d_folder_goes_by_its_own_path_or_is_refused() {
+    let dir = TempDir::new("placements-d");
+    let fasta = dir.write("db.fasta", ">a\nMK\n");
+    let d = bruker_d(&dir, "one/a.d");
+    let other_d = bruker_d(&dir, "two/A.D");
+    let mzml = dir.write("three/a.mzML", "<mzML/>");
+    let raw = dir.write("four/a_perc.raw", "x");
+    let out = dir.path().join("s.partial");
+    let windows = InputLinks::PathsOrHardLinks;
+    use Placement::*;
+    let place = |files: &[&Path]| {
+        input_placements(&request(files, &fasta, false, json!({})), windows, &out)
+    };
+    let build = |files: &[&Path]| {
+        let req = request(files, &fasta, false, json!({}));
+        build_runs_with(&req, &out, windows, &plan_database(&req).unwrap())
+    };
+    // a.d and a.mzML have one stem: the folder by its path, the file as a link; a_perc.raw clashes with both
+    assert_eq!(place(&[&mzml, &d, &raw]), [HardLink, OwnPath, HardLink]);
+    let runs = build(&[&mzml, &d, &raw]).unwrap();
+    assert_eq!(values_of(&runs[1], "-in"), [d.clone().into_os_string()]);
+    assert_eq!(
+        values_of(&runs[0], "-in"),
+        [out.join("1__a.mzML").into_os_string()]
+    );
+    // two folders of one name (ignoring case): the second would need a link
+    assert_eq!(place(&[&d, &other_d]), [OwnPath, HardLink]);
+    let err = build(&[&d, &other_d]).unwrap_err();
+    assert!(
+        err.contains("A.D") && err.contains("a.d") && err.contains("rename"),
+        "{err}"
+    );
+    // a folder named like the link of a file (two a.mzML go as 1__a.mzML and 2__a.mzML): no other input's name
+    // clashes with 1__a.d's, so the message names the link and asks to rename the folder
+    let mzml_again = dir.write("six/a.mzML", "<mzML/>");
+    let link_like = bruker_d(&dir, "seven/1__a.d");
+    let err = build(&[&mzml, &mzml_again, &link_like]).unwrap_err();
+    assert!(
+        err.contains("1__a.d")
+            && err.contains("linked into the search folder as 1__a.mzML")
+            && err.contains("rename the folder")
+            && !err.contains("another input"),
+        "{err}"
+    );
+    // too long a name for the outputs within MAX_PATH
+    let long = bruker_d(&dir, &format!("five/{}.d", "x".repeat(200)));
+    let err = build(&[&long]).unwrap_err();
+    assert!(
+        err.contains("too long") && err.contains("rename the folder"),
+        "{err}"
+    );
+    // elsewhere: links, also to folders
+    let req = request(&[&d, &other_d], &fasta, false, json!({}));
+    assert_eq!(
+        input_placements(&req, InputLinks::Symlinks, &out),
+        [Symlink, Symlink]
+    );
 }
 
 #[test]
@@ -900,7 +1124,15 @@ fn stems_clash_when_one_names_the_others_outputs() {
 
 #[test]
 fn input_links_are_known_by_their_names() {
-    for name in ["1__a.mzML", "12__x y.mzML", "3__1__a.MZML"] {
+    for name in [
+        "1__a.mzML",
+        "12__x y.mzML",
+        "3__1__a.MZML",
+        "4__a.raw",
+        "5__b.RAW",
+        "6__run.d",
+        "7__RUN.D",
+    ] {
         assert!(is_input_link(name), "{name}");
     }
     for name in [
@@ -909,6 +1141,9 @@ fn input_links_are_known_by_their_names() {
         "x__a.mzML",
         "1__a.fasta",
         "1__a.mzML.gz",
+        "1__a.d.zip",
+        "1__a.d.ambiguous_masses.csv",
+        "1__a.raw.ambiguous_masses.csv",
         "1__",
         "search.json",
         "1_a.mzML",
@@ -925,6 +1160,18 @@ fn link_names_keep_the_name_and_its_suffix() {
     assert_eq!(input_stem("1__x.mzML"), "1__x");
     assert_eq!(input_stem("10__x.MZML"), "10__x");
     assert_eq!(input_stem("2__a.b.mzml"), "2__a.b");
+    // Thermo .raw files and Bruker .d folders: their suffix too
+    assert_eq!(link_name(0, "/data/x.raw"), "1__x.raw");
+    assert_eq!(link_name(1, "/data/run.d"), "2__run.d");
+    assert_eq!(input_stem("1__x.raw"), "1__x");
+    assert_eq!(input_stem("2__run.d"), "2__run");
+    assert_eq!(input_stem("3__x.RAW"), "3__x");
+    // a long .d name keeps its suffix, the stem shortened
+    let long = link_name(0, &format!("/data/{}.d", "x".repeat(260)));
+    assert!(
+        long.ends_with("x.d") && input_stem(&long).len() == MAX_STEM,
+        "{long}"
+    );
 }
 
 #[test]
@@ -990,10 +1237,20 @@ fn input_stems_of_names_whose_lower_case_has_another_length() {
         assert_eq!(input_stem(link), stem, "{link}");
     }
     for name in ["İstanbul.mzML", "Ⱥ.MZML", "ẞ.mzml", "\u{212A}.mZmL"] {
-        assert!(nuxl_desktop_lib::args::is_spectrum_file(name), "{name}");
+        assert!(nuxl_desktop_lib::args::is_mzml_file(name), "{name}");
     }
-    for name in ["Ⱥ.mzM", "x.mzML.gz", "x.gz", "ẞ"] {
-        assert!(!nuxl_desktop_lib::args::is_spectrum_file(name), "{name}");
+    for name in ["Ⱥ.mzM", "x.mzML.gz", "x.gz", "ẞ", "x.raw", "x.d"] {
+        assert!(!nuxl_desktop_lib::args::is_mzml_file(name), "{name}");
+    }
+    for (link, stem) in [
+        ("1__İ.RAW", "1__İ"),
+        ("2__ẞ.d", "2__ẞ"),
+        ("3__Ⱥ.D", "3__Ⱥ"),
+        ("4__a.raw.mzML", "4__a.raw"),
+        ("5__a.mzML.d", "5__a.mzML"),
+        ("6__a.d.zip", "6__a.d.zip"),
+    ] {
+        assert_eq!(input_stem(link), stem, "{link}");
     }
     // the records of a search with such inputs carry these stems (the outputs are named after them)
     let req = request(
@@ -1216,6 +1473,8 @@ fn the_tool_never_runs_the_update_check_of_openms() {
 struct Run {
     work: TempDir,
     searches: Arc<Searches>,
+    /// The fake OpenNuXL, in a folder laid out as the bundle (with the fake FileConverter beside it).
+    tool: PathBuf,
 }
 
 impl Run {
@@ -1225,9 +1484,23 @@ impl Run {
 
     /// With the inputs reaching the tool as `links` says (Windows' way on any platform).
     fn with_links(links: InputLinks) -> Run {
+        Run::with(
+            links,
+            FakeBundle {
+                converter: true,
+                runtime: false,
+            },
+        )
+    }
+
+    /// With the bundle's parts `bundle` beside the fake tool.
+    fn with(links: InputLinks, bundle: FakeBundle) -> Run {
+        let work = TempDir::new("run");
+        let tool = fake_tools(&work.path().join("nuxl"), bundle);
         Run {
-            work: TempDir::new("run"),
+            work,
             searches: Arc::new(Searches::with_links(links)),
+            tool,
         }
     }
 
@@ -1246,7 +1519,7 @@ impl Run {
         let (sink, rx) = channel_sink();
         (
             self.searches
-                .start(&fake_nuxl(), &self.dir(), crap, req, sink),
+                .start(&self.tool, &self.dir(), crap, req, sink),
             rx,
         )
     }
@@ -1353,6 +1626,8 @@ fn a_search_ends_with_done_its_outputs_recorded_and_the_partial_folder_becomes_t
         "proteins": format!("nuxl/{stem}_perc_proteins0.0100_XLs.tsv"),
         "report": format!("nuxl/{stem}_perc.tsv"),
         "percolator": true,
+        // (an mzML is read where it is: no spectra of the search's own)
+        "spectra": null,
         "notes": ["autotune: too few non-cross-linked peptides found. Will keep parameters as-is."],
         "seconds": seconds,
         "fdr": { "peptide": 0.01, "xl": 0.01 },
@@ -1607,6 +1882,394 @@ fn the_tools_debug_table_beside_the_input_is_not_left_behind() {
         .collect();
     left.sort();
     assert_eq!(left, ["b.mzML", "c.mzML", "c.mzML.ambiguous_masses.csv"]);
+}
+
+// ---- .raw and .d inputs: the spectra for the PSM view ----------------------------------------
+
+/// The spectra the fake FileConverter writes (a copy of OpenMS' OpenNuXL test run, indexed).
+fn converted_fixture() -> Vec<u8> {
+    fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/lib/results/fixtures/spectra/OpenNuXL_1_input.indexed.mzML"),
+    )
+    .unwrap()
+}
+
+/// A search of an mzML, a Thermo .raw and a Bruker .d: each searched with the reader's progress, the spectra of
+/// the .raw and the .d converted after their runs into nuxl/ (with their own progress, FileConverter's command
+/// line in the log), and recorded in outputs.json; the mzML's not.
+#[test]
+fn the_spectra_of_raw_and_d_inputs_are_converted_after_their_runs_and_recorded() {
+    let run = Run::new();
+    let i = inputs();
+    let raw = i.dir.write("data/b.raw", "raw");
+    let d = bruker_d(&i.dir, "data/c.d");
+    let (_, rx) = run.start(
+        request(&[&i.mzml, &raw, &d], &i.fasta, false, json!({})),
+        None,
+    );
+    let events = until_terminal(&rx, WAIT);
+    let folder = done_folder(&events);
+    let progress = progress_of(&events);
+    let labels: Vec<&str> = progress.iter().map(|p| p.0.as_str()).collect();
+    for label in [
+        "Reading the spectra of a.mzML (1 of 3)...",
+        "Reading the spectra of b.raw (2 of 3)...",
+        "Reading the spectra of c.d (3 of 3)...",
+        "Preparing the spectra of b.raw for the PSM view (2 of 3)...",
+        "Preparing the spectra of c.d for the PSM view (3 of 3)...",
+    ] {
+        assert!(labels.contains(&label), "{label} in {labels:?}");
+    }
+    assert!(
+        !labels.iter().any(|l| l.contains("a.mzML for the PSM view")),
+        "{labels:?}"
+    );
+    for pair in progress.windows(2) {
+        assert!(pair[1].2 >= pair[0].2, "{pair:?}");
+    }
+    // the conversion is in its run's part of the bar
+    let converting = progress
+        .iter()
+        .find(|p| p.0.starts_with("Preparing the spectra of b.raw for"))
+        .unwrap();
+    assert!(
+        converting.1 == 1 && converting.2 > 1.0 / 3.0 && converting.2 < 2.0 / 3.0,
+        "{converting:?}"
+    );
+
+    let mzml = outputs_of(&folder, &stem_of(0, "a.mzML"));
+    assert_eq!(mzml["spectra"], Value::Null, "{mzml}");
+    for (k, name) in [(1, "b.raw"), (2, "c.d")] {
+        let stem = match InputLinks::PLATFORM {
+            InputLinks::Symlinks => format!("{}__{}", k + 1, input_stem(name)),
+            InputLinks::PathsOrHardLinks => input_stem(name),
+        };
+        let outputs = outputs_of(&folder, &stem);
+        assert_eq!(
+            outputs["spectra"],
+            json!(format!("nuxl/{stem}.spectra.mzML")),
+            "{outputs}"
+        );
+        assert_eq!(
+            fs::read(folder.join(format!("nuxl/{stem}.spectra.mzML"))).unwrap(),
+            converted_fixture()
+        );
+        assert!(!folder
+            .join(format!("nuxl/{stem}.spectra.tmp.mzML"))
+            .exists());
+        assert!(
+            !outputs["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n.as_str().unwrap().contains("PSM view")),
+            "{outputs}"
+        );
+        // FileConverter got OpenNuXL's -in, and the reader's options
+        let argv =
+            fs::read_to_string(folder.join(format!("nuxl/{stem}.FileConverter.argv.txt"))).unwrap();
+        let nuxl_argv = fs::read_to_string(folder.join(format!("nuxl/{stem}.argv.txt"))).unwrap();
+        let input_of = |argv: &str| {
+            let lines: Vec<&str> = argv.lines().collect();
+            lines[lines.iter().position(|l| *l == "-in").unwrap() + 1].to_string()
+        };
+        assert_eq!(input_of(&argv), input_of(&nuxl_argv));
+        assert!(
+            argv.contains("-process_lowmemory\n-zstd_compression\n"),
+            "{argv}"
+        );
+        let reader = if name.ends_with(".raw") {
+            "-RawToMzML:reader\ninprocess\n"
+        } else {
+            "-bruker:load_ms1\nfalse\n"
+        };
+        assert!(argv.contains(reader), "{argv}");
+    }
+    let log = fs::read_to_string(folder.join("nuxl.log")).unwrap();
+    let commands: Vec<&str> = log.lines().filter(|l| l.starts_with("$ ")).collect();
+    assert_eq!(commands.len(), 5, "three runs, two conversions: {log}");
+    assert!(
+        commands[2].contains("FileConverter") && commands[4].contains("FileConverter"),
+        "{commands:?}"
+    );
+    // the inputs are the user's: nothing beside them (OpenNuXL's debug table goes, FileConverter writes into nuxl/)
+    let mut left: Vec<String> = fs::read_dir(i.dir.path().join("data"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["a.mzML", "b.raw", "c.d", "db.fasta"]);
+    assert_eq!(
+        fs::read_dir(&d).unwrap().count(),
+        2,
+        "nothing inside the .d either"
+    );
+    // nor in the search folder: the debug table beside the link to the .d (`3__c.d.ambiguous_masses.csv`) is gone
+    let names: Vec<String> = fs::read_dir(&folder)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !names.iter().any(|n| n.ends_with(".ambiguous_masses.csv")),
+        "{names:?}"
+    );
+}
+
+/// Windows' way (on any platform): a .d folder by its own path beside a .raw of its name as a hard link; the
+/// conversions get those, and nothing is left beside the user's folder or in the search folder.
+#[test]
+fn the_windows_way_converts_a_d_by_its_own_path_and_a_raw_through_its_hard_link() {
+    let run = Run::with_links(InputLinks::PathsOrHardLinks);
+    let i = inputs();
+    let d = bruker_d(&i.dir, "data/a.d");
+    let raw = i.dir.write("other/a.raw", "raw");
+    let (_, rx) = run.start(request(&[&d, &raw], &i.fasta, false, json!({})), None);
+    let folder = done_folder(&until_terminal(&rx, WAIT));
+    let own = outputs_of(&folder, "a");
+    assert_eq!(own["spectra"], json!("nuxl/a.spectra.mzML"), "{own}");
+    let linked = outputs_of(&folder, "2__a");
+    assert_eq!(
+        linked["spectra"],
+        json!("nuxl/2__a.spectra.mzML"),
+        "{linked}"
+    );
+    let argv = fs::read_to_string(folder.join("nuxl/a.FileConverter.argv.txt")).unwrap();
+    assert!(
+        argv.starts_with(&format!("-in\n{}\n", d.display())),
+        "{argv}"
+    );
+    let mut beside: Vec<String> = fs::read_dir(i.dir.path().join("data"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    beside.sort();
+    assert_eq!(beside, ["a.d", "a.mzML", "db.fasta"]);
+    assert!(!folder.join("2__a.raw").exists(), "the hard link is gone");
+}
+
+/// A conversion that fails (FileConverter's error), writes nothing, or cannot run (no FileConverter beside
+/// OpenNuXL) fails not the search: the input's results are there, without spectra, and a note says why the PSM
+/// view shows the annotated peaks only.
+#[test]
+fn a_conversion_that_fails_leaves_a_note_and_not_a_failed_search() {
+    let run = Run::new();
+    let i = inputs();
+    let fail = i.dir.write("data/convfail.raw", "raw");
+    let none = bruker_d(&i.dir, "data/convnone.d");
+    let (_, rx) = run.start(request(&[&fail, &none], &i.fasta, false, json!({})), None);
+    let folder = done_folder(&until_terminal(&rx, WAIT));
+    let failed = outputs_of(&folder, &stem_of(0, "convfail.raw"));
+    assert_eq!(failed["spectra"], Value::Null);
+    assert!(failed["all"].is_string(), "{failed}");
+    let notes: Vec<&str> = failed["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap())
+        .collect();
+    let note = notes
+        .iter()
+        .find(|n| n.starts_with("The PSM view shows the annotated peaks only: the spectra of convfail.raw could not be converted ("))
+        .unwrap_or_else(|| panic!("{notes:?}"));
+    assert!(
+        note.contains("FileConverter ended with exit code 6")
+            && note.contains("Error: Unable to read file")
+            && !note.contains(".partial"),
+        "{note}"
+    );
+    let stem = stem_of(0, "convfail.raw");
+    assert!(!folder.join(format!("nuxl/{stem}.spectra.mzML")).exists());
+    assert!(!folder
+        .join(format!("nuxl/{stem}.spectra.tmp.mzML"))
+        .exists());
+
+    let empty = outputs_of(
+        &folder,
+        &match InputLinks::PLATFORM {
+            InputLinks::Symlinks => "2__convnone".to_string(),
+            InputLinks::PathsOrHardLinks => "convnone".to_string(),
+        },
+    );
+    assert_eq!(empty["spectra"], Value::Null);
+    assert!(
+        empty["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains(
+                "the spectra of convnone.d could not be converted (FileConverter wrote no file)"
+            )),
+        "{empty}"
+    );
+
+    // no FileConverter beside OpenNuXL
+    let bare = Run::with(InputLinks::PLATFORM, FakeBundle::default());
+    let raw = i.dir.write("data/b.raw", "raw");
+    let (_, rx) = bare.start(request(&[&raw], &i.fasta, false, json!({})), None);
+    let folder = done_folder(&until_terminal(&rx, WAIT));
+    let outputs = outputs_of(&folder, &stem_of(0, "b.raw"));
+    assert_eq!(outputs["spectra"], Value::Null);
+    assert!(
+        outputs["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains(&format!(
+                "there is no {} beside OpenNuXL",
+                tool::FILE_CONVERTER
+            ))),
+        "{outputs}"
+    );
+}
+
+/// Cancel during a conversion ends FileConverter (and what it started) as it ends OpenNuXL, and the search with
+/// it: no further run, no folder, no event but progress.
+#[test]
+fn cancel_during_a_conversion_ends_it_and_the_search() {
+    let run = Run::new();
+    let i = inputs();
+    let hang = i.dir.write("data/convhang.raw", "raw");
+    let (id, rx) = run.start(request(&[&hang, &i.mzml], &i.fasta, false, json!({})), None);
+    let id = id.unwrap();
+    let partial = run.dir().join(format!("{id}.partial"));
+    assert!(wait_for(WAIT, || read_pids(
+        &partial.join("converter-children.pid")
+    )
+    .len()
+        == 1));
+    let converter = read_pids(&partial.join("converter.pid"))[0];
+    let child = read_pids(&partial.join("converter-children.pid"))[0];
+    assert!(process_alive(converter) && process_alive(child));
+    run.searches.cancel(&id).unwrap();
+    assert!(!process_alive(converter), "FileConverter is gone");
+    assert!(
+        wait_for(Duration::from_secs(5), || !process_alive(child)),
+        "its child is gone"
+    );
+    assert!(run.listing().is_empty(), "{:?}", run.listing());
+    let events: Vec<SearchEvent> = rx.try_iter().collect();
+    assert!(events.iter().all(|e| matches!(e, SearchEvent::Progress(_))));
+    assert!(
+        progress_of(&events)
+            .iter()
+            .all(|p| !p.0.contains("(2 of 2)")),
+        "the second input's run never started: {events:?}"
+    );
+}
+
+/// The tools of a bundle run with its .NET runtime and Thermo bridge (OpenNuXL and FileConverter alike); a tool
+/// without them (a build tree's) with the user's environment.
+#[test]
+fn the_tools_run_with_the_bundles_dotnet_and_thermo_bridge() {
+    let run = Run::with(
+        InputLinks::PLATFORM,
+        FakeBundle {
+            converter: true,
+            runtime: true,
+        },
+    );
+    let i = inputs();
+    let raw = i.dir.write("data/b.raw", "raw");
+    let (_, rx) = run.start(request(&[&raw], &i.fasta, false, json!({})), None);
+    let folder = done_folder(&until_terminal(&rx, WAIT));
+    let root = run.tool.parent().unwrap().parent().unwrap();
+    let stem = stem_of(0, "b.raw");
+    for dump in [
+        format!("nuxl/{stem}.env.txt"),
+        format!("nuxl/{stem}.FileConverter.env.txt"),
+    ] {
+        let env = env_dump(&folder.join(&dump));
+        let get = |name: &str| env.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
+        assert_eq!(get("DOTNET_ROOT"), root.join("dotnet").to_str(), "{dump}");
+        assert_eq!(
+            get("OPENMS_THERMO_MANAGED_DIR"),
+            root.join("share/OpenMS/openms_thermo_bridge/managed")
+                .to_str(),
+            "{dump}"
+        );
+        assert_eq!(get("DOTNET_ROLL_FORWARD"), Some("Major"), "{dump}");
+        assert_eq!(
+            get("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"),
+            Some("1"),
+            "{dump}"
+        );
+        assert_eq!(get("OPENMS_DISABLE_UPDATE_CHECK"), Some("ON"), "{dump}");
+    }
+}
+
+/// The environment of the tools' command: with a bundle's .NET runtime its folder, and without the variables of the
+/// host that would win over it; with the bundle's Thermo bridge its managed part. A tool without them keeps the
+/// user's variables.
+#[test]
+fn the_tools_command_names_the_bundles_dotnet_and_thermo_bridge() {
+    let dir = TempDir::new("bundle-env");
+    let bundled = fake_tools(
+        &dir.path().join("bundle"),
+        FakeBundle {
+            converter: true,
+            runtime: true,
+        },
+    );
+    let env_of = |path: &Path| -> Vec<(String, Option<String>)> {
+        tool::command_with(path, None)
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect()
+    };
+    let env = env_of(&bundled);
+    let get = |env: &[(String, Option<String>)], name: &str| {
+        env.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
+    };
+    let root = dir.path().join("bundle");
+    assert_eq!(
+        get(&env, "DOTNET_ROOT"),
+        Some(Some(root.join("dotnet").to_string_lossy().into_owned()))
+    );
+    for name in tool::DOTNET_ARCH_ROOTS {
+        assert_eq!(get(&env, name), Some(None), "{name} is removed");
+    }
+    assert_eq!(get(&env, "DOTNET_ROLL_FORWARD"), Some(Some("Major".into())));
+    assert_eq!(
+        get(&env, "DOTNET_CLI_TELEMETRY_OPTOUT"),
+        Some(Some("1".into()))
+    );
+    assert_eq!(
+        get(&env, "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"),
+        Some(Some("1".into()))
+    );
+    assert_eq!(
+        get(&env, tool::THERMO_MANAGED_DIR),
+        Some(Some(
+            root.join("share/OpenMS/openms_thermo_bridge/managed")
+                .to_string_lossy()
+                .into_owned()
+        ))
+    );
+    // FileConverter of the bundle: the same
+    let converter = tool::file_converter(&bundled).unwrap();
+    assert_eq!(
+        converter,
+        bundled.parent().unwrap().join(tool::FILE_CONVERTER)
+    );
+    assert_eq!(env_of(&converter), env);
+    // a build tree's tool: nothing of .NET or the bridge is set or removed
+    let plain = fake_tools(&dir.path().join("build"), FakeBundle::default());
+    let env = env_of(&plain);
+    assert!(
+        env.iter()
+            .all(|(k, _)| !k.starts_with("DOTNET_") && k != tool::THERMO_MANAGED_DIR),
+        "{env:?}"
+    );
+    assert_eq!(tool::file_converter(&plain), None);
 }
 
 #[test]
@@ -2366,12 +3029,10 @@ fn watchdogs_of(group: u32) -> Vec<String> {
 #[cfg(unix)]
 #[test]
 fn a_watched_search_starts_its_watchdog_and_ends_it_with_the_search() {
-    let run = Run {
-        work: TempDir::new("run"),
-        searches: Arc::new(
-            Searches::default().with_watchdog(PathBuf::from(env!("CARGO_BIN_EXE_nuxl-desktop"))),
-        ),
-    };
+    let mut run = Run::new();
+    run.searches = Arc::new(
+        Searches::default().with_watchdog(PathBuf::from(env!("CARGO_BIN_EXE_nuxl-desktop"))),
+    );
     let i = inputs();
     let (id, _rx, partial) = start_hanging(&run, &i, &[], "hang", &[]);
     let tool_pid = read_pids(&partial.join("tool.pid"))[0];

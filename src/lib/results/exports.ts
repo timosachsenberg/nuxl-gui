@@ -45,8 +45,11 @@ export function idXMLFiles(result: OpenResult): { input: number; label: string }
   return rows.map((r, k) => ({ input: k, label: rows.length > 1 ? `idXML: ${r.fileName}` : 'idXML' }))
 }
 
-/** The name of a file without its directories and its extension(s) (`.mzML`, `.mzML.gz`). */
-const stemOf = (name: string) => name.slice(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1).replace(/\.mzML(\.gz)?$/i, '')
+/** The name of a file without its directories and its extension(s) (`.mzML`, `.mzML.gz`, `.raw`, a folder's `.d`). */
+const stemOf = (name: string) => {
+  const path = name.replace(/(.)[\\/]+$/, '$1')
+  return path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1).replace(/\.(mzML(\.gz)?|raw|d)$/i, '')
+}
 
 /**
  * The idXML of input `input` (every PSM of its OpenNuXL run, targets and decoys, before the FDR filter:

@@ -1,16 +1,24 @@
 # The NuXL desktop app on Linux (x64, arm64), macOS (arm64) and Windows (x64): the pinned OpenMS
-# (native/OPENMS_COMMIT) built (OpenNuXL and PercolatorAdapter) and bundled, the app's unit tests and packages.
+# (native/OPENMS_COMMIT) built (OpenNuXL, PercolatorAdapter and FileConverter, with Thermo .raw and Bruker .d
+# reading; a .NET SDK from actions/setup-dotnet for the Thermo bridge) and bundled (with a .NET runtime for the
+# .raw reader, native/scripts/fetch-dotnet-runtime.sh), the app's unit tests and packages.
 # - linux (x64 and arm64, a matrix): the .deb and the AppImage, and the AppImage's smoke test (the example
 #   through WebDriver).
 # - macos, windows: the .dmg and the NSIS installer, and their start test (start-test.sh: the bundled OpenNuXL
 #   searches the example from the command line, the packaged app starts, finds its OpenNuXL and PercolatorAdapter
 #   and exits); the real_nuxl tests with the bundled tool.
+# - every platform's packaging job: the real_nuxl tests of a Thermo .raw and a Bruker .d input
+#   (native/scripts/fetch-test-data.sh downloads them; NUXL_RAW_EXAMPLE, NUXL_D_EXAMPLE), so that the bundled .NET
+#   runtime of each platform reads a real .raw; on macOS and Windows start-test.sh also converts both with the
+#   installed package's FileConverter. A download that fails skips those tests with a warning (in the log and the
+#   run's summary) instead of failing the build.
 # - shim: the shim's tests (cargo test) on macOS and Windows, which need no OpenMS, for quick answers.
 # A tag desktop-native-v* makes a draft release with the packages of the tested main run of the tagged
 # commit (a tag run builds nothing: it releases the packages that main's run built and tested).
 #
 # Caches (actions/cache), per platform: the bundled OpenNuXL (src-tauri/resources/nuxl), keyed by the pin and
-# the scripts and licence files that make it, so OpenMS is built only when one of them changes; vcpkg's binary cache, keyed by
+# the scripts and licence files that make it (fetch-dotnet-runtime.sh, with the .NET runtime's pin, among them), so
+# OpenMS is built only when one of them changes; the vendor test data, keyed by its script; vcpkg's binary cache, keyed by
 # the pin and the triplet (plus the hash of its content when saved), so a rebuild of OpenMS does not rebuild
 # its dependencies; on macOS and Windows ccache's objects of OpenMS, so a rebuild after a change of the
 # bundling scripts (or a build cut short) compiles little. They are saved right after the step that fills
@@ -81,7 +89,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: src-tauri/resources/nuxl
-          key: nuxl-bundle-v1-${{ matrix.runner }}-${{ env.TRIPLET }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/scripts/build-openms.sh', 'native/scripts/bundle-nuxl.sh', 'native/scripts/bundle_closure.py', 'native/licenses/**') }}
+          key: nuxl-bundle-v2-${{ matrix.runner }}-${{ env.TRIPLET }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/scripts/build-openms.sh', 'native/scripts/bundle-nuxl.sh', 'native/scripts/bundle_closure.py', 'native/scripts/fetch-dotnet-runtime.sh', 'native/licenses/**') }}
 
       - name: System packages
         run: |
@@ -122,6 +130,19 @@ jobs:
           free -g
           cmake --version
           gcc-13 --version
+
+      # the Thermo bridge (WITH_THERMO_RAW): its native library compiles against the SDK's nethost, its managed half
+      # is published with `dotnet publish` (build-openms.sh); the action exports DOTNET_ROOT, where bundle-nuxl.sh
+      # also looks for nethost. The bundle brings its own .NET runtime, which the app points the tools at. The SDK
+      # goes to the runner's temporary folder: the action's default on Linux is /usr/share/dotnet, which the step
+      # above removes, and the action (not root) could not create it again under /usr/share.
+      - name: .NET SDK for the Thermo bridge
+        if: steps.bundle.outputs.cache-hit != 'true'
+        uses: actions/setup-dotnet@v5
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+        with:
+          dotnet-version: '8.0.x'
 
       - name: Check out OpenMS at the pin
         if: steps.bundle.outputs.cache-hit != 'true'
@@ -176,7 +197,7 @@ jobs:
           path: vcpkg-bincache
           key: ${{ steps.vcpkg.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-bincache/**') }}
 
-      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter)
+      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter, FileConverter)
         if: steps.bundle.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
         id: openms
         env:
@@ -187,7 +208,7 @@ jobs:
           VCPKG_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
           VCPKG_INSTALL_OPTIONS: --clean-after-build
           VCPKG_TRIPLET: ${{ env.TRIPLET }}
-          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter
+          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter FileConverter
         run: |
           native/scripts/build-openms.sh openms openms/build
           df -h /
@@ -223,15 +244,45 @@ jobs:
       - name: The bundled OpenNuXL
         run: |
           cat src-tauri/resources/nuxl/build.json
-          src-tauri/resources/nuxl/bin/OpenNuXL --help 2>&1 | grep -m1 'Version:'
-          src-tauri/resources/nuxl/bin/PercolatorAdapter --help 2>&1 | grep -m1 'Version:'
-          du -sh src-tauri/resources/nuxl src-tauri/resources/nuxl/lib src-tauri/resources/nuxl/share
+          for tool in OpenNuXL PercolatorAdapter FileConverter; do
+            echo "$tool $(src-tauri/resources/nuxl/bin/$tool --help 2>&1 | grep -m1 'Version:')"
+          done
+          src-tauri/resources/nuxl/dotnet/dotnet --list-runtimes
+          du -sh src-tauri/resources/nuxl src-tauri/resources/nuxl/lib src-tauri/resources/nuxl/share \
+            src-tauri/resources/nuxl/share/OpenMS/openms_thermo_bridge src-tauri/resources/nuxl/dotnet
 
       - name: Unit tests (svelte-check, vitest)
         run: |
           npm run check
           npm test
 
+      # the vendor test data of the real-data tests (a Thermo .raw, a Bruker .d): cached, and downloaded when the
+      # cache has not all of it; a failed download skips those tests, loudly (fetch-test-data.sh)
+      - name: Restore the vendor test data
+        id: testdata-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/nuxl-test-data
+          key: nuxl-testdata-v1-${{ hashFiles('native/scripts/fetch-test-data.sh') }}
+
+      - name: The vendor test data (Thermo .raw, Bruker .d)
+        id: testdata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir=$RUNNER_TEMP/nuxl-test-data
+          if command -v cygpath >/dev/null; then dir=$(cygpath -u "$dir"); fi
+          native/scripts/fetch-test-data.sh "$dir"
+
+      - name: Save the vendor test data
+        if: steps.testdata-cache.outputs.cache-hit != 'true' && steps.testdata.outputs.complete == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/nuxl-test-data
+          key: ${{ steps.testdata-cache.outputs.cache-primary-key }}
+
+      # (with NUXL_RAW_EXAMPLE and NUXL_D_EXAMPLE from the step above, the real_nuxl tests also search a .raw and a
+      # .d with the bundled OpenNuXL and FileConverter, the .raw through the bundled .NET runtime)
       - name: Unit tests (cargo test, with the bundled OpenNuXL)
         working-directory: src-tauri
         env:
@@ -261,6 +312,9 @@ jobs:
             done
             if [ -f src-tauri/resources/nuxl/build.json ]; then
               echo "| (bundled OpenNuXL, unpacked) | $(du -sh src-tauri/resources/nuxl | cut -f1) |"
+              if [ -d src-tauri/resources/nuxl/dotnet ]; then
+                echo "| (of it the .NET runtime, dotnet/) | $(du -sh src-tauri/resources/nuxl/dotnet | cut -f1) |"
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -348,7 +402,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: src-tauri/resources/nuxl
-          key: nuxl-bundle-v1-macos-15-${{ env.TRIPLET }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/scripts/build-openms.sh', 'native/scripts/bundle-nuxl.sh', 'native/scripts/bundle_closure.py', 'native/licenses/**') }}
+          key: nuxl-bundle-v2-macos-15-${{ env.TRIPLET }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/scripts/build-openms.sh', 'native/scripts/bundle-nuxl.sh', 'native/scripts/bundle_closure.py', 'native/scripts/fetch-dotnet-runtime.sh', 'native/licenses/**') }}
 
       # --- OpenMS (only without a bundle in the cache) ------------------------------------------------
       - name: Build tools for OpenMS
@@ -360,6 +414,15 @@ jobs:
           df -h "$GITHUB_WORKSPACE"
           sysctl -n hw.ncpu hw.memsize
           clang --version
+
+      # the Thermo bridge (WITH_THERMO_RAW): its native library compiles against the SDK's nethost, its managed half
+      # is published with `dotnet publish` (build-openms.sh); the action exports DOTNET_ROOT, where bundle-nuxl.sh
+      # also looks for nethost. The bundle brings its own .NET runtime, which the app points the tools at.
+      - name: .NET SDK for the Thermo bridge
+        if: steps.bundle.outputs.cache-hit != 'true'
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
 
       - name: Check out OpenMS at the pin
         if: steps.bundle.outputs.cache-hit != 'true'
@@ -419,7 +482,7 @@ jobs:
           path: vcpkg-bincache
           key: ${{ steps.vcpkg.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-bincache/**') }}
 
-      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter)
+      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter, FileConverter)
         if: steps.bundle.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
         id: openms
         env:
@@ -428,7 +491,7 @@ jobs:
           VCPKG_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
           VCPKG_INSTALL_OPTIONS: --clean-after-build
           VCPKG_TRIPLET: ${{ env.TRIPLET }}
-          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter
+          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter FileConverter
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
           CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -483,10 +546,40 @@ jobs:
       - name: The bundled OpenNuXL
         run: |
           cat src-tauri/resources/nuxl/build.json
-          src-tauri/resources/nuxl/bin/OpenNuXL --help 2>&1 | grep -m1 'Version:'
-          src-tauri/resources/nuxl/bin/PercolatorAdapter --help 2>&1 | grep -m1 'Version:'
-          du -sh src-tauri/resources/nuxl src-tauri/resources/nuxl/lib src-tauri/resources/nuxl/share
+          for tool in OpenNuXL PercolatorAdapter FileConverter; do
+            echo "$tool $(src-tauri/resources/nuxl/bin/$tool --help 2>&1 | grep -m1 'Version:')"
+          done
+          src-tauri/resources/nuxl/dotnet/dotnet --list-runtimes
+          du -sh src-tauri/resources/nuxl src-tauri/resources/nuxl/lib src-tauri/resources/nuxl/share \
+            src-tauri/resources/nuxl/share/OpenMS/openms_thermo_bridge src-tauri/resources/nuxl/dotnet
 
+      # the vendor test data of the real-data tests (a Thermo .raw, a Bruker .d): cached, and downloaded when the
+      # cache has not all of it; a failed download skips those tests, loudly (fetch-test-data.sh)
+      - name: Restore the vendor test data
+        id: testdata-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/nuxl-test-data
+          key: nuxl-testdata-v1-${{ hashFiles('native/scripts/fetch-test-data.sh') }}
+
+      - name: The vendor test data (Thermo .raw, Bruker .d)
+        id: testdata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir=$RUNNER_TEMP/nuxl-test-data
+          if command -v cygpath >/dev/null; then dir=$(cygpath -u "$dir"); fi
+          native/scripts/fetch-test-data.sh "$dir"
+
+      - name: Save the vendor test data
+        if: steps.testdata-cache.outputs.cache-hit != 'true' && steps.testdata.outputs.complete == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/nuxl-test-data
+          key: ${{ steps.testdata-cache.outputs.cache-primary-key }}
+
+      # (with NUXL_RAW_EXAMPLE and NUXL_D_EXAMPLE from the step above, also a .raw and a .d search with the bundled
+      # OpenNuXL and FileConverter, the .raw through the bundled .NET runtime)
       - name: The shim with the bundled OpenNuXL (real_nuxl)
         working-directory: src-tauri
         env:
@@ -513,6 +606,9 @@ jobs:
             done
             if [ -f src-tauri/resources/nuxl/build.json ]; then
               echo "| (bundled OpenNuXL, unpacked) | $(du -sh src-tauri/resources/nuxl | cut -f1) |"
+              if [ -d src-tauri/resources/nuxl/dotnet ]; then
+                echo "| (of it the .NET runtime, dotnet/) | $(du -sh src-tauri/resources/nuxl/dotnet | cut -f1) |"
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -560,7 +656,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: src-tauri/resources/nuxl
-          key: nuxl-bundle-v1-windows-2025-${{ env.TRIPLET }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/scripts/build-openms.sh', 'native/scripts/bundle-nuxl.sh', 'native/scripts/bundle_closure.py', 'native/licenses/**') }}
+          key: nuxl-bundle-v2-windows-2025-${{ env.TRIPLET }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('native/scripts/build-openms.sh', 'native/scripts/bundle-nuxl.sh', 'native/scripts/bundle_closure.py', 'native/scripts/fetch-dotnet-runtime.sh', 'native/licenses/**') }}
 
       # cl, the Windows SDK and VCToolsRedistDir (the Visual C++ runtime the bundle takes) for every step below
       - uses: ilammy/msvc-dev-cmd@v1
@@ -579,6 +675,16 @@ jobs:
           command -v cl ninja cmake ccache
           df -h . /c /d 2>/dev/null || true
           nproc
+
+      # the Thermo bridge (WITH_THERMO_RAW): its native library compiles against the SDK's nethost, its managed half
+      # is published with `dotnet publish` (build-openms.sh); the action exports DOTNET_ROOT, where bundle-nuxl.sh
+      # also looks for nethost (Windows: nethost.dll, which the bridge imports). The bundle brings its own .NET
+      # runtime, which the app points the tools at.
+      - name: .NET SDK for the Thermo bridge
+        if: steps.bundle.outputs.cache-hit != 'true'
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
 
       - name: Check out OpenMS at the pin
         if: steps.bundle.outputs.cache-hit != 'true'
@@ -642,7 +748,7 @@ jobs:
           path: vcpkg-bincache
           key: ${{ steps.vcpkg.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-bincache/**') }}
 
-      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter)
+      - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter, FileConverter)
         if: steps.bundle.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
         id: openms
         env:
@@ -654,7 +760,7 @@ jobs:
           VCPKG_INSTALL_OPTIONS: --clean-after-build;--x-buildtrees-root=D:/vb;--x-packages-root=D:/vp
           VCPKG_TRIPLET: ${{ env.TRIPLET }}
           OPENMS_CMAKE_ARGS: -DMT_REQUIRE_OPENMP=ON
-          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter
+          OPENMS_TARGETS: OpenMS OpenNuXL PercolatorAdapter FileConverter
           CMAKE_C_COMPILER_LAUNCHER: ccache
           CMAKE_CXX_COMPILER_LAUNCHER: ccache
           CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -705,11 +811,41 @@ jobs:
       - name: The bundled OpenNuXL
         run: |
           cat src-tauri/resources/nuxl/build.json
-          src-tauri/resources/nuxl/bin/OpenNuXL.exe --help 2>&1 | grep -m1 'Version:'
-          src-tauri/resources/nuxl/bin/PercolatorAdapter.exe --help 2>&1 | grep -m1 'Version:'
+          for tool in OpenNuXL PercolatorAdapter FileConverter; do
+            echo "$tool $(src-tauri/resources/nuxl/bin/$tool.exe --help 2>&1 | grep -m1 'Version:')"
+          done
+          src-tauri/resources/nuxl/dotnet/dotnet.exe --list-runtimes
           ls src-tauri/resources/nuxl/bin
-          du -sh src-tauri/resources/nuxl src-tauri/resources/nuxl/bin src-tauri/resources/nuxl/share
+          du -sh src-tauri/resources/nuxl src-tauri/resources/nuxl/bin src-tauri/resources/nuxl/share \
+            src-tauri/resources/nuxl/share/OpenMS/openms_thermo_bridge src-tauri/resources/nuxl/dotnet
 
+      # the vendor test data of the real-data tests (a Thermo .raw, a Bruker .d): cached, and downloaded when the
+      # cache has not all of it; a failed download skips those tests, loudly (fetch-test-data.sh)
+      - name: Restore the vendor test data
+        id: testdata-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/nuxl-test-data
+          key: nuxl-testdata-v1-${{ hashFiles('native/scripts/fetch-test-data.sh') }}
+
+      - name: The vendor test data (Thermo .raw, Bruker .d)
+        id: testdata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir=$RUNNER_TEMP/nuxl-test-data
+          if command -v cygpath >/dev/null; then dir=$(cygpath -u "$dir"); fi
+          native/scripts/fetch-test-data.sh "$dir"
+
+      - name: Save the vendor test data
+        if: steps.testdata-cache.outputs.cache-hit != 'true' && steps.testdata.outputs.complete == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/nuxl-test-data
+          key: ${{ steps.testdata-cache.outputs.cache-primary-key }}
+
+      # (with NUXL_RAW_EXAMPLE and NUXL_D_EXAMPLE from the step above, also a .raw and a .d search with the bundled
+      # OpenNuXL and FileConverter, the .raw through the bundled .NET runtime)
       - name: The shim with the bundled OpenNuXL (real_nuxl)
         working-directory: src-tauri
         env:
@@ -736,6 +872,9 @@ jobs:
             done
             if [ -f src-tauri/resources/nuxl/build.json ]; then
               echo "| (bundled OpenNuXL, unpacked) | $(du -sh src-tauri/resources/nuxl | cut -f1) |"
+              if [ -d src-tauri/resources/nuxl/dotnet ]; then
+                echo "| (of it the .NET runtime, dotnet/) | $(du -sh src-tauri/resources/nuxl/dotnet | cut -f1) |"
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

@@ -20,7 +20,7 @@ export type PercolatorStatus = {
   warning: EngineNote | null
 }
 
-/** The Percolator texts we know (ProSE's and OpenNuXL's), in short plain words. */
+/** The Percolator texts we know (ProSE's and OpenNuXL's), and the shim's own notes, in short plain words. */
 const SHORT_NOTES: [RegExp, string][] = [
   [/sanity check rejected the learned model/i, 'Too few confident PSMs, so scored by the best single feature'],
   [/^Only (\d+) PSMs, Percolator rescoring needs at least (\d+)/, 'Only $1 PSMs, at least $2 needed'],
@@ -30,6 +30,8 @@ const SHORT_NOTES: [RegExp, string][] = [
   // OpenNuXL's (it rescores 1000 PSMs or more)
   [/^Too few PSMs for score recalibration/, 'Too few PSMs (Percolator needs 1000)'],
   [/^Score recalibration failed/, 'Percolator failed'],
+  // the shim's, of a .raw or .d input whose spectra FileConverter could not write as mzML for the PSM view
+  [/^The PSM view shows the annotated peaks only: the spectra of .+ could not be converted/, 'Spectra not converted: the PSM view shows the annotated peaks only'],
 ]
 
 /** A long engine text as a short line: a known one in plain words, else its first sentence, cut at 80 characters. */

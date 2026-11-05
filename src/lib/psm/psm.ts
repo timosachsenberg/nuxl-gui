@@ -5,6 +5,7 @@
 
 import type { PeakMatch, ResultTables, StoredSpectra } from '../results/types'
 import { peptideView } from '../format/peptide'
+import { spectrumTerm } from '../results/display'
 
 export type IonType = 'a' | 'b' | 'c' | 'x' | 'y' | 'z'
 export const ION_TYPES: readonly IonType[] = ['a', 'b', 'c', 'x', 'y', 'z']
@@ -156,8 +157,8 @@ export function featureValue(names: string[], features: Float64Array, row: numbe
 /** The file name of an exported spectrum: the peptide and the spectrum ("AVM_Oxidation_DDFAAFVEK_scan21507.svg"). */
 export function svgFileName(peptide: string, nativeId: string): string {
   const clean = (text: string) => text.replace(/[^A-Za-z0-9.-]+/g, '_').replace(/^[_.]+|[_.]+$/g, '')
-  // "scan21507", or "spectrum19" / "index12" of the 0-based terms
-  const term = /(?:^|\s)(scan|spectrum|index)=(\d+)(?=\s|$)/.exec(nativeId)
-  const spectrum = term === null ? clean(nativeId) : `${term[1]}${term[2]}`
+  // "scan21507", or "spectrum19" / "index12" of the 0-based terms, "precursor4711" of a timsTOF ID (its scan= repeats)
+  const term = spectrumTerm(nativeId)
+  const spectrum = term === null ? clean(nativeId) : `${term.term}${term.number}`
   return `${clean(peptide) || 'spectrum'}_${spectrum || 'spectrum'}.svg`
 }

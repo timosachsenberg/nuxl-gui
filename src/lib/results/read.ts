@@ -12,8 +12,11 @@
 // them), else the FASTA's.
 //
 // The peaks of a PSM are read when it is opened (`SearchResult.spectra`), from its input mzML by byte range: by the
-// file's index, else by scanning it (mzml.ts). When the file cannot be read (moved, an imported project), the load
-// resolves without peaks and says why; the PSM view then has NuXL's own annotated peaks (`LoadedSpectra.annotation`).
+// file's index, else by scanning it (mzml.ts). Of a Thermo .raw or Bruker .d input, from the mzML the shim wrote of its
+// spectra into the search folder (outputs.json `spectra`; FileConverter, indexed), never from the input itself (a
+// vendor file, a folder); the spectra are matched by native ID alone, so that file may hold them in another order and
+// MS2 only. When the file cannot be read (moved, an imported project, a conversion that failed), the load resolves
+// without peaks and says why; the PSM view then has NuXL's own annotated peaks (`LoadedSpectra.annotation`).
 //
 // The `files` contract: resolve with the contents (all of the file, or the byte range asked for), or reject with
 // `FileNotFound` (or any error or object with `notFound: true`, as a Tauri command can send it) when the file does not
@@ -72,7 +75,7 @@ export interface PeakFilter {
  * (there is no PeptDeep), and NuXL's own annotation of it.
  */
 export interface LoadedSpectra {
-  /** the spectrum read from the input mzML: spectrum 0, or none (psmSpectrum[0] −1) when `missing` says why */
+  /** the spectrum read from the input mzML (or a .raw/.d's converted spectra): spectrum 0, or none (psmSpectrum[0] −1) when `missing` says why */
   spectra: StoredSpectra
   /** the PSM's entry of spectra.psmSpectrum: 0 */
   spectrumRow: number
@@ -83,7 +86,8 @@ export interface LoadedSpectra {
   peakFilter: PeakFilter | null
   /**
    * Why the spectrum has no peaks, for the PSM view (the input mzML is not where it was searched, an imported project
-   * has no inputs, the file has no spectrum of the PSM's native ID, its peaks are MS-Numpress-compressed, ...);
+   * has no inputs, a .raw/.d's spectra were not converted, the file has no spectrum of the PSM's native ID, its peaks
+   * are MS-Numpress-compressed, ...);
    * null: the peaks are there
    */
   missing: string | null
@@ -731,7 +735,7 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     ...(preset !== undefined ? { preset } : {}),
   }
 
-  return { summary, tables, spectra: psmSpectra(files, inputs, tables.psms), warnings, proteinsSaved, nuxl }
+  return { summary, tables, spectra: psmSpectra(files, inputs, runs, tables.psms), warnings, proteinsSaved, nuxl }
 }
 
 /**
@@ -774,7 +778,7 @@ export async function countTargetPsms(files: SearchFiles): Promise<number> {
 
 
 //------------------------------------------------------------------------------
-// The spectra of the PSMs: from the input mzML, by byte range
+// The spectra of the PSMs: from the input mzML (a .raw/.d's converted spectra), by byte range
 
 /** The PSMs whose loads are kept (the last ones opened). */
 const CACHED_LOADS = 8
@@ -803,23 +807,54 @@ function storedSpectra(s: MzmlSpectrum, precursorMz: number): StoredSpectra {
   }
 }
 
-/** The input mzML of a PSM, as a range reader: its link in the folder, else (moved links) the path it was searched at. */
+/**
+ * The mzML of a PSM's spectra, as a range reader: the input's link in the folder, else (moved links) the path it was
+ * searched at; of a .raw/.d input, the folder's file of its converted spectra.
+ */
 interface InputFile {
   name: string
   read: ReadRange
 }
 
+/** A Thermo .raw file or a Bruker .d folder, by its name (search/files.ts): not mzML, so never read for peaks. */
+const isVendor = (name: string) => /\.(raw|d)[\\/]*$/i.test(name)
+
+/** Why the peaks are missing, said whole (not prefixed with the input's name, which it names). */
+class Missing extends Error {}
+
 /**
  * The PsmSpectra of the PSM rows: the spectrum of row r is psms.nativeId[r] of the input psms.file[r], read from
- * the input's mzML through `files` by byte range (by its link name, else its absolute path). The spectrum index of
- * each input is made once (from its index, else by scanning it).
+ * the input's mzML through `files` by byte range (by its link name, else its absolute path), or from the mzML of its
+ * spectra its run's outputs.json names (`runs[k].spectra`: a .raw or .d input). The spectrum index of each input is
+ * made once (from its index, else by scanning it).
  */
-function psmSpectra(files: SearchFiles, inputs: InputRecord[], psms: ResultTables['psms']): PsmSpectra {
+function psmSpectra(files: SearchFiles, inputs: InputRecord[], runs: (RunOutputs | null)[], psms: ResultTables['psms']): PsmSpectra {
   const indexes = new Map<number, Promise<{ file: InputFile; index: SpectrumIndex }>>()
   const loads = new Map<number, Promise<LoadedSpectra>>()
 
-  /** The input's mzML: the first of its link and its path that exists. A refusal (an imported project) is final. */
-  const fileOf = async (input: InputRecord): Promise<InputFile> => {
+  /**
+   * The input's mzML: the first of its link and its path that exists. A refusal (an imported project) is final. Of a
+   * .raw or .d input, only the converted spectra of its run: the input is a vendor file or a folder, which the app
+   * does not read (and its link is not probed).
+   */
+  const fileOf = async (k: number): Promise<InputFile> => {
+    const input = inputs[k]
+    const converted = runs[k]?.spectra ?? null
+    if (converted !== null) {
+      const read: ReadRange = (range) => files(converted, range)
+      try {
+        await read({ tail: 1 })
+        return { name: converted, read }
+      } catch (e) {
+        if (!isNotFound(e)) throw new Missing(`The spectra of ${input.name} (${converted}) cannot be read: ${errorText(e)}`)
+        throw new Missing(
+          `The spectra of ${input.name} are not in the search folder (a project leaves them out); the PSM view shows the annotated peaks only.`,
+        )
+      }
+    }
+    if (isVendor(input.name) || isVendor(input.path)) {
+      throw new Missing(`The spectra of ${input.name} were not converted; the PSM view shows the annotated peaks only.`)
+    }
     const names = [...new Set([input.link, input.path].filter((n) => n !== ''))]
     for (const name of names) {
       const read: ReadRange = (range) => files(name, range)
@@ -837,7 +872,7 @@ function psmSpectra(files: SearchFiles, inputs: InputRecord[], psms: ResultTable
     let p = rescan ? undefined : indexes.get(k)
     if (!p) {
       p = (async () => {
-        const file = await fileOf(inputs[k])
+        const file = await fileOf(k)
         const index = await spectrumIndex(file.read, { scan: rescan })
         return { file, index }
       })()
@@ -879,7 +914,7 @@ function psmSpectra(files: SearchFiles, inputs: InputRecord[], psms: ResultTable
       // whatever keeps the peaks from the PSM view (the file not there, refused, no such spectrum, its peaks in a
       // format the app does not read, a broken file): it says why, and shows NuXL's annotated peaks
       const message = errorText(e)
-      if (message.startsWith(`${input.name} `)) return result(NO_PEAKS(psms.mz[row]), message)
+      if (e instanceof Missing || message.startsWith(`${input.name} `)) return result(NO_PEAKS(psms.mz[row]), message)
       const own = file && message.startsWith(`${file.name}: `) ? message.slice(file.name.length + 2) : message
       return result(NO_PEAKS(psms.mz[row]), `${input.name}: ${own}`)
     }

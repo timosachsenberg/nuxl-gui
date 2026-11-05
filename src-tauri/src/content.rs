@@ -72,7 +72,7 @@ fn judge_mzml(name: &str, size: u64, head: &[u8], tail: &[u8]) -> MzmlFacts {
         return MzmlFacts {
             spectra: None,
             problem: Some(format!(
-                "{name} is not an mzML file: it is not XML. Convert vendor files to mzML first, e.g. with ProteoWizard msconvert."
+                "{name} is not an mzML file: it is not XML. Add Thermo .raw files and Bruker timsTOF .d folders as they are; convert other vendor files to mzML first, e.g. with ProteoWizard msconvert."
             )),
         };
     }

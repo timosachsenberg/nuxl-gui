@@ -1,7 +1,8 @@
 /// <reference types="node" />
 // The results reader on search folders as the shim leaves them (fixtures/<case>/, made by scripts/results-fixtures.mjs
 // from OpenNuXL's own test outputs): example (one input, peptides and cross-links), runs (three inputs, one without
-// decoys and one that did not finish), empty (two inputs without PSMs), screens (the screenshots' set, OpenNuXL's test 3);
+// decoys and one that did not finish), empty (two inputs without PSMs), screens (the screenshots' set, OpenNuXL's test 3),
+// vendor (a Bruker .d with the spectra the shim converted, a Thermo .raw whose conversion failed);
 // the input mzML is the app's example (src-tauri/resources/example), as it is and as an indexed, zlib-compressed copy
 // (fixtures/spectra).
 
@@ -501,6 +502,62 @@ describe('the spectra of the PSMs', () => {
     const r = await readExample()
     await expect(r.spectra.load(-1)).rejects.toThrow('There is no PSM row -1.')
     await expect(r.spectra.load(r.tables.psms.count)).rejects.toThrow()
+  })
+})
+
+describe('the spectra of the PSMs: Thermo .raw and Bruker .d inputs', () => {
+  // (fixtures/vendor: run.d, its spectra converted by the shim, nuxl/1__run.spectra.mzML: the example's spectra under
+  // Bruker IDs, MS2 only, indexed, in reverse order; thermo.raw, whose conversion failed: outputs.json spectra null)
+  const BRUKER_9 = 'frame=102 scan=201 precursor=1010'
+  const THERMO_9 = 'controllerType=0 controllerNumber=1 scan=10'
+  const SPECTRA = 'nuxl/1__run.spectra.mzML'
+  const inputNames = ['1__run.d', '/data/run.d', '2__thermo.raw', '/data/thermo.raw']
+
+  test("of a .d: from the converted spectra outputs.json names, by the PSM's native ID; the input is never read", async () => {
+    const f = folder('vendor')
+    const r = await readSearch(f.files)
+    expect(r.tables.files).toEqual(['/data/run.d', '/data/thermo.raw'])
+    expect(r.warnings).toEqual([])
+    const loaded = await r.spectra.load(rowOf(r, BRUKER_9))
+    expect(loaded.missing).toBeNull()
+    // the same peaks as the example's spectrum=9, which the converted file holds under that ID at another position
+    const example = await readExample()
+    const original = await example.spectra.load(rowOf(example, 'spectrum=9'))
+    expect(loaded.spectra.mz).toEqual(original.spectra.mz)
+    expect(loaded.spectra.intensity).toEqual(original.spectra.intensity)
+    expect(loaded.spectra.precursorMz).toEqual(original.spectra.precursorMz)
+    // the spectra file by byte range only (its index: no scan), the input's link and path not even probed
+    const asked = f.asked.filter((a) => a.name === SPECTRA)
+    expect(asked.length).toBeGreaterThan(0)
+    expect(asked.every((a) => a.range !== undefined && !('offset' in a.range && a.range.offset === 0))).toBe(true)
+    expect(f.asked.filter((a) => inputNames.includes(a.name))).toEqual([])
+  })
+
+  test("of a .raw whose spectra were not converted: no peaks, a specific reason, NuXL's annotated peaks; the input is never read", async () => {
+    const f = folder('vendor')
+    const r = await readSearch(f.files)
+    expect(r.nuxl.notes[1]).toContain('The PSM view shows the annotated peaks only: the spectra of thermo.raw could not be converted (FileConverter ended with exit code 1).')
+    const row = rowOf(r, THERMO_9)
+    const loaded = await r.spectra.load(row)
+    expect(loaded.missing).toBe('The spectra of thermo.raw were not converted; the PSM view shows the annotated peaks only.')
+    expect(loaded.spectra.psmSpectrum[loaded.spectrumRow]).toBe(-1)
+    expect(loaded.annotation.length).toBeGreaterThan(0)
+    expect(f.asked.filter((a) => inputNames.includes(a.name))).toEqual([])
+  })
+
+  test('the converted spectra missing (a project leaves them out) or unreadable: no peaks and why, the input not read', async () => {
+    const gone = folder('vendor', { override: { [SPECTRA]: null } })
+    const r = await readSearch(gone.files)
+    expect((await r.spectra.load(rowOf(r, BRUKER_9))).missing).toBe(
+      'The spectra of run.d are not in the search folder (a project leaves them out); the PSM view shows the annotated peaks only.',
+    )
+    expect(gone.asked.filter((a) => inputNames.includes(a.name))).toEqual([])
+    const refused = await readSearch(folder('vendor', { override: { [SPECTRA]: new Error('permission denied') } }).files)
+    expect((await refused.spectra.load(rowOf(refused, BRUKER_9))).missing).toBe(`The spectra of run.d (${SPECTRA}) cannot be read: permission denied`)
+    // a native ID the converted file lacks: named as for an input mzML
+    const other = Buffer.from(readFileSync(join(fixtures, 'vendor', SPECTRA), 'latin1').replaceAll(`"${BRUKER_9}"`, '"frame=1 scan=1 precursor=1"'), 'latin1')
+    const lacking = await readSearch(folder('vendor', { override: { [SPECTRA]: other } }).files)
+    expect((await lacking.spectra.load(rowOf(lacking, BRUKER_9))).missing).toBe(`run.d: The file has no spectrum with the native ID ${BRUKER_9}.`)
   })
 })
 

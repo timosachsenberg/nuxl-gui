@@ -1,20 +1,26 @@
 #!/bin/bash
-# Native (host toolchain) build of libOpenMS, OpenNuXL and PercolatorAdapter (OpenNuXL's rescoring), and
-# the tests of OpenNuXL.
+# Native (host toolchain) build of libOpenMS, OpenNuXL, PercolatorAdapter (OpenNuXL's rescoring) and FileConverter
+# (the app's conversion of .raw and .d spectra to mzML for its PSM view), and the tests of OpenNuXL.
 #
 #   build-openms.sh <openms-src> <build-dir>
 #
 # <openms-src> is any OpenMS checkout; <build-dir> is created if needed (an existing configured
 # directory is reconfigured in place, so the script is safe to re-run). It runs on the host
 # toolchain, outside native/scripts/in-env.sh. Environment overrides: JOBS (default 100),
-# VCPKG_BINARY_CACHE, VCPKG_MAX_CONCURRENCY (default 32), OPENMS_TARGETS (default: the library, the two
-# tools and what their tests run, below; CI builds "OpenMS OpenNuXL PercolatorAdapter" only), VCPKG_INSTALL_OPTIONS (a CMake list, for
+# VCPKG_BINARY_CACHE, VCPKG_MAX_CONCURRENCY (default 32), OPENMS_TARGETS (default: the library, the three
+# tools and what their tests run, below; CI builds "OpenMS OpenNuXL PercolatorAdapter FileConverter" only),
+# VCPKG_INSTALL_OPTIONS (a CMake list, for
 # example --clean-after-build, which CI uses to save disk space), CC and CXX (CI: gcc-13; cl on
 # Windows), VCPKG_TRIPLET (default x64-linux-dynamic; CI: arm64-osx-dynamic-sysroot-vcrel on macOS,
 # x64-windows-static-md-release on Windows, as OpenMS's own CI), OPENMS_CMAKE_ARGS (more -D options,
 # split at spaces; macOS: -DOpenMP_ROOT=<Homebrew's libomp>), OPENMS_CONFIGURE_ONLY=1 (configure, which
 # builds the vcpkg dependencies, and stop: CI saves the dependencies before the long OpenMS build).
 # On Windows it runs in Git Bash inside a Visual Studio developer environment.
+#
+# Thermo .raw support (WITH_THERMO_RAW) needs a .NET SDK 8 or newer when configuring and building: CMake fetches
+# openms-thermo-bridge (FetchContent, from GitHub), compiles its native library against the SDK's nethost (the
+# host pack) and publishes its managed half with `dotnet publish` (a NuGet restore; Thermo's RawFileReader
+# packages are downloaded). The SDK is found as `dotnet` on PATH or through DOTNET_ROOT (CI: actions/setup-dotnet).
 set -euo pipefail
 
 if [ "$#" -ne 2 ]; then
@@ -39,14 +45,35 @@ TOOLCHAIN="$SRC/vcpkg/scripts/buildsystems/vcpkg.cmake"
 PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v 'linuxbrew' | paste -sd: -)
 export PATH
 
+# The .NET SDK for the Thermo bridge (see above): checked here, before vcpkg's long build, rather than at the end
+# of the configure.
+dotnet_bin=$(command -v dotnet 2>/dev/null || true)
+if [ -z "$dotnet_bin" ] && [ -n "${DOTNET_ROOT:-}" ]; then
+  for candidate in "$DOTNET_ROOT/dotnet" "$DOTNET_ROOT/dotnet.exe"; do
+    if [ -x "$candidate" ]; then dotnet_bin=$candidate; PATH="$(dirname "$candidate"):$PATH"; break; fi
+  done
+fi
+[ -n "$dotnet_bin" ] || { echo "error: no .NET SDK (dotnet on PATH or in DOTNET_ROOT): WITH_THERMO_RAW needs one, 8 or newer" >&2; exit 1; }
+"$dotnet_bin" --list-sdks | grep -Eq '^([89]|[1-9][0-9])\.' \
+  || { echo "error: $dotnet_bin has no .NET SDK 8 or newer: $("$dotnet_bin" --list-sdks | tr '\n' ' ')" >&2; exit 1; }
+echo ".NET SDK for the Thermo bridge: $dotnet_bin ($("$dotnet_bin" --list-sdks | tail -n 1))"
+# `dotnet publish` otherwise leaves build servers running for minutes after the build (MSBuild worker nodes kept for
+# reuse, the MSBuild server, the C# compiler server, VBCSCompiler). On Windows they keep the folders they ran in
+# locked, so the workflow's removal of the build tree would fail; none is started, and any that is still running
+# is shut down when the script ends, however it ends.
+export MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_USE_MSBUILD_SERVER=0 UseSharedCompilation=false
+trap '"$dotnet_bin" build-server shutdown >/dev/null 2>&1 || true' EXIT
+
 # Build the vcpkg dependencies once and reuse them across builds from the binary cache.
 mkdir -p "$BINCACHE"
 BINCACHE=$(native "$(cd "$BINCACHE" && pwd -P)")
 export VCPKG_BINARY_SOURCES="clear;files,$BINCACHE,readwrite"
 export VCPKG_MAX_CONCURRENCY=${VCPKG_MAX_CONCURRENCY:-32}
 
-# Thermo RAW is off because its bridge needs dotnet (the app searches mzML only); OpenTIMS is off because the app
-# does not read .d files; ONNX Runtime is off: OpenNuXL predicts nothing with it (PeptDeep is ProSE's).
+# Thermo RAW and OpenTIMS are on: OpenNuXL and FileConverter read Thermo .raw files (in process, through the
+# openms-thermo-bridge and a .NET runtime, which bundle-nuxl.sh bundles) and Bruker timsTOF .d folders (OpenTIMS,
+# fetched and linked statically into libOpenMS) themselves. ONNX Runtime is off: OpenNuXL predicts nothing with it
+# (PeptDeep is ProSE's).
 # The update check is off: OpenMS tools otherwise contact openms-update.cs.uni-tuebingen.de once a day (the app has no
 # network access at run time; the app also sets OPENMS_DISABLE_UPDATE_CHECK for the tool, src-tauri/src/tool.rs).
 # shellcheck disable=SC2086 # OPENMS_CMAKE_ARGS: options, split at spaces
@@ -57,8 +84,8 @@ cmake -G Ninja -S "$SRC" -B "$BUILD" \
   -DVCPKG_TARGET_TRIPLET="$TRIPLET" \
   -DWITH_ONNX=OFF \
   -DWITH_GUI=OFF \
-  -DWITH_THERMO_RAW=OFF \
-  -DWITH_OPENTIMS=OFF \
+  -DWITH_THERMO_RAW=ON \
+  -DWITH_OPENTIMS=ON \
   -DENABLE_DOCS=OFF \
   -DENABLE_UPDATE_CHECK=OFF \
   -DPYOPENMS=OFF \
@@ -74,7 +101,8 @@ fi
 
 # OpenNuXL rescores through PercolatorAdapter (File::findSiblingTOPPExecutable: beside it in bin/), with the
 # Percolator built into OpenMS. FuzzyDiff is what the TOPP_OpenNuXL tests compare the outputs with; without it
-# those tests report "Not Run". Percolator_test checks the built-in Percolator.
-TARGETS=${OPENMS_TARGETS:-OpenMS OpenNuXL PercolatorAdapter FuzzyDiff Percolator_test}
+# those tests report "Not Run". Percolator_test checks the built-in Percolator. FileConverter is the app's (the
+# spectra of .raw and .d inputs as mzML).
+TARGETS=${OPENMS_TARGETS:-OpenMS OpenNuXL PercolatorAdapter FileConverter FuzzyDiff Percolator_test}
 # shellcheck disable=SC2086 # a list of targets
 cmake --build "$BUILD" -j "$JOBS" --target $TARGETS

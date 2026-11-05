@@ -1,7 +1,10 @@
 // An error of a search for people: where it happened (the stage and file of the last progress report)
 // and what happened, led by how OpenNuXL ended (a crash's signal, an exit code), with its last lines on
 // stderr (or OpenMS' own text) as a secondary detail and the path of the kept log. OpenNuXL runs once per input
-// file, so the file of the last report is where it happened.
+// file, so the file of the last report is where it happened. After a run of a Thermo .raw or Bruker .d input, the shim
+// writes its spectra as mzML for the PSM view (FileConverter, in that file's part of the progress).
+
+import { isRaw, isTimsD } from './files'
 
 export type FailureStage = {
   /** The last progress label ("Searching broken.mzML (2 of 2)..."). */
@@ -52,6 +55,9 @@ function stageOf(stage: FailureStage, message: string): string {
     const file = n === 1 ? stage.files[0] : `file ${stage.file + 1} of ${n} (${stage.files[stage.file]})`
     // Percolator's step of the file ("Percolator: run.mzML (2 of 3)…")
     if (/^Percolator\b/.test(stage.label.trim())) return `While rescoring ${file} with Percolator`
+    // the conversion of a .raw or .d after its search ("Preparing the spectra of run.raw for the PSM view (1 of 2)..."),
+    // not OpenNuXL's own filtering step ("Preparing the spectra of run.raw (1 of 2)...")
+    if (/^Preparing the spectra of .+ for the PSM view\b/.test(stage.label.trim())) return `While preparing the spectra of ${file} for the PSM view`
     // the file's step was running, but in a part that reports nothing: its last label would mislead
     const silent = stage.silentMs > SILENT_MS ? ', in a step without progress reports (e.g. Percolator)' : ''
     return `While searching ${file}${silent}`
@@ -73,6 +79,14 @@ function exceptionText(message: string): string | null {
   return location ? message.slice(0, location.index) : null
 }
 
+/** What OpenMS' parse error says of the file it was reading: an mzML, or a vendor file (not parsed as XML by the app). */
+function parseHint(stage: FailureStage): string {
+  const name = stage.file >= 0 ? stage.files[stage.file] : undefined
+  if (name !== undefined && isRaw(name)) return ' The file may be incomplete or not a valid Thermo .raw file.'
+  if (name !== undefined && isTimsD(name)) return ' The folder may be incomplete or not a valid Bruker timsTOF .d folder.'
+  return ' The file may be incomplete or not valid mzML.'
+}
+
 /** How OpenNuXL ended, its last lines and its kept log (`search://failed`); all optional. */
 export type FailureOutput = { ended?: string | null; detail?: string | null; log?: string | null }
 
@@ -84,7 +98,7 @@ export function describeFailure(stage: FailureStage, message: string, output: Fa
   if (raw !== null) {
     let text = raw.trim().replace(/:$/, '')
     if (!/[.!?]$/.test(text)) text += '.'
-    const hint = /parse error/i.test(text) && !/fasta/i.test(text) ? ' The file may be incomplete or not valid mzML.' : ''
+    const hint = /parse error/i.test(text) && !/fasta/i.test(text) ? parseHint(stage) : ''
     summary = `${text}${hint}`
     detail = message
   }

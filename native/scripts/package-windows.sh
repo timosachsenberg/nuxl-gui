@@ -4,8 +4,9 @@
 #
 #   package-windows.sh        (src-tauri/resources/nuxl has to be filled first: bundle-nuxl.sh)
 #
-# The installer puts OpenNuXL.exe, PercolatorAdapter.exe and their DLLs into <install folder>/resources/nuxl/bin,
-# as bundle-nuxl.sh laid them out (Windows has no RPATH: the folder of the exe is where its DLLs are looked for first). The
+# The installer puts OpenNuXL.exe, PercolatorAdapter.exe, FileConverter.exe and their DLLs (with the Thermo bridge's
+# openms_thermo_bridge.dll and nethost.dll) into <install folder>/resources/nuxl/bin, the .NET runtime into
+# resources/nuxl/dotnet, as bundle-nuxl.sh laid them out (Windows has no RPATH: the folder of the exe is where its DLLs are looked for first). The
 # installer is unsigned (SmartScreen asks the user once), shows the app's licence (LICENSE) and installs the
 # third-party notices (resources/notices). start-test.sh installs it and runs it.
 set -euo pipefail
@@ -14,7 +15,10 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 NUXL=$ROOT/src-tauri/resources/nuxl
 BUNDLE_DIR=$ROOT/src-tauri/target/release/bundle
 die() { echo "error: $*" >&2; exit 1; }
-[ -f "$NUXL/bin/OpenNuXL.exe" ] && [ -f "$NUXL/bin/PercolatorAdapter.exe" ] && [ -f "$NUXL/build.json" ] \
+[ -f "$NUXL/bin/OpenNuXL.exe" ] && [ -f "$NUXL/bin/PercolatorAdapter.exe" ] && [ -f "$NUXL/bin/FileConverter.exe" ] \
+  && [ -f "$NUXL/bin/openms_thermo_bridge.dll" ] && [ -f "$NUXL/bin/nethost.dll" ] \
+  && [ -n "$(find "$NUXL/dotnet/host/fxr" -name hostfxr.dll 2>/dev/null)" ] \
+  && [ -f "$NUXL/share/OpenMS/openms_thermo_bridge/managed/ThermoWrapperManaged.dll" ] && [ -f "$NUXL/build.json" ] \
   || die "src-tauri/resources/nuxl holds no bundled OpenNuXL: run native/scripts/bundle-nuxl.sh <openms-build> src-tauri/resources/nuxl"
 
 cd "$ROOT"

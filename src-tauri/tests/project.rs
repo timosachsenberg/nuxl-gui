@@ -309,3 +309,43 @@ fn an_empty_zip_is_a_zip() {
     assert_eq!(bytes.len(), 22);
     assert!(unzip(&bytes).is_empty());
 }
+
+/// A project leaves out the spectra the shim converted from a .raw or .d input (about as large as the input; the
+/// imported search shows the annotated peaks only), and keeps the rest of nuxl/.
+#[test]
+fn a_project_leaves_out_the_converted_spectra() {
+    use nuxl_desktop_lib::project::left_out;
+    let tmp = TempDir::new("project-spectra");
+    let dir = tmp.path().join("searches");
+    folder(&dir, "1-0");
+    let nuxl = dir.join("1-0/nuxl");
+    fs::create_dir_all(&nuxl).unwrap();
+    fs::write(nuxl.join("1__b.idXML"), "<IdXML/>").unwrap();
+    fs::write(nuxl.join("1__b.outputs.json"), "{}").unwrap();
+    fs::write(nuxl.join("1__b.spectra.mzML"), "<indexedmzML/>").unwrap();
+    let names: Vec<String> = project_files(&dir, "1-0")
+        .unwrap()
+        .into_iter()
+        .map(|f| f.name)
+        .collect();
+    assert!(names.contains(&"nuxl/1__b.idXML".to_string()), "{names:?}");
+    assert!(
+        names.contains(&"nuxl/1__b.outputs.json".to_string()),
+        "{names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| n.ends_with(".spectra.mzML")),
+        "{names:?}"
+    );
+    for name in [
+        "database.fasta",
+        "database.json",
+        "nuxl.log",
+        "nuxl/1__b.spectra.mzML",
+    ] {
+        assert!(left_out(name), "{name}");
+    }
+    for name in ["nuxl/1__b.idXML", "1__b.spectra.mzML", "proteins.fasta"] {
+        assert!(!left_out(name), "{name}");
+    }
+}

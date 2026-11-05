@@ -1,0 +1,18 @@
+[
+  {
+    "id": "f0",
+    "index": 0,
+    "link": "1__run.d",
+    "stem": "1__run",
+    "name": "run.d",
+    "path": "/data/run.d"
+  },
+  {
+    "id": "f1",
+    "index": 1,
+    "link": "2__thermo.raw",
+    "stem": "2__thermo",
+    "name": "thermo.raw",
+    "path": "/data/thermo.raw"
+  }
+]

@@ -11,14 +11,17 @@ import { changedParameters, copyValue, copyValues, defaultsOf, sameValue, SEARCH
 import { BUILTIN_PRESETS, DEFAULT_PRESET_ID, deletePreset, loadPresets, renamePreset, savePreset, type Preset } from '../settings/presets'
 import { CUSTOM_PROTOCOL, PROTOCOL_PARAMETERS, protocolParameters } from '../settings/protocols'
 import { formatBytes } from '../format/bytes'
-import { isFasta, isMzML, unsearchableReason } from './files'
+import { inputPath, isFasta, isInTimsFolder, isSpectra, isTimsD, notTimsFolderReason, unsearchableReason, withoutTrailingSeparator } from './files'
 
 export type FileRow = DesignFields & {
   id: string
   file: InputFile
-  /** From the mzML header; null if the header does not say. */
+  /** From the mzML header; null if the header does not say (and for .raw and .d, which the shim does not count). */
   spectra: number | null
-  /** Why OpenNuXL cannot search the file (cut off, not mzML, no spectra: `FileFacts.problem`); the search cannot start. */
+  /**
+   * Why OpenNuXL cannot search the file (an mzML cut off, not mzML or without spectra; a .d that is not a timsTOF
+   * folder: `FileFacts.problem`); the search cannot start.
+   */
   problem: string | null
 }
 
@@ -67,9 +70,9 @@ export type Removed = {
   replacedWith: Record<string, unknown>
 }
 
-/** The name of a path's file (either separator). */
+/** The name of a path's file or folder (either separator; trailing separators ignored: `run.d/` is `run.d`). */
 export function fileName(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path
+  return withoutTrailingSeparator(path).split(/[\\/]/).pop() ?? path
 }
 
 let nextId = 0
@@ -247,26 +250,48 @@ class SearchForm {
 
 
   /**
-   * Adds mzML files (by path) to the table; a FASTA becomes the database; anything else is reported (compressed
-   * mzML and Thermo .raw files with what to do instead). A path that is in the table already (or twice in `paths`) is
-   * added once: the same file would be searched twice, as two samples. Files OpenNuXL cannot search (cut off, not
-   * mzML) join the table marked, and the search cannot start with them. Resolves when the rows are there.
+   * Adds spectra (by path: mzML and Thermo .raw files, Bruker timsTOF .d folders) to the table; a FASTA becomes the
+   * database; anything else is reported (compressed mzML and zipped .d folders with what to do instead; a folder that
+   * is not a .d, from the .d folder dialog (`folders`) or with a trailing separator, with what to choose instead). A
+   * path is taken without trailing separators, and a file of a .d folder (`run.d/analysis.tdf`) as the folder, so
+   * that the same input is recognised however it came; the folder's other files given with it (a file manager's
+   * "select all") are left out quietly. A path that is in the table already (or written twice in `paths`) is added
+   * once, with a notice: the same file would be searched twice, as two samples; the files of one .d (analysis.tdf
+   * and analysis.tdf_bin) are one input without one. Files OpenNuXL cannot search (cut off, not mzML, a .d that is
+   * not a timsTOF folder) join the table marked, and the search cannot start with them. Resolves when the rows are
+   * there.
    */
-  async addFiles(paths: Iterable<string>) {
-    const list = [...paths]
-    const skipped = list.filter((p) => !isMzML(fileName(p)) && !isFasta(fileName(p))).map(fileName)
-    const notices = unsearchableReason(skipped)
+  async addFiles(paths: Iterable<string>, { folders = false }: { folders?: boolean } = {}) {
+    const raw = [...paths]
+    const written = raw.map(withoutTrailingSeparator)
+    const asFolder = raw.map((p) => folders || /[\\/]$/.test(p))
+    const list = written.map(inputPath)
+    const timsFolders = new Set(list.filter((p) => isTimsD(fileName(p))))
+    const other = list
+      .map((p, i) => ({ p, folder: asFolder[i] }))
+      .filter(({ p }) => !isSpectra(fileName(p)) && !isFasta(fileName(p)) && !isInTimsFolder(p, timsFolders))
+    const notices = [
+      ...unsearchableReason(other.filter((o) => !o.folder).map((o) => fileName(o.p))),
+      ...notTimsFolderReason(other.filter((o) => o.folder).map((o) => fileName(o.p))),
+    ]
     const database = list.filter((p) => isFasta(fileName(p))).pop()
     const listed = new Set([...this.files.map((r) => r.file.path), ...this.#pending])
+    // the paths (as written) each input was given as in this call
+    const given = new Map<string, Set<string>>()
     const spectra: string[] = []
     const again: string[] = []
-    for (const p of list.filter((p) => isMzML(fileName(p)))) {
-      if (listed.has(p)) again.push(fileName(p))
+    list.forEach((p, i) => {
+      if (!isSpectra(fileName(p))) return
+      const as = given.get(p)
+      if (as !== undefined) {
+        if (as.has(written[i])) again.push(fileName(p))
+        as.add(written[i])
+      } else if (listed.has(p)) again.push(fileName(p))
       else {
-        listed.add(p)
+        given.set(p, new Set([written[i]]))
         spectra.push(p)
       }
-    }
+    })
     this.notices.push(...notices)
     if (again.length > 0) {
       const names = [...new Set(again)]

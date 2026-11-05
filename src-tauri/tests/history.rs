@@ -809,3 +809,35 @@ fn a_partial_folder_is_removed_while_its_lock_is_held() {
     // a folder that is gone already is fine
     remove_partial(None, &partial).unwrap();
 }
+
+/// A search of a .raw and a .d: its size counts the spectra the shim converted into nuxl/ (the search's own files)
+/// and not its inputs (the links to the user's file and folder, and a hard link to the .raw a search on Windows
+/// left).
+#[test]
+fn the_size_of_a_search_of_vendor_inputs_counts_its_converted_spectra_and_not_its_inputs() {
+    let (tmp, dir) = searches();
+    fs::create_dir_all(dir.join("2-0/nuxl")).unwrap();
+    fs::write(dir.join("2-0/nuxl/1__a.idXML"), "x".repeat(100)).unwrap();
+    fs::write(dir.join("2-0/nuxl/1__a.spectra.mzML"), "y".repeat(1000)).unwrap();
+    let raw = tmp.path().join("user/b.raw");
+    fs::create_dir_all(raw.parent().unwrap()).unwrap();
+    fs::write(&raw, "z".repeat(10_000)).unwrap();
+    fs::hard_link(&raw, dir.join("2-0/2__b.raw")).unwrap();
+    #[cfg(unix)]
+    {
+        let d = tmp.path().join("user/c.d");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("analysis.tdf_bin"), "w".repeat(100_000)).unwrap();
+        std::os::unix::fs::symlink(&d, dir.join("2-0/3__c.d")).unwrap();
+        std::os::unix::fs::symlink(&raw, dir.join("2-0/1__b.raw")).unwrap();
+    }
+    let entries = list(&dir);
+    let entry = entries.iter().find(|e| e.id == "2-0").unwrap();
+    assert_eq!(entry.bytes, 1100);
+    let names: Vec<String> = folder_files(&dir, "2-0")
+        .unwrap()
+        .into_iter()
+        .map(|f| f.name)
+        .collect();
+    assert_eq!(names, ["nuxl/1__a.idXML", "nuxl/1__a.spectra.mzML"]);
+}

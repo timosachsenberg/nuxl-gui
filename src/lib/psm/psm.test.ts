@@ -138,6 +138,8 @@ describe('numbers', () => {
     )
     expect(svgFileName('[+15.9949]?PEPTIDEK', 'index=12')).toBe('15.9949_PEPTIDEK_index12.svg')
     expect(svgFileName('PEPTIDEK', 'frame=5 scan=3 extra')).toBe('PEPTIDEK_scan3.svg')
+    // a Bruker timsTOF ID by its precursor (the scan= repeats across the frame's precursors)
+    expect(svgFileName('PEPTIDEK', 'frame=104 scan=201 precursor=1020')).toBe('PEPTIDEK_precursor1020.svg')
     expect(svgFileName('PEPTIDEK', 'some id/with:chars')).toBe('PEPTIDEK_some_id_with_chars.svg')
   })
 })

@@ -1,16 +1,24 @@
 // The example searched through the app's screens: New search with the example, Start, Results, the PSM view,
-// History, and a project file exported and opened again.
+// History, and a project file exported and opened again. With the fake tools (NUXL_FAKE=1) also a Thermo .raw input
+// (a stand-in, lib.ts fakeRaw): the PSM view reads its spectra from the mzML the shim converted, a project leaves that
+// file out, and a conversion that fails leaves a finished search with a note.
 // Gated: runs only with NUXL_TOOL set (the app inherits it; NUXL_FAKE=1 sets it to the stand-in, e2e/run.sh).
 // Every test that needs a result searches the example itself, so each runs alone; the searches' folders (in the
 // spec's own data folder) are removed after each test.
-import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   countOf,
   dataHome,
+  dropFiles,
+  EXAMPLE_FASTA,
   EXAMPLE_PROTEINS,
   EXAMPLE_PSMS,
   clearSearches,
+  exampleSettings,
+  FAKE,
+  fakeRaw,
   freshForm,
   goTo,
   jsClick,
@@ -308,5 +316,86 @@ describe('the example search', () => {
     await goTo('History')
     await browser.waitUntil(async () => (await $$('[data-testid="history-row"]')).length === 2, { timeoutMsg: 'History does not list both searches' })
     rmSync(chosen, { force: true })
+  })
+
+  describe('a Thermo .raw input (the fake tools)', () => {
+    let work: string
+
+    before(function () {
+      if (!FAKE) {
+        console.log('skipped: the .raw input is a stand-in that only the fake tools read (NUXL_FAKE=1)')
+        this.skip()
+      }
+      work = mkdtempSync(join(tmpdir(), 'nuxl-e2e-raw-'))
+    })
+
+    after(() => {
+      if (work) rmSync(work, { recursive: true, force: true })
+    })
+
+    /** Searches the stand-in .raw `name` with the example's FASTA; returns the search's id. */
+    async function searchRaw(name: string): Promise<string> {
+      await exampleSettings()
+      await dropFiles([fakeRaw(join(work, name)), EXAMPLE_FASTA])
+      await browser.waitUntil(async () => (await textOf('[data-testid="design-scroll"]')).includes(name), { timeoutMsg: `${name} is not in the table` })
+      await expect($('[data-testid="fasta-proteins"]')).toHaveText(EXAMPLE_PROTEINS)
+      await $('button*=Start search').click()
+      const id = await waitForResults()
+      await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 30000 })
+      return id
+    }
+
+    it('the PSM view reads its converted spectra; a project leaves them out, and its PSM view says so', async () => {
+      const searchId = await searchRaw('Thermo Lauf.raw')
+      expect(existsSync(join(searchesDir(), searchId, 'nuxl', '1__Thermo Lauf.spectra.mzML'))).toBe(true)
+
+      const chosen = join(dataHome(), 'chosen.nuxl')
+      rmSync(chosen, { force: true })
+      await $('header').$('button*=Export').click()
+      await $('[role="menuitem"]*=Project (.nuxl)').click()
+      await browser.waitUntil(async () => existsSync(chosen) && statSync(chosen).size > 0 && (await textOf('header')).includes('Export'), {
+        timeout: 30000,
+        timeoutMsg: 'no project was written',
+      })
+      // OpenNuXL's outputs, not the converted spectra (their size; the zip has no zip64)
+      const zip = readFileSync(chosen)
+      expect(zip.includes('nuxl/1__Thermo Lauf.outputs.json')).toBe(true)
+      expect(zip.includes('spectra.mzML')).toBe(false)
+      // (here, the PSM view has the converted spectra's peaks)
+      await openFirstPsm()
+      expect(await $$('[data-testid="peaks-missing-note"]')).toHaveLength(0)
+
+      await goTo('History')
+      await $('[data-testid="open-project"]').click()
+      await browser.waitUntil(async () => {
+        const id = await resultsId()
+        return id !== null && id !== searchId
+      }, { timeout: 30000, timeoutMsg: 'the project did not open' })
+      await $('[data-testid="psm-count"]').waitForDisplayed({ timeout: 30000 })
+      await openFirstPsm()
+      await expect($('[data-testid="peaks-missing-note"]')).toBeDisplayed()
+      expect(await textOf('[data-testid="peaks-missing-note"]')).toContain(
+        'The spectra of Thermo Lauf.raw are not in the search folder (a project leaves them out); the PSM view shows the annotated peaks only.',
+      )
+      rmSync(chosen, { force: true })
+    })
+
+    it('spectra that cannot be converted: the search finishes with a note, the PSM view shows the annotated peaks', async () => {
+      // (the fake FileConverter fails for an input named convfail)
+      const id = await searchRaw('convfail.raw')
+      const outputs = JSON.parse(readFileSync(join(searchesDir(), id, 'nuxl', '1__convfail.outputs.json'), 'utf8'))
+      expect(outputs.spectra).toBeNull()
+      expect(outputs.notes.join(' ')).toContain('The PSM view shows the annotated peaks only: the spectra of convfail.raw could not be converted (')
+      if (EXAMPLE_PSMS) expect(await countOf('psm-count')).toBe(EXAMPLE_PSMS.psms)
+      // the Overview names it in short, beside the file
+      await jsClick(await $('[role="tablist"]').$('button*=Overview'))
+      await browser.waitUntil(async () => (await $$('[data-testid="engine-note"]')).length > 0, { timeoutMsg: 'the Overview shows no note' })
+      expect(await textOf('[data-testid="view-results"]')).toContain('Spectra not converted: the PSM view shows the annotated peaks only')
+      await openFirstPsm()
+      await expect($('[data-testid="psm-crosslink"]')).toBeDisplayed()
+      expect(await textOf('[data-testid="peaks-missing-note"]')).toContain(
+        'The spectra of convfail.raw were not converted; the PSM view shows the annotated peaks only.',
+      )
+    })
   })
 })

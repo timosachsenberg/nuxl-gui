@@ -1,10 +1,17 @@
-//! Finding OpenNuXL, asking it for its version, and building the command that runs it.
+//! Finding OpenNuXL, asking it for its version, and building the command that runs it (and the other OpenMS tools
+//! of the bundle).
 //!
 //! OpenNuXL rescores with Percolator through another OpenMS tool, `PercolatorAdapter`, which it looks for
 //! beside its own executable (`File::findSiblingTOPPExecutable`), then on the PATH. The bundle has both in
-//! one `bin/` (`native/scripts/bundle-nuxl.sh`); a tool of a build tree has its sibling there too. OpenMS finds
-//! its data (`share/OpenMS`: CHEMISTRY, the NUXL presets) next to the executable, `bin/../share/OpenMS`,
-//! which the bundle provides (and whose compiled-in alternatives it rules out), so the app sets no data path.
+//! one `bin/` (`native/scripts/bundle-nuxl.sh`); a tool of a build tree has its sibling there too. The shim runs
+//! `FileConverter` from the same folder ([`file_converter`]) to write the spectra of a `.raw` or `.d` input as mzML
+//! for the PSM view. OpenMS finds its data (`share/OpenMS`: CHEMISTRY, the NUXL presets) next to the executable,
+//! `bin/../share/OpenMS`, which the bundle provides (and whose compiled-in alternatives it rules out), so the app
+//! sets no data path.
+//!
+//! Thermo `.raw` files are read by Thermo's RawFileReader, a .NET library that OpenMS loads through its bridge
+//! (`openms_thermo_bridge`): its managed part in `share/OpenMS/openms_thermo_bridge/managed`, run by the .NET
+//! runtime the bundle has in `dotnet/` beside `bin/`. The tools' environment points there ([`command_with`]).
 
 use serde::Serialize;
 use std::ffi::{OsStr, OsString};
@@ -30,6 +37,13 @@ pub const PERCOLATOR_ADAPTER: &str = if cfg!(windows) {
     "PercolatorAdapter.exe"
 } else {
     "PercolatorAdapter"
+};
+
+/// The OpenMS tool that writes the spectra of a `.raw` or `.d` input as mzML after its run (beside OpenNuXL).
+pub const FILE_CONVERTER: &str = if cfg!(windows) {
+    "FileConverter.exe"
+} else {
+    "FileConverter"
 };
 
 /// The variable that names the tool to use instead of the bundled one (a development build, a test).
@@ -112,6 +126,55 @@ pub fn has_percolator_adapter(path: &Path) -> bool {
         .is_some_and(|bin| bin.join(PERCOLATOR_ADAPTER).is_file())
 }
 
+/// `FileConverter` beside the tool at `path` (the bundle's `bin/`, a build tree's), if it is there. Without it
+/// the spectra of a `.raw` or `.d` input are not converted, and the PSM view shows the annotated peaks only.
+pub fn file_converter(path: &Path) -> Option<PathBuf> {
+    path.parent()
+        .map(|bin| bin.join(FILE_CONVERTER))
+        .filter(|p| p.is_file())
+}
+
+/// The folder above the tool's `bin/` (the bundle's `resources/nuxl`, a build tree), where the bundle's other
+/// parts are.
+fn tool_root(path: &Path) -> Option<&Path> {
+    path.parent()?.parent()
+}
+
+/// The .NET runtime of the bundle (`<tool dir>/../dotnet`, an xcopy runtime: `host/fxr`,
+/// `shared/Microsoft.NETCore.App`), if it is there; it runs the Thermo bridge's managed part.
+pub fn bundled_dotnet(path: &Path) -> Option<PathBuf> {
+    tool_root(path)
+        .map(|root| root.join("dotnet"))
+        .filter(|d| d.is_dir())
+}
+
+/// The managed part of OpenMS' Thermo bridge in the bundle (`<tool dir>/../share/OpenMS/openms_thermo_bridge/
+/// managed`), if it is there.
+pub fn bundled_thermo_bridge(path: &Path) -> Option<PathBuf> {
+    tool_root(path)
+        .map(|root| root.join("share/OpenMS/openms_thermo_bridge/managed"))
+        .filter(|d| d.is_dir())
+}
+
+/// The variables of the .NET host that name the runtime's folder for one architecture; the host takes them
+/// before `DOTNET_ROOT`, so a user's would win over the bundled runtime. Removed from the tool's environment when
+/// the bundle has a runtime.
+pub const DOTNET_ARCH_ROOTS: &[&str] =
+    &["DOTNET_ROOT_X64", "DOTNET_ROOT_ARM64", "DOTNET_ROOT(x86)"];
+
+/// What the tool's environment holds of .NET with the bundled runtime: the Thermo bridge targets .NET 8 and the
+/// bundle has a later runtime (10), so it rolls forward to it (as the bundle's patched `runtimeconfig.json` also
+/// says); no telemetry; no ICU, which Linux systems need not have (RawFileReader needs no culture data).
+pub const DOTNET_SETTINGS: &[(&str, &str)] = &[
+    ("DOTNET_ROLL_FORWARD", "Major"),
+    ("DOTNET_CLI_TELEMETRY_OPTOUT", "1"),
+    ("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", "1"),
+];
+
+/// The variable that tells OpenMS where the managed part of its Thermo bridge is (else
+/// `<share/OpenMS>/openms_thermo_bridge/managed`, `ThermoRawScanReader.cpp`).
+pub const THERMO_MANAGED_DIR: &str = "OPENMS_THERMO_MANAGED_DIR";
+
 /// Variables of the dynamic loader that would make the bundled tool load other libraries than its own
 /// (macOS: they are searched before the bundle's `@rpath`); removed from the tool's environment.
 pub const LOADER_VARIABLES: &[&str] = &[
@@ -129,16 +192,34 @@ pub const LOADER_VARIABLES: &[&str] = &[
 /// it). Any value but `OFF` turns the check off.
 pub const NO_UPDATE_CHECK: (&str, &str) = ("OPENMS_DISABLE_UPDATE_CHECK", "ON");
 
-/// The command that runs the tool: `OPENBLAS_NUM_THREADS=1` unless the user has set it (Percolator's
-/// linear algebra would otherwise start a thread per core inside the tool's own threads), as the
-/// FASTag shim does. `openblas` is the variable's current value. Always with [`NO_UPDATE_CHECK`] (a
-/// user's `OFF` included: the tool makes no network contact). On macOS without the
-/// [`LOADER_VARIABLES`]; on Windows without a console window (the app has none to share).
+/// The command that runs the tool at `path` (OpenNuXL, FileConverter: an OpenMS tool of the bundle's `bin/`):
+/// `OPENBLAS_NUM_THREADS=1` unless the user has set it (Percolator's linear algebra would otherwise start a thread
+/// per core inside the tool's own threads), as the FASTag shim does. `openblas` is the variable's current value.
+/// Always with [`NO_UPDATE_CHECK`] (a user's `OFF` included: the tool makes no network contact). On macOS without
+/// the [`LOADER_VARIABLES`]; on Windows without a console window (the app has none to share).
+///
+/// With the bundle's .NET runtime ([`bundled_dotnet`]) `DOTNET_ROOT` names it, without the [`DOTNET_ARCH_ROOTS`]
+/// and with the [`DOTNET_SETTINGS`]; with the bundle's Thermo bridge ([`bundled_thermo_bridge`])
+/// [`THERMO_MANAGED_DIR`] names it (a user's would win over the bundle's folder). A tool without them (a build
+/// tree's, `NUXL_TOOL`) gets the user's environment for these, as OpenMS documents it. PercolatorAdapter, which
+/// OpenNuXL starts, inherits all of it.
 pub fn command_with(path: &Path, openblas: Option<OsString>) -> Command {
     let mut command = Command::new(path);
     command.env(NO_UPDATE_CHECK.0, NO_UPDATE_CHECK.1);
     if openblas.is_none() {
         command.env("OPENBLAS_NUM_THREADS", "1");
+    }
+    if let Some(dotnet) = bundled_dotnet(path) {
+        command.env("DOTNET_ROOT", dotnet);
+        for name in DOTNET_ARCH_ROOTS {
+            command.env_remove(name);
+        }
+        for (name, value) in DOTNET_SETTINGS {
+            command.env(name, value);
+        }
+    }
+    if let Some(managed) = bundled_thermo_bridge(path) {
+        command.env(THERMO_MANAGED_DIR, managed);
     }
     if cfg!(target_os = "macos") {
         for name in LOADER_VARIABLES {

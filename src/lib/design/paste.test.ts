@@ -72,6 +72,10 @@ describe('matchFiles', () => {
     expect(matchFiles(['/data/ctrl_a_F2.mzML', 'EGF_30MIN.raw', 'nope.mzML'], files)).toEqual([1, 2, -1])
   })
 
+  it('matches a Bruker .d folder by its name, with or without a trailing separator, and by its stem', () => {
+    expect(matchFiles(['/data/tims_1.d/', 'C:\\data\\tims_2.d\\', 'TIMS_3.mzML'], ['tims_3.d', 'tims_2.d', 'tims_1.d'])).toEqual([2, 1, 0])
+  })
+
   it('gives each file of the table to one row only', () => {
     expect(matchFiles(['run.mzML', 'run.mzML', 'run.mzML'], ['run.mzML', 'run.mzML'])).toEqual([0, 1, -1])
   })

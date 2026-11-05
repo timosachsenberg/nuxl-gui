@@ -57,9 +57,10 @@ export type DesignResolution = {
   summary: string
 }
 
-/** The file name without directories and without its last extension. */
+/** The file name without directories and without its last extension (a folder's `run.d/`: `run`). */
 export function fileStem(fileName: string): string {
-  const base = fileName.slice(Math.max(fileName.lastIndexOf('/'), fileName.lastIndexOf('\\')) + 1)
+  const name = fileName.replace(/(.)[\\/]+$/, '$1')
+  const base = name.slice(Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')) + 1)
   const dot = base.lastIndexOf('.')
   return dot > 0 ? base.slice(0, dot) : base
 }

@@ -11,11 +11,16 @@
 //! - `database.fasta`, the user's FASTA with the contaminants and without its own decoys, when the shim writes
 //!   one, else `database.json`, the path of the user's FASTA ([`crate::args::plan_database`]);
 //! - `nuxl.log`, the tool's output of all runs, each after the line `$ <command line>`;
+//! - `nuxl/<stem>.spectra.mzML` of each `.raw` or `.d` input: its spectra as mzML, which FileConverter writes after
+//!   the input's run for the PSM view ([`crate::args::conversion_args`]);
 //! - `nuxl/<stem>.outputs.json` of each input whose run ended successfully ([`InputOutputs`]).
 //!
 //! The inputs are searched one after the other, one run of OpenNuXL each, by one supervising thread: a run
 //! starts when the one before it has ended successfully. A run that fails fails the search (with OpenNuXL's
-//! message, the stage and the input); cancel ends the current run and starts no further one.
+//! message, the stage and the input); cancel ends the current run and starts no further one. After the run of a
+//! `.raw` or `.d` input FileConverter converts its spectra, as a run of its own (cancel ends it as it ends
+//! OpenNuXL); a conversion that fails (or a bundle without FileConverter) does not fail the search: the input's
+//! `outputs.json` has `spectra` null and a note says that the PSM view shows the annotated peaks only.
 //!
 //! The folder holds `.lock`, locked exclusively (`history::lock_partial`) for as long as the search
 //! lives, so that the startup sweep of any app instance can tell a live folder from a stale one.
@@ -38,9 +43,10 @@
 //!   handler), at the end of its current step; a later start of the app sweeps the folder.
 
 use crate::args::{
-    build_runs_with, humanize, input_placements, input_records_with, outputs_record, plan_database,
-    write_database, DatabasePlan, InputLinks, InputRecord, Placement, SearchRequest, DATABASE_FILE,
-    DATABASE_RECORD, LOG_FILE, OUTPUT_DIR,
+    build_search_with, humanize, input_placements, input_records_with, outputs_record,
+    plan_database, spectra_output, spectra_partial, write_database, DatabasePlan, InputLinks,
+    InputRecord, Placement, SearchRequest, SearchRuns, DATABASE_FILE, DATABASE_RECORD, LOG_FILE,
+    OUTPUT_DIR,
 };
 use crate::history::{finish_partial, lock_partial, remove_partial, with_backoff};
 use crate::progress::ProgressTracker;
@@ -155,6 +161,10 @@ pub struct InputOutputs {
     pub report: Option<String>,
     /// Whether Percolator ran and its results were written: then the four above are its `_perc_` files.
     pub percolator: bool,
+    /// The spectra of a `.raw` or `.d` input as mzML (`nuxl/<stem>.spectra.mzML`, which the shim converted after
+    /// the run), which the PSM view reads in place of the input; null for an mzML input (read where it is) and for
+    /// spectra that could not be converted (a note says so).
+    pub spectra: Option<String>,
     /// OpenNuXL's warnings of the run worth showing ([`note_of`]), and the shim's notes of the search.
     pub notes: Vec<String>,
     /// The run's wall time.
@@ -214,7 +224,7 @@ impl Default for Searches {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::how_it_ended;
+    use super::{how_it_ended, how_tool_ended};
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
 
@@ -250,6 +260,11 @@ mod tests {
         assert_eq!(
             how_it_ended(&ExitStatus::from_raw(24)).as_deref(),
             Some("OpenNuXL crashed (signal 24, SIGXCPU; it used more CPU time than the system allows it)")
+        );
+        // the spectra conversion's tool by its name
+        assert_eq!(
+            how_tool_ended("FileConverter", &ExitStatus::from_raw(6 << 8)).as_deref(),
+            Some("FileConverter ended with exit code 6")
         );
     }
 
@@ -1030,10 +1045,15 @@ fn signal_name(signal: i32) -> Option<&'static str> {
     })
 }
 
-/// How a tool that did not succeed ended, the lead of its failure: "OpenNuXL crashed (signal 11, SIGSEGV)"
-/// (SIGKILL: the system may have ended it for lack of memory), on Windows "OpenNuXL crashed (exception
-/// 0xC0000005)" for an exception's status, else "OpenNuXL ended with exit code 3"; None for success.
+/// How OpenNuXL ended when it did not succeed ([`how_tool_ended`]).
 pub fn how_it_ended(status: &ExitStatus) -> Option<String> {
+    how_tool_ended("OpenNuXL", status)
+}
+
+/// How the tool `tool` (its name) ended when it did not succeed, the lead of its failure: "OpenNuXL crashed (signal
+/// 11, SIGSEGV)" (SIGKILL: the system may have ended it for lack of memory), on Windows "OpenNuXL crashed
+/// (exception 0xC0000005)" for an exception's status, else "OpenNuXL ended with exit code 3"; None for success.
+pub fn how_tool_ended(tool: &str, status: &ExitStatus) -> Option<String> {
     if status.success() {
         return None;
     }
@@ -1047,15 +1067,15 @@ pub fn how_it_ended(status: &ExitStatus) -> Option<String> {
             25 => "; a file grew larger than the system allows, or the disk is full",
             _ => "",
         };
-        return Some(format!("OpenNuXL crashed (signal {signal}{name}{oom})"));
+        return Some(format!("{tool} crashed (signal {signal}{name}{oom})"));
     }
     Some(match status.code() {
         // an NTSTATUS error (0xC…): an access violation, a stack overflow, ...
         Some(code) if cfg!(windows) && (code as u32) >= 0xC000_0000 => {
-            format!("OpenNuXL crashed (exception 0x{:08X})", code as u32)
+            format!("{tool} crashed (exception 0x{:08X})", code as u32)
         }
-        Some(code) => format!("OpenNuXL ended with exit code {code}"),
-        None => "OpenNuXL ended unexpectedly".to_string(),
+        Some(code) => format!("{tool} ended with exit code {code}"),
+        None => format!("{tool} ended unexpectedly"),
     })
 }
 
@@ -1092,8 +1112,11 @@ fn discard_partial(lock: Option<fs::File>, partial: &Path, kept: Option<&Path>) 
 struct Job {
     id: String,
     tool: PathBuf,
-    /// The command line of each input's run, in order.
-    runs: Vec<Vec<OsString>>,
+    /// FileConverter beside the tool, if it is there.
+    converter: Option<PathBuf>,
+    /// The command line of each input's run, in order, and of the conversion of its spectra after it (a `.raw` or
+    /// `.d` input).
+    runs: SearchRuns,
     partial: PathBuf,
     done_dir: PathBuf,
     records: Vec<InputRecord>,
@@ -1143,7 +1166,9 @@ impl Searches {
     }
 
     /// Checks the request, makes the search folder and starts the first run of the tool; returns the search
-    /// id. The events go to `sink`. `crap` is the contaminant FASTA, needed if the request asks for them.
+    /// id. The events go to `sink`. `crap` is the contaminant FASTA, needed if the request asks for them. The
+    /// spectra of `.raw` and `.d` inputs are converted by the FileConverter beside the tool
+    /// ([`tool::file_converter`]); without one they are not (a note says so).
     pub fn start(
         self: &Arc<Self>,
         tool_path: &Path,
@@ -1169,7 +1194,7 @@ impl Searches {
         let done_dir = searches_dir.join(&id);
         // everything that can be wrong with the request is found before a folder exists
         let plan = plan_database(&request)?;
-        let runs = build_runs_with(&request, &partial, self.links, &plan)?;
+        let runs = build_search_with(&request, &partial, self.links, &plan)?;
 
         fs::create_dir(&partial).map_err(|e| {
             format!(
@@ -1207,6 +1232,7 @@ impl Searches {
         let job = Job {
             id: id.clone(),
             tool: tool_path.to_path_buf(),
+            converter: tool::file_converter(tool_path),
             runs,
             partial: partial.clone(),
             done_dir,
@@ -1268,7 +1294,7 @@ impl Searches {
             Ok(())
         } else {
             let pid = group.map(|g| g.pid()).unwrap_or(0);
-            Err(format!("OpenNuXL (process {pid}) did not stop."))
+            Err(format!("The search's tool (process {pid}) did not stop."))
         }
     }
 
@@ -1313,7 +1339,9 @@ fn prepare_folder(
     crap: Option<&Path>,
 ) -> Result<Vec<String>, String> {
     for ((file, record), placement) in request.files.iter().zip(records).zip(placements) {
-        let original = fs::canonicalize(&file.path).unwrap_or_else(|_| PathBuf::from(&file.path));
+        // (the record's path: the user's without trailing separators, a `.d` folder's own)
+        let original =
+            fs::canonicalize(&record.path).unwrap_or_else(|_| PathBuf::from(&record.path));
         let link = dir.join(&record.link);
         match placement {
             Placement::OwnPath => {}
@@ -1485,6 +1513,7 @@ fn record_outputs(
     cutoffs: Cutoffs,
     notes: Vec<String>,
     seconds: f64,
+    spectra: Option<String>,
 ) -> Result<InputOutputs, String> {
     let folder = dir.join(OUTPUT_DIR);
     let names: Vec<String> = fs::read_dir(&folder)
@@ -1502,6 +1531,7 @@ fn record_outputs(
         proteins,
         report,
         percolator,
+        spectra,
         notes,
         seconds: (seconds * 10.0).round() / 10.0,
         fdr: cutoffs,
@@ -1532,7 +1562,6 @@ enum RunEnd {
 /// What a run needs of its search.
 struct RunContext<'a> {
     id: &'a str,
-    tool: &'a Path,
     partial: &'a Path,
     records: &'a [InputRecord],
     sink: &'a Sink,
@@ -1542,20 +1571,31 @@ struct RunContext<'a> {
     log: Option<&'a Arc<Mutex<fs::File>>>,
 }
 
-/// Starts run `k` (with `args`) unless the search is cancelled: the process is spawned, and its group set,
-/// while the handle's group lock is held, so that a cancel either comes first (the run does not start) or
-/// finds the group to end. `None`: cancelled.
+/// One run of a tool: OpenNuXL's of an input, or FileConverter's after it.
+struct ToolRun<'a> {
+    /// The executable.
+    exe: &'a Path,
+    /// Its name in messages ("OpenNuXL", "FileConverter").
+    name: &'a str,
+    args: &'a [OsString],
+    /// Whether its stdout is OpenNuXL's: its progress ([`ProgressTracker::feed`]) and its notes ([`note_of`]).
+    opennuxl: bool,
+}
+
+/// Starts `run` unless the search is cancelled: the process is spawned, and its group set, while the handle's
+/// group lock is held, so that a cancel either comes first (the run does not start) or finds the group to end.
+/// `None`: cancelled.
 fn start_run(
     context: &RunContext,
-    args: &[OsString],
+    run: &ToolRun,
 ) -> Option<Result<(Child, Arc<sys::Group>), String>> {
     let mut slot = context.handle.group.lock().unwrap();
     if context.handle.cancelled.load(Ordering::SeqCst) {
         return None;
     }
-    let mut command = tool::command(context.tool);
+    let mut command = tool::command(run.exe);
     command
-        .args(args)
+        .args(run.args)
         .current_dir(context.partial)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -1568,22 +1608,24 @@ fn start_run(
             Ok((child, group))
         }
         Err(e) => Err(format!(
-            "OpenNuXL ({}) cannot be started ({e}).",
-            context.tool.display()
+            "{} ({}) cannot be started ({e}).",
+            run.name,
+            run.exe.display()
         )),
     })
 }
 
-/// Runs input `k`'s command line `args` to its end, passing on its progress: the log, the readers of its
-/// output, the watchdog. `started` hears of the first run's start (or why it could not).
-fn run_one(
+/// Runs `run` to its end, passing on its progress: the log (`$ <command line>`, then its output), the readers of
+/// its output, the watchdog. `announce` gives the progress of its start (once it has started). `started` hears of
+/// the search's first run's start (or why it could not).
+fn run_tool(
     context: &RunContext,
-    k: usize,
-    args: &[OsString],
+    run: &ToolRun,
     tracker: &mut ProgressTracker,
+    announce: impl FnOnce(&mut ProgressTracker) -> crate::progress::ProgressUpdate,
     started: Option<&mpsc::Sender<Result<(), String>>>,
 ) -> RunEnd {
-    let (mut child, group) = match start_run(context, args) {
+    let (mut child, group) = match start_run(context, run) {
         None => return RunEnd::Cancelled,
         Some(Ok(started_run)) => started_run,
         Some(Err(message)) => {
@@ -1610,13 +1652,14 @@ fn run_one(
             fraction: p.fraction,
         }))
     };
-    emit(tracker.start_run(k));
+    emit(announce(tracker));
     if let Some(log) = context.log {
         let _ = writeln!(
             log.lock().unwrap(),
             "$ {} {}",
-            context.tool.display(),
-            args.iter()
+            run.exe.display(),
+            run.args
+                .iter()
                 .map(|a| a.to_string_lossy())
                 .collect::<Vec<_>>()
                 .join(" ")
@@ -1626,7 +1669,11 @@ fn run_one(
     let notes: Arc<Mutex<Vec<String>>> = Arc::default();
     let note = {
         let notes = notes.clone();
+        let opennuxl = run.opennuxl;
         move |line: &str| {
+            if !opennuxl {
+                return;
+            }
             if let Some(n) = note_of(line) {
                 let mut notes = notes.lock().unwrap();
                 if !notes.contains(&n) && notes.len() < MAX_NOTES {
@@ -1663,8 +1710,10 @@ fn run_one(
                     let _ = writeln!(log.lock().unwrap(), "{line}");
                 }
                 note(line);
-                if let Some(p) = tracker.feed(line) {
-                    emit(p);
+                if run.opennuxl {
+                    if let Some(p) = tracker.feed(line) {
+                        emit(p);
+                    }
                 }
             });
         }
@@ -1692,7 +1741,7 @@ fn run_one(
     match status {
         Ok(status) if status.success() => RunEnd::Done(notes),
         Ok(status) => {
-            // a crash: a signal, or on Windows an exception's status (how_it_ended)
+            // a crash: a signal, or on Windows an exception's status (how_tool_ended)
             let signalled = sys::exit_signal(&status).is_some()
                 || (cfg!(windows) && status.code().is_some_and(|c| (c as u32) >= 0xC000_0000));
             let message = humanize(&digest.message(signalled), context.partial, context.records);
@@ -1705,7 +1754,7 @@ fn run_one(
                 message,
                 tracker,
                 Failure {
-                    ended: how_it_ended(&status),
+                    ended: how_tool_ended(run.name, &status),
                     detail,
                     log: None,
                 },
@@ -1713,7 +1762,7 @@ fn run_one(
         }
         Err(e) => RunEnd::Failed(failed(
             context.id,
-            format!("Waiting for OpenNuXL failed ({e})."),
+            format!("Waiting for {} failed ({e}).", run.name),
             tracker,
             Failure::default(),
         )),
@@ -1721,8 +1770,9 @@ fn run_one(
 }
 
 /// The debug table OpenNuXL writes in every run beside its `-in`, `<-in>.ambiguous_masses.csv`
-/// (`calculateNucleotideTags_`: `File::path(in) + '/' + File::basename(in) + ".ambiguous_masses.csv"`), for the
-/// input of `record` placed as `placement` in the search folder `partial`.
+/// (`calculateNucleotideTags_`: `File::path(in) + '/' + File::basename(in) + ".ambiguous_masses.csv"`, of the input
+/// without trailing separators: beside a `.d` folder, not in it), for the input of `record` placed as `placement`
+/// in the search folder `partial`.
 fn ambiguous_masses_csv(partial: &Path, record: &InputRecord, placement: Placement) -> PathBuf {
     let input = match placement {
         Placement::OwnPath => PathBuf::from(&record.path),
@@ -1736,14 +1786,81 @@ fn ambiguous_masses_csv(partial: &Path, record: &InputRecord, placement: Placeme
 /// The end of the name of OpenNuXL's debug table beside its input ([`ambiguous_masses_csv`]).
 const AMBIGUOUS_MASSES_SUFFIX: &str = ".ambiguous_masses.csv";
 
-/// Runs the inputs one after the other, passes on their progress, records each one's outputs, and settles the
-/// folder. Runs on the thread that starts the tool, which is what ties the tool to the app on Linux
-/// (`PR_SET_PDEATHSIG`).
+/// How the conversion of an input's spectra ended ([`convert_spectra`]).
+enum Converted {
+    /// The spectra are in the search folder: their name relative to it (`nuxl/<stem>.spectra.mzML`).
+    Spectra(String),
+    /// They could not be converted: the note that says so, for the input's `outputs.json`.
+    Failed(String),
+    Cancelled,
+}
+
+/// The note of an input whose spectra could not be converted, `why` in parentheses.
+fn conversion_note(record: &InputRecord, why: &str) -> String {
+    format!(
+        "The PSM view shows the annotated peaks only: the spectra of {} could not be converted ({why}).",
+        record.name
+    )
+}
+
+/// Converts the spectra of input `k` (a `.raw` or `.d`) after its run: `converter` (FileConverter) with `args`
+/// writes them to the search folder's `nuxl/<stem>.spectra.tmp.mzML`, renamed to `nuxl/<stem>.spectra.mzML` when it
+/// has ended successfully. A failure is a note, not the search's failure; a cancel is the search's.
+fn convert_spectra(
+    context: &RunContext,
+    converter: Option<&Path>,
+    k: usize,
+    args: &[OsString],
+    tracker: &mut ProgressTracker,
+) -> Converted {
+    let record = &context.records[k];
+    let Some(converter) = converter else {
+        return Converted::Failed(conversion_note(
+            record,
+            &format!("there is no {} beside OpenNuXL", tool::FILE_CONVERTER),
+        ));
+    };
+    let partial_file = context.partial.join(spectra_partial(&record.stem));
+    let target = spectra_output(&record.stem);
+    let run = ToolRun {
+        exe: converter,
+        name: "FileConverter",
+        args,
+        opennuxl: false,
+    };
+    let ended = run_tool(context, &run, tracker, |t| t.start_conversion(k), None);
+    let why = match ended {
+        RunEnd::Cancelled | RunEnd::NotStarted => return Converted::Cancelled,
+        RunEnd::Done(_) => {
+            match with_backoff(|| fs::rename(&partial_file, context.partial.join(&target))) {
+                Ok(()) => return Converted::Spectra(target),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    "FileConverter wrote no file".to_string()
+                }
+                Err(e) => format!("its file cannot be renamed: {e}"),
+            }
+        }
+        RunEnd::Failed(SearchEvent::Failed(f)) => match (f.ended, f.message.is_empty()) {
+            (Some(ended), true) => ended,
+            (Some(ended), false) => format!("{ended}: {}", f.message),
+            (None, _) => f.message,
+        },
+        RunEnd::Failed(_) => "FileConverter failed".to_string(),
+    };
+    // (what a failed conversion wrote is no spectra the PSM view could read)
+    let _ = with_backoff(|| fs::remove_file(&partial_file));
+    Converted::Failed(conversion_note(record, &why))
+}
+
+/// Runs the inputs one after the other, passes on their progress, converts the spectra of each `.raw` or `.d`
+/// input after its run, records each one's outputs, and settles the folder. Runs on the thread that starts the
+/// tools, which is what ties them to the app on Linux (`PR_SET_PDEATHSIG`).
 fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(), String>>) {
     let Job {
         id,
         tool: tool_path,
-        runs,
+        converter,
+        runs: SearchRuns { runs, conversions },
         partial,
         done_dir,
         records,
@@ -1760,7 +1877,6 @@ fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(),
         .map(|f| Arc::new(Mutex::new(f)));
     let context = RunContext {
         id: &id,
-        tool: &tool_path,
         partial: &partial,
         records: &records,
         sink: &sink,
@@ -1775,7 +1891,13 @@ fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(),
         let first = (k == 0).then_some(&started);
         let debris = ambiguous_masses_csv(&partial, record, *placement);
         let debris_existed = debris.exists();
-        let ended = run_one(&context, k, args, &mut tracker, first);
+        let run = ToolRun {
+            exe: &tool_path,
+            name: "OpenNuXL",
+            args,
+            opennuxl: true,
+        };
+        let ended = run_tool(&context, &run, &mut tracker, |t| t.start_run(k), first);
         // OpenNuXL's debug table beside `-in`: in the search folder (a link), or beside the user's file (Windows,
         // the file's own path), where only the one this run created is removed
         if !debris_existed {
@@ -1789,9 +1911,29 @@ fn supervise(searches: Arc<Searches>, job: Job, started: mpsc::Sender<Result<(),
                 if !rescore {
                     notes.retain(|n| !n.starts_with(TOO_FEW_PSMS));
                 }
-                notes.extend(search_notes.iter().cloned());
                 let seconds = started_run.elapsed().as_secs_f64();
-                if let Err(message) = record_outputs(&partial, record, cutoffs, notes, seconds) {
+                // the spectra of a `.raw` or `.d` for the PSM view
+                let mut spectra = None;
+                if let Some(Some(conversion)) = conversions.get(k) {
+                    match convert_spectra(
+                        &context,
+                        converter.as_deref(),
+                        k,
+                        conversion,
+                        &mut tracker,
+                    ) {
+                        Converted::Spectra(name) => spectra = Some(name),
+                        Converted::Failed(note) => notes.push(note),
+                        Converted::Cancelled => {
+                            end = Some(RunEnd::Cancelled);
+                            break;
+                        }
+                    }
+                }
+                notes.extend(search_notes.iter().cloned());
+                if let Err(message) =
+                    record_outputs(&partial, record, cutoffs, notes, seconds, spectra)
+                {
                     end = Some(RunEnd::Failed(failed(
                         &id,
                         message,

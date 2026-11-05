@@ -2,7 +2,7 @@
 // bytes, with the semantics of the Rust commands that the tests rely on (src-tauri/src/history.rs).
 
 import { zipSync, type Zippable } from 'fflate'
-import { LEFT_OUT, LEVEL, RECORD_FILE, STORE, withoutPaths, type HistoryBackend, type HistoryEntry } from './history'
+import { leftOut, LEVEL, RECORD_FILE, STORE, withoutPaths, type HistoryBackend, type HistoryEntry } from './history'
 import { bytesOfRange, type ByteRange } from '../results/read'
 
 export class NotFound extends Error {
@@ -151,7 +151,7 @@ export class MemoryBackend implements HistoryBackend {
   }
 
   /**
-   * As `save_project_file` (src-tauri/src/project.rs): the dialog, then the folder's files but `LEFT_OUT` as a
+   * As `save_project_file` (src-tauri/src/project.rs): the dialog, then the folder's files but those left out (`leftOut`) as a
    * zip, `search.json` first, `inputs.json` without paths, Parquet stored (here in memory, with fflate).
    */
   async saveProject(id: string, name: string, onProgress?: (fraction: number) => void): Promise<string | null> {
@@ -159,7 +159,7 @@ export class MemoryBackend implements HistoryBackend {
     if (!folder.has(RECORD_FILE)) throw new Error(`The search is not saved to History (it has no ${RECORD_FILE}), so there is no project to make.`)
     if (this.cancelSave) return null
     const names = [...folder.keys()]
-      .filter((n) => !LEFT_OUT.has(n))
+      .filter((n) => !leftOut(n))
       .sort((a, b) => (a === RECORD_FILE ? -1 : b === RECORD_FILE ? 1 : a < b ? -1 : 1))
     const zippable: Zippable = {}
     names.forEach((file, i) => {
