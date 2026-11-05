@@ -16,7 +16,7 @@
 use serde::Serialize;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 /// What the front end learns of the tool (`tool_info`).
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -268,7 +268,68 @@ pub fn parse_version(help: &str) -> Option<String> {
         .and_then(|v| v.split_whitespace().next().map(str::to_string))
 }
 
-/// Runs `path --help` and reads the version; fails if the tool does not run or does not say.
+/// How many of the last lines of its output the message of a tool without a version quotes ([`last_lines`]).
+pub const QUOTED_LINES: usize = 8;
+/// The longest line that message quotes (characters).
+const QUOTED_LINE: usize = 300;
+
+/// The last lines a tool printed, for a message: its stdout's, then its stderr's (where OpenMS writes its help and
+/// its errors, and Linux' and macOS' loaders the library they could not find), without escape sequences and blank
+/// lines; at most [`QUOTED_LINES`], each at most [`QUOTED_LINE`] characters. Second: whether lines were left out.
+pub fn last_lines(stdout: &[u8], stderr: &[u8]) -> (Vec<String>, bool) {
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    );
+    let lines: Vec<String> = without_escapes(&text)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            if l.chars().count() > QUOTED_LINE {
+                format!("{}…", l.chars().take(QUOTED_LINE).collect::<String>())
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    let from = lines.len().saturating_sub(QUOTED_LINES);
+    (lines[from..].to_vec(), from > 0)
+}
+
+/// Why the tool at `path` reported no version, in lines (the problem line of the search joins them, the About panel
+/// shows them): how it ended if it failed ([`run::how_tool_ended`]: "OpenNuXL could not start (0xC0000135,
+/// STATUS_DLL_NOT_FOUND: ...)", "OpenNuXL ended with exit code 127"), else whether it is OpenNuXL at all; the tool;
+/// what it printed last ([`last_lines`]).
+///
+/// [`run::how_tool_ended`]: crate::run::how_tool_ended
+pub fn no_version_message(
+    path: &Path,
+    status: &ExitStatus,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> String {
+    let lead = match crate::run::how_tool_ended("OpenNuXL", status) {
+        Some(ended) => format!("{ended}."),
+        None => "The tool did not report a version; is it OpenNuXL of OpenMS?".to_string(),
+    };
+    let (lines, cut) = last_lines(stdout, stderr);
+    let printed = if lines.is_empty() {
+        "It printed nothing.".to_string()
+    } else if cut {
+        format!(
+            "It printed (the last {QUOTED_LINES} lines):\n{}",
+            lines.join("\n")
+        )
+    } else {
+        format!("It printed:\n{}", lines.join("\n"))
+    };
+    format!("{lead}\nThe tool: {}\n{printed}", path.display())
+}
+
+/// Runs `path --help` and reads the version; fails if the tool does not run or does not say
+/// ([`no_version_message`]).
 pub fn probe(path: &Path) -> Result<ToolInfo, String> {
     let output = command(path)
         .arg("--help")
@@ -281,12 +342,8 @@ pub fn probe(path: &Path) -> Result<ToolInfo, String> {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let version = parse_version(&help).ok_or_else(|| {
-        format!(
-            "{} did not report a version; is it OpenNuXL of OpenMS?",
-            path.display()
-        )
-    })?;
+    let version = parse_version(&help)
+        .ok_or_else(|| no_version_message(path, &output.status, &output.stdout, &output.stderr))?;
     Ok(ToolInfo {
         version,
         path: path.to_string_lossy().into_owned(),
