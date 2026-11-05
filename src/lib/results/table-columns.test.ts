@@ -50,7 +50,7 @@ describe('columnSpecs', () => {
     ])
     expect(ids(columnSpecs(model(), 'psms'))).toEqual([
       'peptide', 'sequence', 'adduct', 'site', 'proteins', 'proteinStart', 'proteinEnd', 'proteinSite', 'sample', 'scan', 'charge', 'mz', 'rt', 'precursorError', 'score', 'qValue',
-      'pep', 'fdrGroup', 'file', 'isotopeError',
+      'curation', 'pep', 'fdrGroup', 'file', 'isotopeError',
     ])
   })
 
@@ -110,7 +110,7 @@ describe('visibleSpecs and csvColumns', () => {
     expect(csvColumns(visibleSpecs(specs, []))).toEqual([
       'peptide', 'sequence', 'crossLink', 'adduct', 'adductMass', 'nucleotide', 'site', 'siteScore', 'proteins', 'proteinStart',
       'proteinEnd', 'proteinSite', 'sample', 'nativeId',
-      'charge', 'mz', 'rt', 'precursorErrorPpm', 'score', 'qValue', 'pep', 'fdrGroup', 'file', 'isotopeError',
+      'charge', 'mz', 'rt', 'precursorErrorPpm', 'score', 'qValue', 'curation', 'pep', 'fdrGroup', 'file', 'isotopeError',
     ])
   })
 })

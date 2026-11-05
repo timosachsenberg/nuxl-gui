@@ -6,7 +6,8 @@
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import { canShowFolder, showFolderTitle } from '$lib/history/folder'
   import { revealSearch, saveProjectFile } from '$lib/history/history.svelte'
-  import { exportCsv, exportDesign, exportIdXML, idXMLFiles } from '$lib/results/exports'
+  import { countMarks } from '$lib/results/curation'
+  import { exportCsv, exportCurated, exportDesign, exportIdXML, idXMLFiles } from '$lib/results/exports'
   import type { ResultsView } from '$lib/results/view.svelte'
   import { cn } from '$lib/utils'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
@@ -18,6 +19,8 @@
 
   let open = $state(false)
   let canSpectrum = $state(false)
+  /** PSMs with a curation mark (when the menu opened). */
+  let curated = $state(0)
   let busy = $state(false)
   let projecting = $state(false)
   /** How far the project file is written (0–1); null before the writing starts (the save dialog). */
@@ -29,6 +32,8 @@
     open = next
     if (next) {
       canSpectrum = view.psm !== null && view.spectrumExporter !== null
+      const { accepted, rejected } = countMarks(view.curation)
+      curated = accepted + rejected
     }
   }
 
@@ -84,6 +89,13 @@
   <DropdownMenu.Content class="w-auto min-w-52" align="end">
     <DropdownMenu.Item disabled={view.level === null || view.exporting} onSelect={() => guard(() => exportCsv(view))}
       >CSV (current view)</DropdownMenu.Item>
+    <DropdownMenu.Item disabled={view.level === null || view.exporting} onSelect={() => guard(() => exportCsv(view, 'tsv'))}
+      >TSV (current view)</DropdownMenu.Item>
+    <DropdownMenu.Item
+      disabled={curated === 0 || view.exporting}
+      title={curated === 0 ? 'Mark PSMs as accepted or rejected in the PSM view first (keys A and R)' : `The ${curated} PSMs you marked, whatever the filters, with their mark`}
+      class={explained}
+      onSelect={() => guard(() => exportCurated(view))}>Curated PSMs (TSV){#if curated > 0}<span class="ml-auto pl-3 text-muted-foreground tabular-nums">{curated}</span>{/if}</DropdownMenu.Item>
     <DropdownMenu.Item onSelect={() => guard(() => exportDesign(view.result))}>Design (design.tsv)</DropdownMenu.Item>
     <DropdownMenu.Item
       disabled={!canSpectrum}

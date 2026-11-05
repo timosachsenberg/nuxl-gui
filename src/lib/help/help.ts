@@ -51,12 +51,13 @@ export const helpSections: HelpSection[] = [
     items: [
       { term: 'Key figures', text: 'Proteins, peptides and PSMs the search found at its cutoffs (peptide FDR and cross-link FDR), the samples and the median precursor mass error.' },
       { term: 'Overview', text: 'The search\'s settings, each file\'s outcome (PSMs, whether Percolator ran) and charts of the adducts and the cross-linked amino acids.' },
-      { term: 'Proteins, Peptides, PSMs', text: 'Tables at three levels. Click a column header to sort; the search box and the filters above narrow the rows; Columns shows or hides columns; Export CSV saves the rows as shown.' },
+      { term: 'Proteins, Peptides, PSMs', text: 'Tables at three levels. Click a column header to sort; the search box and the filters above narrow the rows; Columns shows or hides columns; Export CSV or TSV saves the rows as shown.' },
       { term: 'Protein row', text: 'Opens the protein panel beside the table (see Protein panel).' },
       { term: 'Peptide or PSM row', text: 'Opens the PSM view with the annotated spectrum (see PSM view).' },
       { term: 'Samples', text: 'Per sample of the design: its PSMs, cross-link PSMs, peptides and proteins.' },
       { term: 'QC', text: 'Score distributions of peptide and cross-link PSMs, the precursor mass errors and the PSMs per file.' },
-      { term: 'Export menu', text: 'The current table as CSV, the design (design.tsv), the open spectrum as SVG, the whole search as a project file (.nuxl), each file\'s idXML (every PSM before the FDR filter) and the search\'s folder. Spectral library (DIA-NN TSV) makes a library of the target peptides and localized cross-links with their b and y ions, at FDRs you choose, for DIA-NN, with DIA-NN\'s declarations of the adducts.' },
+      { term: 'Curation', text: 'Mark PSMs as accepted or rejected in the PSM view. The PSM table shows the mark in its Curation column and filters by it (Curated, Accepted, Rejected, Not curated). The marks are saved with the search and go with its project file.' },
+      { term: 'Export menu', text: 'The current table as CSV or TSV, the curated PSMs as TSV (every marked PSM, whatever the filters, with its mark), the design (design.tsv), the open spectrum as SVG, the whole search as a project file (.nuxl), each file\'s idXML (every PSM before the FDR filter) and the search\'s folder. Spectral library (DIA-NN TSV) makes a library of the target peptides and localized cross-links with their b and y ions, at FDRs you choose, for DIA-NN, with DIA-NN\'s declarations of the adducts.' },
     ],
   },
   {
@@ -78,6 +79,7 @@ export const helpSections: HelpSection[] = [
       { term: 'Mass errors', text: 'The fragment mass error of each annotated ion; the strip can be collapsed.' },
       { term: 'Measure, Label', text: 'Measure: click two peaks for their m/z difference (and what it may be). Label: click a peak to give it a text of your own. Both are part of Export spectrum (SVG).' },
       { term: 'Prev, Next', text: 'Step through the PSMs of the table below, which stays in sight.' },
+      { term: 'Accept, Reject', text: 'Curate the PSM: accepted or rejected (A, R; again takes the mark away). With the table filtered to Not curated, the view goes on to the next PSM, so that you can work through them.' },
       { term: 'Peaks', text: 'The peaks are read from your mzML file where it is. If it was moved (or for an imported project) the view shows only the peaks NuXL annotated, and says so.' },
     ],
   },
@@ -117,6 +119,7 @@ export const helpSections: HelpSection[] = [
       { term: 'Escape', text: 'Closes the protein panel or the PSM view (in the PSM view, first the Measure or Label tool).' },
       { term: '← →', text: 'PSM view: the previous or next PSM.' },
       { term: 'M, L', text: 'PSM view: the Measure or Label tool. Delete removes the selected measurement or label.' },
+      { term: 'A, R', text: 'PSM view: accept or reject the PSM (again: take the mark away).' },
     ],
   },
 ]

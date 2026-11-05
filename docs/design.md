@@ -98,6 +98,11 @@ A search lives in `<app data>/searches/<id>/` (`<id>.partial/` while it runs), a
   with the user's own path (Windows) it is beside the user's input. The shim removes it after each run, unless a file of that name was there before the run
   (OpenNuXL overwrites that one; the shim leaves it).
 - `search.json` and `proteins.fasta`: History's record and the identified proteins, as in ProSE desktop.
+- `curation.json` (once the user marks a PSM): the user's curation, `{ "schema": 1, "psms": [{ file, spectrum,
+  peptide, adduct, charge, mark }] }` with `mark` `accepted` or `rejected` (`src/lib/results/curation.ts`), each PSM
+  named by its file's name, native ID, ProForma, adduct and charge (not its row). The results view reads it through
+  `read_search_file` and replaces it whole through `save_curation` (`history.rs`: a saved search, JSON of this
+  shape, at most 64 MB). A project holds it; marks of PSMs the result does not have are kept as they are.
 
 Show search folder (the Export menu, History's rows, the Overview, which also shows the path: `search_folder`) opens
 the system's file manager at the folder of a search, by its id (`show_search_folder`, `history.rs` `show_folder`;

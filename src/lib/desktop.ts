@@ -6,7 +6,7 @@
 // inspect_files, cpu_count, example_files, save_text, save_text_with_companion, save_search_file, history_list,
 // history_save_record, history_save_proteins, history_rename, history_delete, search_folder, show_search_folder,
 // history_files, history_import, open_project_file,
-// save_project_file, answer_close, update_check_at_start, open_release_page. Events: search://progress, search://done, search://failed,
+// save_project_file, save_curation, answer_close, update_check_at_start, open_release_page. Events: search://progress, search://done, search://failed,
 // project://progress, app://close-requested. The system's dialogs open one at a time (`oneDialog`). The window's
 // theme (`windowTheme`, `onWindowThemeChanged`, `setWindowTheme`). The app's version (`appVersion`).
 
@@ -281,6 +281,25 @@ export function saveTextWithCompanion(
     }
     return saved && { path: saved.path, companion: saved.companion }
   })
+}
+
+/**
+ * The PSM curation of search `searchId`: its folder's `curation.json` (results/curation.ts), read with
+ * read_search_file and written with save_curation. Null outside the desktop app (the marks then last the session).
+ */
+export function curationStoreFor(searchId: string): { load(): Promise<string | null>; save(text: string): Promise<void> } | null {
+  if (!isDesktop()) return null
+  return {
+    async load() {
+      try {
+        return new TextDecoder('utf-8', { fatal: true }).decode(await readSearchFile(searchId, 'curation.json'))
+      } catch (e) {
+        if ((e as { notFound?: boolean })?.notFound) return null
+        throw new Error(errorText(e))
+      }
+    },
+    save: (curation) => invoke('save_curation', { searchId, curation }),
+  }
 }
 
 /** Copies a file of a search (e.g. `nuxl/run.idXML`) to where the user chooses, suggesting `suggested`. */

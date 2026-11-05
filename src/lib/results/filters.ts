@@ -3,6 +3,7 @@
 // copy of any such array. No row is ever turned into an object.
 
 import { columnDef } from './columns'
+import { passesCuration, type CurationFilter } from './curation'
 import { naturalKey, parseAccession, scanNumber } from './display'
 import { passesPeptideQ, passesQ, peptideCounts, psmPasses, qLimit, qLimits, type Level, type ResultModel } from './model'
 
@@ -41,6 +42,8 @@ export type FilterState = {
   proteinFilter?: number
   /** PSMs: only those of this peptide. */
   peptideFilter?: number
+  /** PSMs: by their curation mark (`ResultModel.curation`). */
+  curation: CurationFilter
 }
 
 /**
@@ -71,6 +74,7 @@ export function defaultFilters(): FilterState {
     minReplicatesInCondition: 0,
     hideContaminants: false,
     showDecoys: false,
+    curation: 'any',
   }
 }
 
@@ -205,7 +209,8 @@ function peptideMask(m: ResultModel, f: FilterState): Uint8Array {
  *   on the best PSM's q-value (there is no peptide-level FDR; limited by `psmFdr` / `xlFdr`), `hideContaminants`
  *   (peptides that map only to contaminants), `showDecoys`, `proteinFilter`, `kind`, `adduct`, `nucleotide`.
  * - PSMs: `text`, `hideContaminants` and `adduct` through the peptide, `maxQ` (`maxXlQ` for a cross-link; PSM
- *   q-value, limited by `psmFdr` / `xlFdr`), `showDecoys`, `proteinFilter`, `peptideFilter`, `kind`, `nucleotide`.
+ *   q-value, limited by `psmFdr` / `xlFdr`), `showDecoys`, `proteinFilter`, `peptideFilter`, `kind`, `nucleotide`, `curation` (the
+ *   marks of `ResultModel.curation`).
  *
  * A row without a q-value passes `maxQ` at the search's cutoff only (`passesQ`): the search did not apply that FDR
  * to it, and a tighter cutoff cannot be shown to pass. A protein without PSMs within the PSM FDR never passes. The
@@ -267,6 +272,7 @@ export function applyFilters(m: ResultModel, level: Level, f: FilterState): Uint
     if (!kindPasses(f.kind, isXL[i] === 1)) continue
     if (f.nucleotide && nucleotide[i] !== f.nucleotide) continue
     if (only !== undefined && k !== only) continue // an index that is no peptide matches nothing
+    if (f.curation !== 'any' && !passesCuration(m.curation[i], f.curation)) continue
     out[kept++] = i
   }
   return out.slice(0, kept)

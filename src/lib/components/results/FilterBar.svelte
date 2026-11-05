@@ -2,13 +2,14 @@
   // The one filter row of a level: text; the kind (all, cross-links, peptides; on proteins: cross-linked ones);
   // on peptides and PSMs the q-value cutoffs of the peptide PSMs and of the cross-links (tightening the search's
   // only), the adduct and the nucleotide; on proteins the minimum peptides and "found in" (OpenNuXL has no protein
-  // FDR: the proteins count the PSMs at the search's cutoffs); contaminants as a chip; "n of total".
+  // FDR: the proteins count the PSMs at the search's cutoffs); on PSMs the curation; contaminants as a chip; "n of total".
   import FdrInput from '$lib/components/FdrInput.svelte'
   import ChoiceSelect from '$lib/components/search/ChoiceSelect.svelte'
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
   import * as Popover from '$lib/components/ui/popover'
   import { formatPercent, formatQ } from '$lib/format/fdr'
   import { adductLabel } from '$lib/format/peptide'
+  import { CURATION_FILTERS, type CurationFilter } from '$lib/results/curation'
   import { formatCount, parseAccession } from '$lib/results/display'
   import { crossLinkChoices, type Kind } from '$lib/results/filters'
   import type { LevelState, ResultsView } from '$lib/results/view.svelte'
@@ -223,6 +224,15 @@
         options={foundChoices}
         onChange={(v) => (level.filters.minReplicatesInCondition = Number(v))} />
     {/if}
+  {/if}
+
+  {#if level.level === 'psms'}
+    <ChoiceSelect
+      class="w-auto"
+      ariaLabel="Curation"
+      value={level.filters.curation}
+      options={CURATION_FILTERS}
+      onChange={(v) => (level.filters.curation = v as CurationFilter)} />
   {/if}
 
   {#if protein}
