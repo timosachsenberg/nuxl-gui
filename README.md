@@ -120,6 +120,21 @@ their adducts; a comment table at its top lists the sites with their PSMs, best 
   structure is numbered otherwise (another isoform, sequence version or construct). The PyMOL script also checks every
   site and prints a warning in its log.
 
+## Spectral library for DIA-NN
+
+Export › "Spectral library (DIA-NN TSV)…" writes a library of the search's target peptides and localized cross-links
+for DIA-NN: one entry per peptide, adduct and charge (the best-scoring PSM), with the b and y ions NuXL annotated in
+its spectrum, the adduct in brackets after its residue (`KD[C-H3N1]IHPK`). It is a port of nuxl-app's converter
+(nuxl2dia.py, NuXLDIA); `docs/design.md` §5 has its rules and how it differs. The dialog has its own peptide and
+cross-link FDR (1 %, or the search's tighter cutoff; never looser than the search's, whatever the tables' filters),
+an optional iRT reference (an MSFragger/EasyPQP `library.tsv` of the same LC setup; without one,
+NormalizedRetentionTime stays empty) and the counts. The file is named after the FDRs
+(`<name>_library_pep1%_xl1%.tsv`); beside it the export writes `<name>_library_pep1%_xl1%_diann_mods.txt`, DIA-NN's
+declarations of the adducts (`--mod U-H2O1,306.025305`, the masses OpenNuXL computed), which the dialog also shows
+with a Copy button: **paste them into DIA-NN's Additional options (or add them to its command line), so that it knows
+the adduct masses.** A declarations file of that name that exists is replaced only when the dialog's question says so.
+The library has not been tried in DIA-NN yet; `docs/library-open-questions.md` lists what is open.
+
 ## Known limitations
 
 - **One run per file.** OpenNuXL searches each input file on its own, one after the other, and estimates the FDR of

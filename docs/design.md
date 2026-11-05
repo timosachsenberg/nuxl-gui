@@ -103,7 +103,8 @@ Show search folder (the Export menu, History's rows, the Overview, which also sh
 the system's file manager at the folder of a search, by its id (`show_search_folder`, `history.rs` `show_folder`;
 the page never names a path): the opener plugin's `reveal_item_in_dir`, called from Rust only (the plugin is not
 registered, the page has none of its commands), which selects the folder in `searches/` (Finder, Explorer; Linux: the
-file manager's `org.freedesktop.FileManager1` on D-Bus, else the desktop portal, else `xdg-open` of the folder).
+file manager's `org.freedesktop.FileManager1` on D-Bus, else the desktop portal, else `xdg-open` of the folder,
+waited for up to 5 s: an exit status other than 0, e.g. 3 without a file manager, is an error that names the folder).
 
 A project (`.nuxl`, `project.rs`, `history.ts` `leftOut`) holds the folder but `database.fasta`, `database.json`,
 `nuxl.log` and the converted spectra (`nuxl/<stem>.spectra.mzML`, `.spectra.tmp.mzML`: about as large as the
@@ -237,6 +238,70 @@ spectra after its run (§3) ends that run's part of the bar: "Preparing the spec
   `scan=` term (Thermo: `scan=4711` is 4711), `spectrum=` or `index=`; of a Bruker ID by its `precursor=` (the
   `scan=` of `frame=12 scan=301 precursor=4711` is a mobility scan that other precursors share), and one without a
   precursor by its scan ("frame 12, scan 301").
+
+### The spectral library (DIA-NN TSV)
+
+Export › "Spectral library (DIA-NN TSV)…" (`LibraryDialog.svelte`, `src/lib/results/library/`) is a TypeScript port
+of nuxl-app's `src/nuxl2dia.py` (NuXL Team; NuXLDIA, github.com/timosachsenberg/NuXLDIA; BSD-3, Copyright OpenMS Inc.),
+run in the page on the PSMs the reader has (`tables.psms`, with NuXL:score and the hit's `IM` kept for it in
+`psms.xl.nuxlScore` and `psms.xl.ccs`), so that it works for imported projects too (no spectra needed).
+
+As nuxl2dia.py:
+- targets only: a hit whose proteins are all decoys is left out (one with a target protein too stays, its ProteinId
+  naming both);
+- cross-links only when localized: NuXL:best_localization_score > 0 (0 and none are left out, and counted);
+- one cross-link per (peptide, NuXL:NA, charge), the best localization score, then the best NuXL:score; one peptide
+  per (modified peptide, charge), the best NuXL:score (the oxidised and the plain peptide stay apart); the peptide is
+  the TextExporter's (OpenMS' notation) without OpenNuXL's adduct modification, so two localizations of an adduct are
+  one entry; the cross-links first, by localization score, then the peptides, by NuXL:score;
+- ModifiedPeptideSequence: OpenMS' notation with `(Oxidation)` and `(Carbamidomethyl)` as `(UniMod:35)`, `(UniMod:4)`,
+  every other modification as OpenMS writes it, the adduct as `[<NuXL:NA>]` after its residue, before it when the
+  residue has another modification (`PE[U]M(UniMod:35)K`, nuxl2dia.py's rule for its TextExporter input), a leading
+  dinucleotide in alphabetical order (`UC-H3N1` is `CU-H3N1`, as NuXLDIA's DIA-NN declarations have them);
+  PeptideSequence the residues; PrecursorMz, PrecursorCharge and AverageExperimentalRetentionTime (s) the PSM's;
+  PrecursorIonMobility 1/K0 from the CCS (Mason–Schamp, N2, 305 K, nuxl2dia.py's constants), empty without; ProteinId
+  the accessions, `;`-separated;
+- the fragments: the b and y ions of `fragment_annotation` (shifted ones and those with losses included; a, c, x, z,
+  precursor, immonium, marker and internal ions left out), at the annotated m/z and NuXL's relative intensity, with
+  the peak's charge and NuXL's label as Annotation; a precursor without one is left out;
+- the columns in nuxl2dia.py's order; numbers in full (the shortest text that reads back as the same double).
+
+Decisions where it differs:
+- **The PSMs**: the search's within the dialog's own peptide and cross-link FDR (`psmPasses`: a peptide PSM by its
+  peptide-level q-value too), each 1 % at first (the usual library FDR; nuxl-app reads Percolator's 1 % files only),
+  or the search's tighter cutoff; never looser than the search's ("A looser cutoff needs a new search"). The tables'
+  filters do not count: a library is the whole search's (the PSM table starts at cross-links only). The file name
+  says the FDRs (`<name>_library_pep1%_xl1%.tsv`). Rescored and RDDF identifications are not offered.
+- **FragmentLossType** (nuxl2dia.py writes `FragmenLossType`, which DIA-NN ignores, and leaves it empty but for
+  shifted ions; an empty value would read as an unknown loss): `noloss`, `H2O` for one `-H2O1`, `NH3` for one
+  `-H3N1`, `unknown` for any other loss or several and for every ion shifted by a nucleotide (fragment): an apostrophe
+  ion (`y9+C'-NH3`) or any `+<shift>` (`+U`, `+C-NH3`, `+tU-H2S` of 4SU, which nuxl2dia.py's `+C/+U/+G/+A` rule
+  misses). DIA-NN has no loss classes of its own for these.
+- **The adduct in the sequence**: OpenNuXL of the pin writes a localized adduct as a modification of its residue
+  (`K(NuXL:C-H3N1)DIHPK`); it becomes the bracket at that residue, never a second one. On a residue with a
+  modification already OpenNuXL merges the two (`M(NuXL:U-H2O1~Oxidation)`): the bracket is the adduct, the other
+  modification stays the residue's (`[U-H2O1]M(UniMod:35)`, also in the deduplication). Where it could not merge, it
+  writes the adduct's mass as a mass delta (`K[+306.0253]`): within 0.01 Da of NuXL:NA_MASS_z0 that is the bracket.
+  An `IM` of 0 (a spectrum OpenNuXL could not convert) is no ion mobility.
+- **iRT**: an optional reference (MSFragger/EasyPQP `library.tsv`, also gzipped; RT `RT` or
+  `AverageExperimentalRetentionTime`, iRT `iRT` or `NormalizedRetentionTime`, as nuxl2dia.py): a straight
+  least-squares line of its iRT over its retention time, applied to NuXL's retention times. Linear only (nuxl-app's
+  piecewise mode falls back to linear without pwlf); the right slope (nuxl2dia.py's fallback without scipy divides
+  the sample covariance by the population variance).
+- **DIA-NN's declarations**: beside the TSV, `<stem>_diann_mods.txt` (`save_text_with_companion`, `export.rs`): one
+  `--mod <name>,<mass>` per adduct in the library's brackets, 6 decimals, the mass OpenNuXL computed
+  (NuXL:NA_MASS_z0), else from the name and the protocol's nucleotide formulas (nucleotides less a water per bond,
+  then the formulas added or lost; checked against NuXLDIA's `declare_mod_UV_UCGA_ext.txt`, all 99). The dialog
+  shows them with Copy. A companion that exists writes nothing: the shim keeps the chosen file and the dialog asks
+  "Replace <name>?"; Replace writes both there (`replace: true`, no second save dialog). Without cross-links no file.
+- ProteinId names each accession once; integers are written without nuxl2dia.py's `.0`; of PSMs of a peptide with
+  the same best score the first is kept (nuxl2dia.py's unstable pandas sort keeps any).
+
+Parity (`library.parity.test.ts`): 45 cross-link and 30 peptide rows of NuXLDIA's timsTOF TextExporter output through
+the real nuxl2dia.py and through the port give the same precursors and, but for two tied peptides, the same rows, in
+the same order, with the differences above only (and the last bit of a double that pandas' fast parser rounds
+differently). Questions for DIA-NN and NuXL experts: `docs/library-open-questions.md`. No OpenSWATH variant: OpenMS'
+TargetedFileConverter cannot read the bracket names (AASequence takes a bracket as a mass).
 
 ## 6. Left out (for now)
 
