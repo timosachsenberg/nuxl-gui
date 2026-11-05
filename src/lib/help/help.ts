@@ -56,7 +56,7 @@ export const helpSections: HelpSection[] = [
       { term: 'Peptide or PSM row', text: 'Opens the PSM view with the annotated spectrum (see PSM view).' },
       { term: 'Samples', text: 'Per sample of the design: its PSMs, cross-link PSMs, peptides and proteins.' },
       { term: 'QC', text: 'Score distributions of peptide and cross-link PSMs, the precursor mass errors and the PSMs per file.' },
-      { term: 'Export menu', text: 'The current table as CSV, the design (design.tsv), the open spectrum as SVG, the whole search as a project file (.nuxl), each file\'s idXML (every PSM before the FDR filter) and the search\'s folder.' },
+      { term: 'Export menu', text: 'The current table as CSV, the design (design.tsv), the open spectrum as SVG, the whole search as a project file (.nuxl), each file\'s idXML (every PSM before the FDR filter) and the search\'s folder. Spectral library (DIA-NN TSV) makes a library of the target peptides and localized cross-links with their b and y ions, at FDRs you choose, for DIA-NN, with DIA-NN\'s declarations of the adducts.' },
     ],
   },
   {
