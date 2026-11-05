@@ -197,7 +197,14 @@ fn cancelling_the_real_tool_leaves_no_process_and_no_folder() {
     // while on Windows): look until a process of the search shows
     let deadline = Instant::now() + Duration::from_secs(30);
     while processes_with(&folder) == 0 {
-        assert!(Instant::now() < deadline, "the tool runs");
+        assert!(
+            Instant::now() < deadline,
+            "the tool runs: no process mentions {folder:?}; the OpenMS tools' processes: {:#?}",
+            process_lines()
+                .into_iter()
+                .filter(|l| l.contains("OpenNuXL") || l.contains("PercolatorAdapter"))
+                .collect::<Vec<_>>()
+        );
         std::thread::sleep(Duration::from_millis(100));
     }
 
@@ -216,6 +223,15 @@ fn cancelling_the_real_tool_leaves_no_process_and_no_folder() {
 /// The number of live processes whose command line mentions `needle`.
 #[cfg(not(target_os = "linux"))]
 fn processes_with(needle: &str) -> usize {
+    process_lines()
+        .iter()
+        .filter(|l| l.contains(needle) && !l.contains("real_nuxl") && !l.contains("CimInstance"))
+        .count()
+}
+
+/// The command lines of the live processes (not zombies), for a failure's message too.
+#[cfg(not(target_os = "linux"))]
+fn process_lines() -> Vec<String> {
     #[cfg(windows)]
     let output = std::process::Command::new("powershell")
         .args([
@@ -233,8 +249,14 @@ fn processes_with(needle: &str) -> usize {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter(|l| !l.trim_start().starts_with('Z'))
-        .filter(|l| l.contains(needle) && !l.contains("real_nuxl") && !l.contains("CimInstance"))
-        .count()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The command lines of the live processes (Linux: not collected; `processes_with` reads /proc).
+#[cfg(target_os = "linux")]
+fn process_lines() -> Vec<String> {
+    Vec::new()
 }
 
 /// The number of live processes whose command line mentions `needle`.
