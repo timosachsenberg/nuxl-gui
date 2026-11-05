@@ -404,6 +404,8 @@ export function noCrossLinks(count: number): CrossLinkColumns {
     fdrGroup: new Array<string>(count).fill('peptide'),
     peptideQValue: new Float64Array(count).fill(NaN),
     annotation: new Array<string>(count).fill(''),
+    nuxlScore: new Float64Array(count).fill(NaN),
+    ccs: new Float64Array(count).fill(NaN),
   }
 }
 

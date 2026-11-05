@@ -64,4 +64,11 @@ export type CrossLinkColumns = {
   peptideQValue: Float64Array
   /** NuXL's annotated peaks of the hit (the fragment_annotation UserParam, as written: 'mz,intensity,charge,"label"|...'); '' none */
   annotation: string[]
+  /** NuXL's own score of the hit (NuXL:score; `psms.score` is Percolator's when every run was rescored); NaN: none */
+  nuxlScore: Float64Array
+  /**
+   * The precursor's collision cross section (Å²): the hit's 'IM' UserParam, which OpenNuXL writes for spectra with
+   * ion mobility (timsTOF: 1/K0 converted to CCS); NaN: none. The spectral library converts it back to 1/K0.
+   */
+  ccs: Float64Array
 }

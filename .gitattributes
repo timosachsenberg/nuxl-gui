@@ -4,3 +4,4 @@
 *.py text eol=lf
 src-tauri/tests/fixtures/** -text
 src-tauri/resources/** -text
+src/lib/results/library/fixtures/** -text
