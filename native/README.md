@@ -159,8 +159,8 @@ progress (`progress.rs`) and the names of its derived outputs (`run.rs`, `find_o
 of the pinned `OpenNuXL.cpp`: check them when the pin moves. The pin has to include OpenMS#10816 (develop
 `f3581006`): from there OpenNuXL reads `.raw`, `.d` (and mzPeak) through `FileHandler` itself instead of converting a
 `.raw` with ThermoRawFileParser, and writes `<input stem>_pc.mzML` beside its `-in` when it recalibrates; and
-OpenNuXL's `-out_qpx` (the QPX mz view of the spectra of its PSMs, which the app's PSM view reads; the app passes it
-to every run, and an OpenNuXL without it refuses the option). CI checks the
+OpenMS#10829 (develop `5e974cd`, the current pin): OpenNuXL's `-out_qpx` (the QPX mz view of the spectra of its PSMs,
+which the app's PSM view reads; the app passes it to every run, and an OpenNuXL without it refuses the option). CI checks the
 commit out of OpenMS/OpenMS; it never builds from local state.
 
 ## Bundling OpenNuXL
