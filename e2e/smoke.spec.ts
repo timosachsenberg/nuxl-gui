@@ -55,4 +55,17 @@ describe('smoke', () => {
     await browser.keys('Escape')
     await panel.waitForDisplayed({ reverse: true })
   })
+
+  it('Help opens at the section of the view (the button, and F1), and Escape closes it', async () => {
+    await $('[data-testid="help-button"]').click()
+    const dialog = $('[data-testid="help-dialog"]')
+    await dialog.waitForDisplayed({ timeout: 10000 })
+    await expect(dialog.$('nav [aria-current="true"]')).toHaveText('New search')
+    await browser.keys('Escape')
+    await dialog.waitForDisplayed({ reverse: true })
+    await browser.keys('F1')
+    await dialog.waitForDisplayed({ timeout: 10000 })
+    await browser.keys('Escape')
+    await dialog.waitForDisplayed({ reverse: true })
+  })
 })

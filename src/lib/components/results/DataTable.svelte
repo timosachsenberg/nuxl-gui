@@ -123,6 +123,9 @@
   )
 
   const minWidth = $derived(columns.reduce((w, c) => w + (c.width === 'auto' ? autoMinWidth : c.width), 0))
+  // without an 'auto' column (e.g. the Proteins table of a FASTA without descriptions) an empty last column takes the
+  // rest of the width, so that the columns keep their widths and stand together instead of spreading over the window
+  const filler = $derived(!columns.some((c) => c.width === 'auto'))
 
   // new rows (filtered or sorted): back to the top, the first row active
   let lastRows: Uint32Array | null = null
@@ -256,7 +259,7 @@
   aria-rowcount={rows.length + headerRows}
   aria-colcount={columns.length}
   aria-activedescendant={rows.length > 0 ? rowId(active) : undefined}
-  class="grid-box relative min-h-0 flex-1 overflow-auto rounded-lg border bg-background outline-none focus-visible:border-ring"
+  class="grid-box relative min-h-0 flex-initial overflow-auto rounded-lg border bg-background outline-none focus-visible:border-ring"
   data-testid="table-scroll">
   <!-- the box is the grid, the table only lays it out: its parts carry their grid roles explicitly
        (the svelte-ignore comments below), since a presentational table's parts lose their own -->
@@ -268,6 +271,7 @@
       {#each columns as c (c.id)}
         <col style:width={c.width === 'auto' ? undefined : `${c.width}px`} />
       {/each}
+      {#if filler}<col />{/if}
     </colgroup>
     <!-- svelte-ignore a11y_no_redundant_roles -->
     <thead role="rowgroup" class="sticky top-0 z-10 bg-background" bind:offsetHeight={headerHeight}>
@@ -291,6 +295,7 @@
               >
             {/if}
           {/each}
+          {#if filler}<th aria-hidden="true" rowspan="2" class="border-b"></th>{/if}
         </tr>
         <!-- svelte-ignore a11y_no_redundant_roles -->
         <tr role="row" aria-rowindex={2}>
@@ -302,13 +307,14 @@
         <!-- svelte-ignore a11y_no_redundant_roles -->
         <tr role="row" aria-rowindex={1}>
           {#each columns as c, i (c.id)}{@render headerCell(c, i, 1)}{/each}
+          {#if filler}<th aria-hidden="true" class="border-b"></th>{/if}
         </tr>
       {/if}
     </thead>
     <!-- svelte-ignore a11y_no_redundant_roles -->
     <tbody role="rowgroup">
       {#if range.start > 0}
-        <tr aria-hidden="true" style:height="{range.start * rowHeight}px"><td colspan={columns.length}></td></tr>
+        <tr aria-hidden="true" style:height="{range.start * rowHeight}px"><td colspan={columns.length + (filler ? 1 : 0)}></td></tr>
       {/if}
       <!-- keyed: a row element always shows the same row (the active descendant's id moves with it) -->
       {#each slice as row, j (row)}
@@ -337,11 +343,12 @@
               {#if typeof value === 'string'}{value}{:else}{@render value(row)}{/if}
             </td>
           {/each}
+          {#if filler}<td aria-hidden="true" class="border-b"></td>{/if}
         </tr>
       {/each}
       {#if range.end < rows.length}
         <tr aria-hidden="true" style:height="{(rows.length - range.end) * rowHeight}px"
-          ><td colspan={columns.length}></td></tr>
+          ><td colspan={columns.length + (filler ? 1 : 0)}></td></tr>
       {/if}
     </tbody>
   </table>
