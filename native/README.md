@@ -1,8 +1,9 @@
 # Native tools and Tauri toolchain
 
-The NuXL desktop app (Tauri 2) runs OpenNuXL of OpenMS, with PercolatorAdapter for its score recalibration and
-FileConverter for the spectra of Thermo .raw and Bruker .d inputs, as its only native code (plus the .NET runtime
-that OpenMS's Thermo reader hosts). This directory holds the tooling for the two things the app needs: a user-space
+The NuXL desktop app (Tauri 2) runs OpenNuXL of OpenMS, with PercolatorAdapter for its score recalibration, as its
+only native code (plus the .NET runtime that OpenMS's Thermo reader hosts); OpenNuXL keeps the spectra of its PSMs for
+the PSM view itself (`-out_qpx`, the QPX mz view). The bundle also has FileConverter, which the packages' start test
+reads a .raw and a .d with (the app does not run it). This directory holds the tooling for the two things the app needs: a user-space
 toolchain for the Tauri and Rust side, and a native OpenMS build of the tools, bundled with their libraries and data.
 (It started as ProSE desktop's, whose toolchain sections below are unchanged.)
 
@@ -139,8 +140,8 @@ configuration:
   the PercolatorAdapter it starts inherits it.
 - `PATH` is rebuilt without linuxbrew (its binutils are older than the toolchain's).
 - The targets: `OpenNuXL`, `PercolatorAdapter` (OpenNuXL runs it for the score recalibration, and looks for it
-  beside itself: `File::findSiblingTOPPExecutable`), `FileConverter` (after a search of a `.raw` or `.d` input the
-  app writes its spectra as `nuxl/<stem>.spectra.mzML` with it, for the PSM view), `FuzzyDiff` (the `TOPP_OpenNuXL`
+  beside itself: `File::findSiblingTOPPExecutable`), `FileConverter` (the packages' start test converts a `.raw`
+  and a `.d` with it through the bundled .NET runtime; the app does not run it), `FuzzyDiff` (the `TOPP_OpenNuXL`
   tests compare with it; without it they report "Not Run") and `Percolator_test`. CI builds
   `OpenMS OpenNuXL PercolatorAdapter FileConverter`.
 
@@ -156,9 +157,10 @@ ctest --test-dir <OpenMS checkout>/build -R "OpenNuXL|Percolator_test" -j 32 --o
 `develop`. The app's allowlist of OpenNuXL's options (`src-tauri/src/args.rs`, `PARAMETERS`), the stages of its
 progress (`progress.rs`) and the names of its derived outputs (`run.rs`, `find_outputs`; `NuXLFDR.cpp`) are those
 of the pinned `OpenNuXL.cpp`: check them when the pin moves. The pin has to include OpenMS#10816 (develop
-`f3581006`, the current pin): from there OpenNuXL reads `.raw`, `.d` (and mzPeak) through `FileHandler` itself
-instead of converting a `.raw` with ThermoRawFileParser, and writes `<input stem>_pc.mzML` beside its `-in` when it
-recalibrates. FileConverter reads with the same readers and defaults, so its native IDs are OpenNuXL's. CI checks the
+`f3581006`): from there OpenNuXL reads `.raw`, `.d` (and mzPeak) through `FileHandler` itself instead of converting a
+`.raw` with ThermoRawFileParser, and writes `<input stem>_pc.mzML` beside its `-in` when it recalibrates; and
+OpenNuXL's `-out_qpx` (the QPX mz view of the spectra of its PSMs, which the app's PSM view reads; the app passes it
+to every run, and an OpenNuXL without it refuses the option). CI checks the
 commit out of OpenMS/OpenMS; it never builds from local state.
 
 ## Bundling OpenNuXL
@@ -228,8 +230,8 @@ Microsoft's signatures; `bundle-nuxl.sh` and `package-macos.sh` check them).
   machine OpenMS's data path is the source tree's `share/OpenMS`, which has no managed folder). A tool from an
   OpenMS build tree (`NUXL_TOOL`) has neither folder beside it and keeps the user's environment.
 - **Size**: about 70 MB unpacked per platform (the CI summary's "Package sizes" shows it as a row of its own).
-- FileConverter's `-RawToMzML:reader` defaults to ThermoRawFileParser (`external`) on Windows; the app always passes
-  `inprocess`.
+- FileConverter's `-RawToMzML:reader` defaults to ThermoRawFileParser (`external`) on Windows; the start test always
+  passes `inprocess`.
 
 **`tool_info`** is `{ version, path }` (`src-tauri/src/tool.rs`): the version from `OpenNuXL --help`. The app's
 `--smoke-test` also reports whether PercolatorAdapter is beside the tool. `NUXL_TOOL` names a tool to use

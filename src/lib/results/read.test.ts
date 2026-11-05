@@ -2,9 +2,11 @@
 // The results reader on search folders as the shim leaves them (fixtures/<case>/, made by scripts/results-fixtures.mjs
 // from OpenNuXL's own test outputs): example (one input, peptides and cross-links), runs (three inputs, one without
 // decoys and one that did not finish), empty (two inputs without PSMs), screens (the screenshots' set, OpenNuXL's test 3),
-// vendor (a Bruker .d with the spectra the shim converted, a Thermo .raw whose conversion failed);
-// the input mzML is the app's example (src-tauri/resources/example), as it is and as an indexed, zlib-compressed copy
-// (fixtures/spectra).
+// vendor (a Bruker .d with its mz view, a Thermo .raw whose mz view OpenNuXL could not write), legacy (the vendor case
+// as app versions before 0.7 saved it: the .d's spectra converted by the shim, the .raw's conversion failed); each run's
+// peaks are in its QPX mz view (nuxl/<stem>.mz.parquet). A search before 0.7 (`legacy: true`: its outputs.json without
+// `mz`) reads them from the input mzML, which is the app's example (src-tauri/resources/example), as it is and as an
+// indexed, zlib-compressed copy (fixtures/spectra).
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -26,9 +28,13 @@ interface Folder {
 
 /**
  * The folder of fixture `name` as the `files` contract has it. The inputs' links (`<n>__<name>`) are `mzml` (the plain
- * or indexed example; null: not there); absolute paths do not exist.
+ * or indexed example; null: not there); absolute paths do not exist. `legacy`: as an app before 0.7 left it, its
+ * outputs.json without `mz` (no mz view).
  */
-function folder(name: string, { mzml = 'indexed', override = {} }: { mzml?: 'indexed' | 'plain' | null; override?: Record<string, Served> } = {}): Folder {
+function folder(
+  name: string,
+  { mzml = 'indexed', override = {}, legacy = false }: { mzml?: 'indexed' | 'plain' | null; override?: Record<string, Served>; legacy?: boolean } = {},
+): Folder {
   const asked: Folder['asked'] = []
   const files: SearchFiles = async (file, range) => {
     asked.push({ name: file, range })
@@ -39,6 +45,10 @@ function folder(name: string, { mzml = 'indexed', override = {} }: { mzml?: 'ind
       else {
         try {
           served = new Uint8Array(readFileSync(join(fixtures, name, file)))
+          if (legacy && file.endsWith('.outputs.json')) {
+            const { mz: _, ...old } = JSON.parse(new TextDecoder().decode(served))
+            served = JSON.stringify(old)
+          }
         } catch {
           served = null
         }
@@ -408,9 +418,92 @@ describe('readSearch: broken folders name the file', () => {
   })
 })
 
-describe('the spectra of the PSMs', () => {
-  test('of an indexed mzML: by its index, the spectrum element alone by byte range', async () => {
+describe("the spectra of the PSMs: the run's QPX mz view (OpenNuXL's -out_qpx)", () => {
+  // (fixtures: each run's nuxl/<stem>.mz.parquet, the example's spectra under the run's native IDs, row groups of 8)
+  const VIEW = 'nuxl/1__OpenNuXL_1_input.mz.parquet'
+  const BRUKER_9 = 'frame=102 scan=201 precursor=1010'
+  const THERMO_9 = 'controllerType=0 controllerNumber=1 scan=10'
+  const RUN_VIEW = 'nuxl/1__run.mz.parquet'
+  const inputs = ['1__OpenNuXL_1_input.mzML', '/data/OpenNuXL_1_input.mzML', '1__run.d', '/data/run.d', '2__thermo.raw', '/data/thermo.raw']
+
+  test("of an mzML: the PSM's row of the view, by its native ID, by byte range; the input is never read", async () => {
     const f = folder('example')
+    const r = await readSearch(f.files)
+    const loaded = await r.spectra.load(rowOf(r, 'spectrum=9'))
+    expect(loaded.missing).toBeNull()
+    expect(loaded.peakFilter).toEqual({ top: 100, window: 100 })
+    const s = loaded.spectra
+    const at = loaded.spectrumRow
+    expect(s.psmSpectrum[at]).toBe(at)
+    // the same peaks as the input mzML's (the view keeps them as 32-bit floats; the example's are fewer than the filter's)
+    const old = await readSearch(folder('example', { legacy: true }).files)
+    const original = await old.spectra.load(rowOf(old, 'spectrum=9'))
+    const peaks = (x: typeof s, row: number) => [x.mz.subarray(x.offsets[row], x.offsets[row + 1]), x.intensity.subarray(x.offsets[row], x.offsets[row + 1])]
+    expect(peaks(s, at)).toEqual(peaks(original.spectra, original.spectrumRow))
+    expect(s.precursorMz[at]).toBeCloseTo(712.7828, 3)
+    // only the view, by byte range (its footer, its ids, the row group): never the input
+    const asked = f.asked.filter((a) => a.name === VIEW)
+    expect(asked.length).toBeGreaterThan(0)
+    expect(asked.every((a) => a.range !== undefined)).toBe(true)
+    expect(f.asked.filter((a) => inputs.includes(a.name))).toEqual([])
+    // NuXL's annotated peaks are among the view's peaks
+    const mz = Array.from(peaks(s, at)[0])
+    for (const p of loaded.annotation.slice(0, 20)) expect(mz.some((m) => Math.abs(m - p.mz) < 1e-3)).toBe(true)
+  })
+
+  test('every PSM of every row group has its spectrum, and the row groups are read once', async () => {
+    const f = folder('runs')
+    const r = await readSearch(f.files)
+    for (let row = 0; row < r.tables.psms.count; row++) {
+      const loaded = await r.spectra.load(row)
+      expect(loaded.missing, r.tables.psms.nativeId[row]).toBeNull()
+      expect(loaded.spectra.offsets[loaded.spectrumRow + 1]).toBeGreaterThan(loaded.spectra.offsets[loaded.spectrumRow])
+    }
+    // per view: the footer, the ids of its three row groups, then each row group once
+    for (const view of ['nuxl/1__OpenNuXL_1_input.mz.parquet', 'nuxl/2__no_decoys.mz.parquet']) {
+      expect(f.asked.filter((a) => a.name === view).length).toBeLessThanOrEqual(1 + 3 + 3)
+    }
+  })
+
+  test('of a .d: from its view by its Bruker ID; a .raw whose view OpenNuXL could not write: why; the inputs never read', async () => {
+    const f = folder('vendor')
+    const r = await readSearch(f.files)
+    const d = await r.spectra.load(rowOf(r, BRUKER_9))
+    expect(d.missing).toBeNull()
+    expect(d.spectra.offsets[d.spectrumRow + 1] - d.spectra.offsets[d.spectrumRow]).toBe(173)
+    const raw = await r.spectra.load(rowOf(r, THERMO_9))
+    expect(raw.missing).toBe("OpenNuXL could not keep the spectra of thermo.raw (the Overview's notes say why); the PSM view shows the annotated peaks only.")
+    expect(raw.annotation.length).toBeGreaterThan(0)
+    expect(r.nuxl.notes[1].some((n) => n.includes('the spectra of thermo.raw could not be kept'))).toBe(true)
+    expect(f.asked.filter((a) => inputs.includes(a.name))).toEqual([])
+  })
+
+  test('a view that is not there, cannot be read or is no Parquet file; a spectrum it lacks or of another RT: no peaks and why', async () => {
+    const gone = await readSearch(folder('vendor', { override: { [RUN_VIEW]: null } }).files)
+    expect((await gone.spectra.load(rowOf(gone, BRUKER_9))).missing).toBe(
+      `The spectra of run.d are not in the search folder (${RUN_VIEW}); the PSM view shows the annotated peaks only.`,
+    )
+    const refused = await readSearch(folder('vendor', { override: { [RUN_VIEW]: new Error('permission denied') } }).files)
+    expect((await refused.spectra.load(rowOf(refused, BRUKER_9))).missing).toBe(`run.d: its spectra (${RUN_VIEW}) cannot be read: permission denied`)
+    const foreign = await readSearch(folder('vendor', { override: { [RUN_VIEW]: 'not parquet' } }).files)
+    expect((await foreign.spectra.load(rowOf(foreign, BRUKER_9))).missing).toMatch(/^run\.d: its spectra \(nuxl\/1__run\.mz\.parquet\) cannot be read: .*not a Parquet file/)
+    // a PSM whose native ID the view lacks
+    const XLS_RUN = 'nuxl/1__run_1.0000_XLs.idXML'
+    const renamed = text(`vendor/${XLS_RUN}`).replaceAll(`"${BRUKER_9}"`, '"frame=1 scan=1 precursor=1"')
+    const lacking = await readSearch(folder('vendor', { override: { [XLS_RUN]: renamed } }).files)
+    expect((await lacking.spectra.load(rowOf(lacking, 'frame=1 scan=1 precursor=1'))).missing).toBe('run.d: OpenNuXL kept no spectrum frame=1 scan=1 precursor=1.')
+    // a PSM of another spectrum of the same native ID (its RT another): the view has the first's
+    const moved = text(`vendor/${XLS_RUN}`).replace(new RegExp(`RT="[^"]*"([^>]*spectrum_reference="${BRUKER_9}")`), 'RT="999.5"$1')
+    const other = await readSearch(folder('vendor', { override: { [XLS_RUN]: moved } }).files)
+    expect((await other.spectra.load(rowOf(other, BRUKER_9))).missing).toBe(`run.d: the spectrum ${BRUKER_9} that OpenNuXL kept is another one than the PSM's (at another RT).`)
+  })
+})
+
+describe('the spectra of the PSMs of a search before 0.7 (no mz view): from the input mzML', () => {
+  const readOld = () => readSearch(folder('example', { legacy: true }).files)
+
+  test('of an indexed mzML: by its index, the spectrum element alone by byte range', async () => {
+    const f = folder('example', { legacy: true })
     const r = await readSearch(f.files)
     const row = rowOf(r, 'spectrum=9')
     const loaded = await r.spectra.load(row)
@@ -437,8 +530,8 @@ describe('the spectra of the PSMs', () => {
   })
 
   test('of an mzML without index: by scanning it once, the same peaks', async () => {
-    const indexed = await readExample()
-    const f = folder('example', { mzml: 'plain' })
+    const indexed = await readOld()
+    const f = folder('example', { mzml: 'plain', legacy: true })
     const plain = await readSearch(f.files)
     for (const id of ['spectrum=0', 'spectrum=9', 'spectrum=19']) {
       const [a, b] = await Promise.all([indexed.spectra.load(rowOf(indexed, id)), plain.spectra.load(rowOf(plain, id))])
@@ -452,12 +545,12 @@ describe('the spectra of the PSMs', () => {
   })
 
   test('the input at the path it was searched at, when its link is gone', async () => {
-    const r = await readSearch(folder('example', { mzml: null, override: { '/data/OpenNuXL_1_input.mzML': new Uint8Array(readFileSync(PLAIN)) } }).files)
+    const r = await readSearch(folder('example', { legacy: true, mzml: null, override: { '/data/OpenNuXL_1_input.mzML': new Uint8Array(readFileSync(PLAIN)) } }).files)
     expect((await r.spectra.load(0)).missing).toBeNull()
   })
 
   test("without the file: no peaks and why, and NuXL's annotated peaks", async () => {
-    const r = await readSearch(folder('example', { mzml: null }).files)
+    const r = await readSearch(folder('example', { legacy: true, mzml: null }).files)
     const loaded = await r.spectra.load(rowOf(r, 'spectrum=9'))
     expect(loaded.missing).toBe('OpenNuXL_1_input.mzML is not at /data/OpenNuXL_1_input.mzML any more, so its spectra cannot be read.')
     expect(loaded.spectra.psmSpectrum[loaded.spectrumRow]).toBe(-1)
@@ -468,24 +561,29 @@ describe('the spectra of the PSMs', () => {
 
   test('an imported project (the file refused), a spectrum the file lacks, MS-Numpress: no peaks and why', async () => {
     const refused = await readSearch(
-      folder('example', { override: { '1__OpenNuXL_1_input.mzML': new Error('1__OpenNuXL_1_input.mzML is not a file of the search 5-0: an imported search reads only its own folder.') } }).files,
+      folder('example', {
+        legacy: true,
+        override: { '1__OpenNuXL_1_input.mzML': new Error('1__OpenNuXL_1_input.mzML is not a file of the search 5-0: an imported search reads only its own folder.') },
+      }).files,
     )
     expect((await refused.spectra.load(0)).missing).toBe(
       'OpenNuXL_1_input.mzML cannot be read: 1__OpenNuXL_1_input.mzML is not a file of the search 5-0: an imported search reads only its own folder.',
     )
     const plain = readFileSync(PLAIN, 'latin1')
-    const other = await readSearch(folder('example', { override: { '1__OpenNuXL_1_input.mzML': Buffer.from(plain.replace('id="spectrum=9"', 'id="spectrum=99"'), 'latin1') } }).files)
+    const other = await readSearch(
+      folder('example', { legacy: true, override: { '1__OpenNuXL_1_input.mzML': Buffer.from(plain.replace('id="spectrum=9"', 'id="spectrum=99"'), 'latin1') } }).files,
+    )
     expect((await other.spectra.load(rowOf(other, 'spectrum=9'))).missing).toBe('OpenNuXL_1_input.mzML: The file has no spectrum with the native ID spectrum=9.')
     const at = plain.indexOf('id="spectrum=9"')
     const numpress = plain.slice(0, at) + plain.slice(at).replace('accession="MS:1000576"', 'accession="MS:1002312"')
-    const r = await readSearch(folder('example', { override: { '1__OpenNuXL_1_input.mzML': Buffer.from(numpress, 'latin1') } }).files)
+    const r = await readSearch(folder('example', { legacy: true, override: { '1__OpenNuXL_1_input.mzML': Buffer.from(numpress, 'latin1') } }).files)
     expect((await r.spectra.load(rowOf(r, 'spectrum=9'))).missing).toBe('OpenNuXL_1_input.mzML: Its peaks are compressed with MS-Numpress, which the app does not read.')
     expect((await r.spectra.load(rowOf(r, 'spectrum=0'))).missing).toBeNull()
   })
 
   test('an index that does not fit the file: the file is scanned instead', async () => {
     const indexed = readFileSync(INDEXED, 'latin1').replace(/(<offset idRef="spectrum=9">)\d+/, '$1100')
-    const r = await readSearch(folder('example', { override: { '1__OpenNuXL_1_input.mzML': Buffer.from(indexed, 'latin1') } }).files)
+    const r = await readSearch(folder('example', { legacy: true, override: { '1__OpenNuXL_1_input.mzML': Buffer.from(indexed, 'latin1') } }).files)
     const loaded = await r.spectra.load(rowOf(r, 'spectrum=9'))
     expect(loaded.missing).toBeNull()
     expect(loaded.spectra.offsets[1]).toBeGreaterThan(100)
@@ -505,8 +603,8 @@ describe('the spectra of the PSMs', () => {
   })
 })
 
-describe('the spectra of the PSMs: Thermo .raw and Bruker .d inputs', () => {
-  // (fixtures/vendor: run.d, its spectra converted by the shim, nuxl/1__run.spectra.mzML: the example's spectra under
+describe('the spectra of the PSMs of a search before 0.7: Thermo .raw and Bruker .d inputs', () => {
+  // (fixtures/legacy: run.d, its spectra converted by the shim, nuxl/1__run.spectra.mzML: the example's spectra under
   // Bruker IDs, MS2 only, indexed, in reverse order; thermo.raw, whose conversion failed: outputs.json spectra null)
   const BRUKER_9 = 'frame=102 scan=201 precursor=1010'
   const THERMO_9 = 'controllerType=0 controllerNumber=1 scan=10'
@@ -514,14 +612,14 @@ describe('the spectra of the PSMs: Thermo .raw and Bruker .d inputs', () => {
   const inputNames = ['1__run.d', '/data/run.d', '2__thermo.raw', '/data/thermo.raw']
 
   test("of a .d: from the converted spectra outputs.json names, by the PSM's native ID; the input is never read", async () => {
-    const f = folder('vendor')
+    const f = folder('legacy')
     const r = await readSearch(f.files)
     expect(r.tables.files).toEqual(['/data/run.d', '/data/thermo.raw'])
     expect(r.warnings).toEqual([])
     const loaded = await r.spectra.load(rowOf(r, BRUKER_9))
     expect(loaded.missing).toBeNull()
     // the same peaks as the example's spectrum=9, which the converted file holds under that ID at another position
-    const example = await readExample()
+    const example = await readSearch(folder('example', { legacy: true }).files)
     const original = await example.spectra.load(rowOf(example, 'spectrum=9'))
     expect(loaded.spectra.mz).toEqual(original.spectra.mz)
     expect(loaded.spectra.intensity).toEqual(original.spectra.intensity)
@@ -534,7 +632,7 @@ describe('the spectra of the PSMs: Thermo .raw and Bruker .d inputs', () => {
   })
 
   test("of a .raw whose spectra were not converted: no peaks, a specific reason, NuXL's annotated peaks; the input is never read", async () => {
-    const f = folder('vendor')
+    const f = folder('legacy')
     const r = await readSearch(f.files)
     expect(r.nuxl.notes[1]).toContain('The PSM view shows the annotated peaks only: the spectra of thermo.raw could not be converted (FileConverter ended with exit code 1).')
     const row = rowOf(r, THERMO_9)
@@ -546,17 +644,17 @@ describe('the spectra of the PSMs: Thermo .raw and Bruker .d inputs', () => {
   })
 
   test('the converted spectra missing (a project leaves them out) or unreadable: no peaks and why, the input not read', async () => {
-    const gone = folder('vendor', { override: { [SPECTRA]: null } })
+    const gone = folder('legacy', { override: { [SPECTRA]: null } })
     const r = await readSearch(gone.files)
     expect((await r.spectra.load(rowOf(r, BRUKER_9))).missing).toBe(
       'The spectra of run.d are not in the search folder (a project leaves them out); the PSM view shows the annotated peaks only.',
     )
     expect(gone.asked.filter((a) => inputNames.includes(a.name))).toEqual([])
-    const refused = await readSearch(folder('vendor', { override: { [SPECTRA]: new Error('permission denied') } }).files)
+    const refused = await readSearch(folder('legacy', { override: { [SPECTRA]: new Error('permission denied') } }).files)
     expect((await refused.spectra.load(rowOf(refused, BRUKER_9))).missing).toBe(`The spectra of run.d (${SPECTRA}) cannot be read: permission denied`)
     // a native ID the converted file lacks: named as for an input mzML
-    const other = Buffer.from(readFileSync(join(fixtures, 'vendor', SPECTRA), 'latin1').replaceAll(`"${BRUKER_9}"`, '"frame=1 scan=1 precursor=1"'), 'latin1')
-    const lacking = await readSearch(folder('vendor', { override: { [SPECTRA]: other } }).files)
+    const other = Buffer.from(readFileSync(join(fixtures, 'legacy', SPECTRA), 'latin1').replaceAll(`"${BRUKER_9}"`, '"frame=1 scan=1 precursor=1"'), 'latin1')
+    const lacking = await readSearch(folder('legacy', { override: { [SPECTRA]: other } }).files)
     expect((await lacking.spectra.load(rowOf(lacking, BRUKER_9))).missing).toBe(`run.d: The file has no spectrum with the native ID ${BRUKER_9}.`)
   })
 })
@@ -567,7 +665,7 @@ describe('the spectra of the PSMs: a large file without index', () => {
     // a file that does not end within the scanned limit: a stream of spaces after the example's head
     const head = readFileSync(PLAIN).subarray(0, 5000)
     const files: SearchFiles = async (name, range) => {
-      if (name !== '1__OpenNuXL_1_input.mzML') return folder('example').files(name, range)
+      if (name !== '1__OpenNuXL_1_input.mzML') return folder('example', { legacy: true }).files(name, range)
       if (!range || !('offset' in range)) return head.subarray(0, 1)
       const length = Math.max(0, Math.min(range.length, MAX_SCANNED + 1024 - range.offset))
       const out = new Uint8Array(length).fill(32)

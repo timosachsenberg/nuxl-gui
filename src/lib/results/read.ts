@@ -11,12 +11,15 @@
 // an absolute path the `files` callback has to serve too); the sequences are the idXML's ProteinHits' (OpenNuXL writes
 // them), else the FASTA's.
 //
-// The peaks of a PSM are read when it is opened (`SearchResult.spectra`), from its input mzML by byte range: by the
-// file's index, else by scanning it (mzml.ts). Of a Thermo .raw or Bruker .d input, from the mzML the shim wrote of its
-// spectra into the search folder (outputs.json `spectra`; FileConverter, indexed), never from the input itself (a
-// vendor file, a folder); the spectra are matched by native ID alone, so that file may hold them in another order and
-// MS2 only. When the file cannot be read (moved, an imported project, a conversion that failed), the load resolves
-// without peaks and says why; the PSM view then has NuXL's own annotated peaks (`LoadedSpectra.annotation`).
+// The peaks of a PSM are read when it is opened (`SearchResult.spectra`), from the QPX mz view of its run (outputs.json
+// `mz`, `nuxl/<stem>.mz.parquet`: OpenNuXL's -out_qpx, the MS2 spectra of the run's PSMs, their peaks filtered as
+// its footer says) by row group, its row found by the PSM's native ID (the view's `id`), for every kind of input. A
+// search of an app before 0.7 has no mz view: from the input mzML by byte range (by the file's index, else by
+// scanning it, mzml.ts), or of a Thermo .raw or Bruker .d input from the mzML the shim then converted its spectra to
+// (outputs.json `spectra`; FileConverter, indexed), never from the input itself (a vendor file, a folder); the spectra
+// are matched by native ID alone, so that file may hold them in another order and MS2 only. When the peaks cannot be
+// read (no mz view, an old search's input moved, an imported project), the load resolves without peaks and says why;
+// the PSM view then has NuXL's own annotated peaks (`LoadedSpectra.annotation`).
 //
 // The `files` contract: resolve with the contents (all of the file, or the byte range asked for), or reject with
 // `FileNotFound` (or any error or object with `notFound: true`, as a Tauri command can send it) when the file does not
@@ -28,6 +31,8 @@ import { parseFragmentAnnotation, type NuxlPeak } from '../psm/nuxl-annotation'
 import { C13C12_MASSDIFF_U, parseOpenmsSequence, proformaString, tableModifications, type Modification } from './derive'
 import { numberColumn, readIdXML, textColumn, type IdXML, type IdXMLSearchParameters } from './idxml'
 import { readSpectrum, spectrumIndex, SpectrumError, type MzmlSpectrum, type ReadRange, type SpectrumIndex } from './mzml'
+import { chunkRange, metadataOfTail, partOfParquet, readLeaf, startZstd, type ParquetFile } from './parquet'
+import type { FileMetaData } from 'hyparquet'
 import { passesPeptideQ } from './model'
 import { parseOutputs, toSummary, type InputCounts, type NuxlSummary, type RunOutputs } from './summary'
 import type { CrossLinkColumns, PredictedSpectra, ProSEMultiSummary, ResultTables, StoredSpectra } from './types'
@@ -64,7 +69,7 @@ export function isNotFound(e: unknown): boolean {
   return typeof e === 'object' && e !== null && (e as { notFound?: unknown }).notFound === true
 }
 
-/** A peak filter of stored spectra (ProSE stored the top peaks per window); NuXL desktop reads every peak: null. */
+/** The peak filter of an mz view: the `top` most intense peaks per `window` Th, and every annotated one. */
 export interface PeakFilter {
   top: number
   window: number
@@ -82,7 +87,7 @@ export interface LoadedSpectra {
   /** empty: NuXL desktop has no prediction */
   predicted: PredictedSpectra
   row: number
-  /** null: every peak of the file */
+  /** the mz view's peak filter; null: every peak of the file */
   peakFilter: PeakFilter | null
   /**
    * Why the spectrum has no peaks, for the PSM view (the input mzML is not where it was searched, an imported project
@@ -778,7 +783,8 @@ export async function countTargetPsms(files: SearchFiles): Promise<number> {
 
 
 //------------------------------------------------------------------------------
-// The spectra of the PSMs: from the input mzML (a .raw/.d's converted spectra), by byte range
+// The spectra of the PSMs: from the run's mz view by row group; of an older search from the input mzML (a .raw/.d's
+// converted spectra), by byte range
 
 /** The PSMs whose loads are kept (the last ones opened). */
 const CACHED_LOADS = 8
@@ -807,6 +813,104 @@ function storedSpectra(s: MzmlSpectrum, precursorMz: number): StoredSpectra {
   }
 }
 
+/** The row groups of an mz view that are kept decoded (the last ones opened). */
+const CACHED_GROUPS = 4
+
+/** The columns of the mz view the PSM view reads. */
+const MZ_COLUMNS = ['id', 'scan_start_time', 'precursors', 'mz', 'intensity']
+
+/** An mz view's footer, and where its rows are: row group g has the rows starts[g] .. starts[g + 1]; its rows by id. */
+interface MzView {
+  name: string
+  metadata: FileMetaData
+  starts: number[]
+  /** the row of each native ID (of several rows of one ID, which OpenNuXL does not write, the first) */
+  rowOf: Map<string, number>
+  filter: PeakFilter | null
+}
+
+/** The row group of `row` and its row in it. */
+function groupOf(view: MzView, row: number): [number, number] {
+  let g = 0
+  while (g + 1 < view.starts.length - 1 && row >= view.starts[g + 1]) g++
+  return [g, row - view.starts[g]]
+}
+
+/** The rows of a row group of an mz view: their ids, RT (minutes) and peaks (spectrum r = row r of the group). */
+interface MzGroup {
+  id: unknown[]
+  startTime: ArrayLike<number>
+  spectra: StoredSpectra
+}
+
+/** The columns `columns` of row group `g` of the Parquet file `name` (one byte range for all of them). */
+async function groupColumns(files: SearchFiles, name: string, metadata: FileMetaData, g: number, columns: string[]): Promise<ParquetFile> {
+  const chunks = metadata.row_groups[g].columns.filter((c) => c.meta_data && columns.includes(c.meta_data.path_in_schema[0]))
+  const present = new Set(chunks.map((c) => c.meta_data!.path_in_schema[0]))
+  const missing = columns.filter((c) => !present.has(c))
+  if (missing.length > 0) throw new Error(`it is not a QPX mz view: it has no ${missing.join(', ')}`)
+  const ranges = chunks.map((c) => chunkRange(c.meta_data!))
+  const start = Math.min(...ranges.map((r) => r.start))
+  const end = Math.max(...ranges.map((r) => r.end))
+  const bytes = await files(name, { offset: start, length: end - start })
+  if (bytes.byteLength !== end - start) throw new Error(`${bytes.byteLength} bytes at ${start}, expected ${end - start}`)
+  return partOfParquet(metadata, bytes, start)
+}
+
+/** The footer and the row index of the mz view `name` (its ids, all row groups). */
+async function openMzView(files: SearchFiles, name: string): Promise<MzView> {
+  await startZstd()
+  let metadata = metadataOfTail(await files(name, { tail: 1 << 16 }))
+  if (typeof metadata === 'number') metadata = metadataOfTail(await files(name, { tail: metadata }))
+  if (typeof metadata === 'number') throw new Error('its footer cannot be read')
+  const starts = [0]
+  for (const g of metadata.row_groups) starts.push(starts[starts.length - 1] + Number(g.num_rows))
+  const rowOf = new Map<string, number>()
+  for (let g = 0; g < metadata.row_groups.length; g++) {
+    const file = await groupColumns(files, name, metadata, g, ['id'])
+    const ids = readLeaf(file, ['id'], 'values', [g]).values as unknown[]
+    ids.forEach((id, r) => {
+      const key = String(id)
+      if (!rowOf.has(key)) rowOf.set(key, starts[g] + r)
+    })
+  }
+  const footer = new Map((metadata.key_value_metadata ?? []).map((kv) => [kv.key, kv.value ?? '']))
+  const top = Number(footer.get('nuxl_peak_top') ?? 0)
+  const window = Number(footer.get('nuxl_peak_window') ?? 0)
+  return { name, metadata, starts, rowOf, filter: top > 0 && window > 0 ? { top, window } : null }
+}
+
+/** The rows of row group `g` of the mz view `view`. */
+async function readMzGroup(files: SearchFiles, view: MzView, g: number): Promise<MzGroup> {
+  const file = await groupColumns(files, view.name, view.metadata, g, MZ_COLUMNS)
+  const groups = [g]
+  const id = readLeaf(file, ['id'], 'values', groups).values as unknown[]
+  const startTime = readLeaf(file, ['scan_start_time'], 'values', groups).values as ArrayLike<number>
+  const mz = readLeaf(file, ['mz', 'list', 'element'], 'values', groups)
+  const intensity = readLeaf(file, ['intensity', 'list', 'element'], 'values', groups)
+  const precursor = readLeaf(file, ['precursors', 'list', 'element', 'selected_ion_mz'], 'values', groups)
+  const n = id.length
+  const precursorMz = new Float64Array(n).fill(NaN)
+  for (let r = 0; r < n; r++) {
+    if (intensity.offsets![r] !== mz.offsets![r] || intensity.offsets![r + 1] !== mz.offsets![r + 1]) {
+      throw new Error(`its row ${view.starts[g] + r} has other numbers of peak m/z and intensities`)
+    }
+    if (precursor.offsets![r + 1] > precursor.offsets![r]) precursorMz[r] = (precursor.values as ArrayLike<number>)[precursor.offsets![r]]
+  }
+  return {
+    id,
+    startTime,
+    spectra: {
+      psmSpectrum: Int32Array.from({ length: n }, (_, r) => r),
+      offsets: mz.offsets!,
+      mz: Float32Array.from(mz.values as ArrayLike<number>),
+      intensity: Float32Array.from(intensity.values as ArrayLike<number>),
+      precursorMz,
+      collisionEnergy: new Float32Array(n).fill(NaN),
+    },
+  }
+}
+
 /**
  * The mzML of a PSM's spectra, as a range reader: the input's link in the folder, else (moved links) the path it was
  * searched at; of a .raw/.d input, the folder's file of its converted spectra.
@@ -831,6 +935,56 @@ class Missing extends Error {}
 function psmSpectra(files: SearchFiles, inputs: InputRecord[], runs: (RunOutputs | null)[], psms: ResultTables['psms']): PsmSpectra {
   const indexes = new Map<number, Promise<{ file: InputFile; index: SpectrumIndex }>>()
   const loads = new Map<number, Promise<LoadedSpectra>>()
+  const views = new Map<number, Promise<MzView>>()
+  const groups = new Map<string, Promise<MzGroup>>()
+
+  /** A value made once, kept until it fails. */
+  const once = <K, T>(map: Map<K, Promise<T>>, key: K, make: () => Promise<T>): Promise<T> => {
+    let p = map.get(key)
+    if (p) {
+      // (used last)
+      map.delete(key)
+    } else {
+      p = make()
+      p.catch(() => map.delete(key))
+    }
+    map.set(key, p)
+    return p
+  }
+
+  /**
+   * The peaks of PSM row `row` from the mz view `name` of its input `input`: the row of its native ID `id`, which has
+   * to be at its RT (of several spectra of one native ID the view has the first's). Missing when the file is not
+   * there; a file that is not an mz view fails with its name.
+   */
+  const fromMzView = async (row: number, k: number, input: InputRecord, id: string, name: string) => {
+    let view: MzView
+    try {
+      view = await once(views, k, () => openMzView(files, name))
+    } catch (e) {
+      if (isNotFound(e)) throw new Missing(`The spectra of ${input.name} are not in the search folder (${name}); the PSM view shows the annotated peaks only.`)
+      throw new Missing(`${input.name}: its spectra (${name}) cannot be read: ${errorText(e)}`)
+    }
+    const m = view.rowOf.get(id)
+    if (m === undefined) throw new Missing(`${input.name}: OpenNuXL kept no spectrum ${id}.`)
+    const [g, at] = groupOf(view, m)
+    let group: MzGroup
+    try {
+      group = await once(groups, `${k}/${g}`, () => readMzGroup(files, view, g))
+    } catch (e) {
+      throw new Missing(`${input.name}: its spectra (${name}) cannot be read: ${errorText(e)}`)
+    } finally {
+      for (const key of [...groups.keys()].slice(0, Math.max(0, groups.size - CACHED_GROUPS))) groups.delete(key)
+    }
+    if (String(group.id[at]) !== id) throw new Missing(`${input.name}: its spectra (${name}) have the spectrum ${String(group.id[at])} where ${id} should be.`)
+    const rt = psms.rt[row]
+    if (Number.isFinite(rt) && rt >= 0 && Math.abs(group.startTime[at] * 60 - rt) > 0.05) {
+      throw new Missing(`${input.name}: the spectrum ${id} that OpenNuXL kept is another one than the PSM's (at another RT).`)
+    }
+    const spectra = group.spectra
+    if (Number.isNaN(spectra.precursorMz[at])) spectra.precursorMz[at] = psms.mz[row]
+    return { spectra, spectrumRow: at, peakFilter: view.filter }
+  }
 
   /**
    * The input's mzML: the first of its link and its path that exists. A refusal (an imported project) is final. Of a
@@ -898,6 +1052,19 @@ function psmSpectra(files: SearchFiles, inputs: InputRecord[], runs: (RunOutputs
     const id = psms.nativeId[row]
     if (!input) return result(NO_PEAKS(psms.mz[row]), 'The PSM has no input file.')
     if (id === '') return result(NO_PEAKS(psms.mz[row]), 'The PSM has no native ID of its spectrum.')
+    // the run's mz view (a search of an app before 0.7 has none: `mz` undefined)
+    const view = runs[k]?.mz
+    if (view === null) {
+      return result(NO_PEAKS(psms.mz[row]), `OpenNuXL could not keep the spectra of ${input.name} (the Overview's notes say why); the PSM view shows the annotated peaks only.`)
+    }
+    if (view !== undefined) {
+      try {
+        const found = await fromMzView(row, k, input, id, view)
+        return { ...result(found.spectra, null), spectrumRow: found.spectrumRow, peakFilter: found.peakFilter }
+      } catch (e) {
+        return result(NO_PEAKS(psms.mz[row]), errorText(e))
+      }
+    }
     let file: InputFile | null = null
     try {
       let found = await indexOf(k)

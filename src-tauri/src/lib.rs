@@ -1,9 +1,9 @@
 //! NuXL desktop: the Tauri shell around OpenNuXL of OpenMS (protein–nucleic acid cross-links).
 //!
 //! The shim (`tool`, `args`, `progress`, `run`) runs the tool for a search request, once per input (an mzML, a
-//! Thermo .raw file or a Bruker timsTOF .d folder) and one after the other (`docs/design.md`), converts the spectra
-//! of a .raw or .d input to mzML after its run (FileConverter) for the PSM view, and reports its progress; the
-//! commands and events below are what the front end sees:
+//! Thermo .raw file or a Bruker timsTOF .d folder) and one after the other (`docs/design.md`), each run writing the
+//! QPX mz view of its PSMs' spectra for the PSM view (`-out_qpx`), and reports its progress; the commands and events
+//! below are what the front end sees:
 //!
 //! - `tool_info` -> `{ version, path }`
 //! - `start_search(request)` -> `{ searchId }`; `cancel_search(searchId)`
@@ -13,8 +13,9 @@
 //! - `read_search_file(searchId, name, tail?, offset?, length?)` -> the bytes of a file of the search's folder
 //!   (with `tail`: its last `tail` bytes; with `offset` and `length`: those bytes), of the database its
 //!   database.json records, or, by `tail` or `offset` and `length` only, of an input's mzML, named by its link
-//!   (`<n>__<name>`) or its path in inputs.json (`files`; rejects `{ notFound, message }`). The spectra of a .raw
-//!   or .d input are the folder's `nuxl/<stem>.spectra.mzML` (its outputs.json's `spectra`)
+//!   (`<n>__<name>`) or its path in inputs.json (`files`; rejects `{ notFound, message }`). The spectra of the PSMs
+//!   are the folder's `nuxl/<stem>.mz.parquet` (outputs.json's `mz`; of a search of an app before 0.7 the input
+//!   mzML, or of a .raw or .d `nuxl/<stem>.spectra.mzML`)
 //! - `inspect_files(paths)` -> `[{ path, name, size, spectra?, proteins?, residues?, error?, problem?, warnings }]`
 //!   (mzML, .raw and .d inputs, FASTA files)
 //! - `cpu_count()` -> the cores the search's threads may use
@@ -722,10 +723,11 @@ fn answer_close(
 /// usual; once its page has loaded it prints one line of JSON, `{"page": <url>, "resources": <the
 /// resource folder the app uses>, "tauriResources": <Tauri's, or why there is none>, "tool":
 /// <tool_info>, "percolatorAdapter": <whether PercolatorAdapter is beside the tool>, "fileConverter": <whether
-/// FileConverter is beside it>, "dotnet": <whether the bundle has its .NET runtime beside bin/>, "thermoBridge":
-/// <whether it has the Thermo bridge's managed part in share/OpenMS>}` (or `"error"` in place of `"tool"`), and
-/// exits: 0, or 1 when the tool cannot be used (or has no PercolatorAdapter or FileConverter beside it). A page
-/// that has not loaded after [`SMOKE_TIMEOUT`] ends the app with 2. It reads nothing and writes nothing else.
+/// FileConverter is beside it (the packages' start test converts with it; the app does not run it)>, "dotnet":
+/// <whether the bundle has its .NET runtime beside bin/>, "thermoBridge": <whether it has the Thermo bridge's managed
+/// part in share/OpenMS>}` (or `"error"` in place of `"tool"`), and exits: 0, or 1 when the tool cannot be used (or has
+/// no PercolatorAdapter beside it). A page that has not loaded after [`SMOKE_TIMEOUT`] ends the app with 2. It reads
+/// nothing and writes nothing else.
 pub const SMOKE_TEST: &str = "--smoke-test";
 const SMOKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
@@ -742,7 +744,7 @@ fn smoke_report(app: &AppHandle, page: &str) -> (i32, String) {
     });
     let (code, key, value, [adapter, converter, dotnet, bridge]) = match tool {
         Ok((info, siblings)) => (
-            if siblings[0] && siblings[1] { 0 } else { 1 },
+            if siblings[0] { 0 } else { 1 },
             "tool",
             serde_json::to_value(info).unwrap_or_default(),
             siblings,

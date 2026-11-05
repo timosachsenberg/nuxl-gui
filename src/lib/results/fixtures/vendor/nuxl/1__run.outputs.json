@@ -1,5 +1,5 @@
 {
-  "spectra": "nuxl/1__run.spectra.mzML",
+  "mz": "nuxl/1__run.mz.parquet",
   "input": 0,
   "all": "nuxl/1__run.idXML",
   "xls": "nuxl/1__run_1.0000_XLs.idXML",

@@ -6,7 +6,7 @@ use common::*;
 use nuxl_desktop_lib::args::{
     build_runs, build_runs_with, build_search_with, database_decoys, humanize, input_placements,
     input_records_with, input_stem, is_converted_spectra, is_input_link, link_name, max_stem,
-    plan_database, spectra_output, stems_clash, write_database, DatabasePlan, InputLinks,
+    mz_view_output, plan_database, stems_clash, write_database, DatabasePlan, InputLinks,
     Placement, SearchRequest, FILTER_STEPS, MAX_STEM,
 };
 use nuxl_desktop_lib::decoys::Marker;
@@ -146,6 +146,8 @@ fn the_command_line_of_a_run_is_the_designs() {
         "-percolator_backend",
         "builtin",
     ]));
+    // the QPX mz view of the PSMs' spectra, for the PSM view
+    expected.extend(["-out_qpx".into(), path("nuxl")]);
     assert_eq!(args, expected);
     // the shim's own options never come otherwise: no executable of Percolator (an empty one would turn the
     // rescoring off), no decoys switch (OpenNuXL writes its FDR outputs only with its own decoys)
@@ -636,11 +638,11 @@ fn a_d_folder_with_a_trailing_separator_is_the_folder() {
     assert_eq!(nuxl_desktop_lib::args::input_path("/"), "/");
 }
 
-/// The spectra conversion after the run of a .raw or .d input: FileConverter with the input OpenNuXL got, writing
-/// into nuxl/ under a temporary name, in the reader of OpenNuXL (.raw) or without the MS1 frames (.d); none for
-/// an mzML.
+/// Every run writes the QPX mz view of its PSMs' spectra for the PSM view (`-out_qpx` into the search folder's nuxl/),
+/// whatever its input; nothing else runs after it. The shim's name for it, and what it takes for spectra an earlier
+/// version converted.
 #[test]
-fn raw_and_d_inputs_get_a_conversion_of_their_spectra() {
+fn every_run_writes_the_mz_view_of_its_psms() {
     let i = inputs();
     let out = i.dir.path().join("o");
     let raw = i.dir.write("data/a.raw", "x");
@@ -654,36 +656,15 @@ fn raw_and_d_inputs_get_a_conversion_of_their_spectra() {
     let plan = plan_database(&req).unwrap();
     let search = build_search_with(&req, &out, InputLinks::Symlinks, &plan).unwrap();
     assert_eq!(search.runs.len(), 3);
-    assert_eq!(search.conversions[0], None, "an mzML is read where it is");
-    let common = |input: &str, stem: &str| -> Vec<OsString> {
-        vec![
-            "-in".into(),
-            out.join(input).into_os_string(),
-            "-out".into(),
-            out.join(format!("nuxl/{stem}.spectra.tmp.mzML"))
-                .into_os_string(),
-            "-out_type".into(),
-            "mzML".into(),
-            "-threads".into(),
-            "3".into(),
-            "-process_lowmemory".into(),
-            "-zstd_compression".into(),
-        ]
-    };
-    let mut raw_args = common("2__a.raw", "2__a");
-    raw_args.extend(strings(&["-RawToMzML:reader", "inprocess"]));
-    assert_eq!(search.conversions[1].as_ref(), Some(&raw_args));
-    let mut d_args = common("3__b.d", "3__b");
-    d_args.extend(strings(&["-bruker:load_ms1", "false"]));
-    assert_eq!(search.conversions[2].as_ref(), Some(&d_args));
-    // the same -in as OpenNuXL's run, never a lossy compression (Numpress, which the PSM view cannot decode)
-    for (run, conversion) in search.runs.iter().zip(&search.conversions) {
-        if let Some(conversion) = conversion {
-            assert_eq!(values_of(run, "-in"), values_of(conversion, "-in"));
-            assert!(!has(conversion, "-lossy_compression"));
-        }
+    for run in &search.runs {
+        assert_eq!(
+            values_of(run, "-out_qpx"),
+            vec![out.join("nuxl").into_os_string()],
+            "{run:?}"
+        );
+        assert!(!has(run, "-qpx_peak_top") && !has(run, "-qpx_peak_window"));
     }
-    assert_eq!(spectra_output("2__a"), "nuxl/2__a.spectra.mzML");
+    assert_eq!(mz_view_output("2__a"), "nuxl/2__a.mz.parquet");
     for name in ["nuxl/2__a.spectra.mzML", "nuxl/x.spectra.tmp.mzML"] {
         assert!(is_converted_spectra(name), "{name}");
     }
@@ -692,6 +673,7 @@ fn raw_and_d_inputs_get_a_conversion_of_their_spectra() {
         "nuxl/sub/a.spectra.mzML",
         "nuxl/a.mzML",
         "nuxlx/a.spectra.mzML",
+        "nuxl/2__a.mz.parquet",
     ] {
         assert!(!is_converted_spectra(name), "{name}");
     }
@@ -1626,19 +1608,23 @@ fn a_search_ends_with_done_its_outputs_recorded_and_the_partial_folder_becomes_t
         "proteins": format!("nuxl/{stem}_perc_proteins0.0100_XLs.tsv"),
         "report": format!("nuxl/{stem}_perc.tsv"),
         "percolator": true,
-        // (an mzML is read where it is: no spectra of the search's own)
-        "spectra": null,
+        // (the QPX mz view of the run, which OpenNuXL wrote into nuxl/runs/)
+        "mz": format!("nuxl/{stem}.mz.parquet"),
         "notes": ["autotune: too few non-cross-linked peptides found. Will keep parameters as-is."],
         "seconds": seconds,
         "fdr": { "peptide": 0.01, "xl": 0.01 },
     });
     assert_eq!(outputs, expected);
-    for key in ["all", "xls", "peptides", "proteins", "report"] {
+    for key in ["all", "xls", "peptides", "proteins", "report", "mz"] {
         assert!(
             folder.join(outputs[key].as_str().unwrap()).is_file(),
             "{key}"
         );
     }
+    assert!(
+        !folder.join("nuxl/runs").exists(),
+        "nothing is left in nuxl/runs"
+    );
     expected["percolator"] = json!(false);
 
     // the log: the run's command line, then its output
@@ -1884,22 +1870,18 @@ fn the_tools_debug_table_beside_the_input_is_not_left_behind() {
     assert_eq!(left, ["b.mzML", "c.mzML", "c.mzML.ambiguous_masses.csv"]);
 }
 
-// ---- .raw and .d inputs: the spectra for the PSM view ----------------------------------------
+// ---- the spectra for the PSM view: OpenNuXL's QPX mz view of each run ------------------------------
 
-/// The spectra the fake FileConverter writes (a copy of OpenMS' OpenNuXL test run, indexed).
-fn converted_fixture() -> Vec<u8> {
-    fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../src/lib/results/fixtures/spectra/OpenNuXL_1_input.indexed.mzML"),
-    )
-    .unwrap()
+/// The text of the fake's mz view of the input `-in` (a placeholder; real ones are the e2e fixtures').
+fn fake_view_of(view: &Path) -> String {
+    String::from_utf8(fs::read(view).unwrap()).unwrap()
 }
 
-/// A search of an mzML, a Thermo .raw and a Bruker .d: each searched with the reader's progress, the spectra of
-/// the .raw and the .d converted after their runs into nuxl/ (with their own progress, FileConverter's command
-/// line in the log), and recorded in outputs.json; the mzML's not.
+/// A search of an mzML, a Thermo .raw and a Bruker .d: each run's mz view, which OpenNuXL writes into nuxl/runs/
+/// (named after its -in) after its other outputs, is moved to nuxl/<stem>.mz.parquet and recorded in outputs.json,
+/// with the progress of its last step; nothing is left in nuxl/runs/, beside the inputs or in the search folder.
 #[test]
-fn the_spectra_of_raw_and_d_inputs_are_converted_after_their_runs_and_recorded() {
+fn every_runs_mz_view_is_moved_into_place_and_recorded() {
     let run = Run::new();
     let i = inputs();
     let raw = i.dir.write("data/b.raw", "raw");
@@ -1916,48 +1898,47 @@ fn the_spectra_of_raw_and_d_inputs_are_converted_after_their_runs_and_recorded()
         "Reading the spectra of a.mzML (1 of 3)...",
         "Reading the spectra of b.raw (2 of 3)...",
         "Reading the spectra of c.d (3 of 3)...",
+        "Preparing the spectra of a.mzML for the PSM view (1 of 3)...",
         "Preparing the spectra of b.raw for the PSM view (2 of 3)...",
         "Preparing the spectra of c.d for the PSM view (3 of 3)...",
     ] {
         assert!(labels.contains(&label), "{label} in {labels:?}");
     }
-    assert!(
-        !labels.iter().any(|l| l.contains("a.mzML for the PSM view")),
-        "{labels:?}"
-    );
     for pair in progress.windows(2) {
         assert!(pair[1].2 >= pair[0].2, "{pair:?}");
     }
-    // the conversion is in its run's part of the bar
-    let converting = progress
+    // the mz view is in its run's part of the bar
+    let view = progress
         .iter()
         .find(|p| p.0.starts_with("Preparing the spectra of b.raw for"))
         .unwrap();
     assert!(
-        converting.1 == 1 && converting.2 > 1.0 / 3.0 && converting.2 < 2.0 / 3.0,
-        "{converting:?}"
+        view.1 == 1 && view.2 > 1.0 / 3.0 && view.2 < 2.0 / 3.0,
+        "{view:?}"
     );
 
-    let mzml = outputs_of(&folder, &stem_of(0, "a.mzML"));
-    assert_eq!(mzml["spectra"], Value::Null, "{mzml}");
-    for (k, name) in [(1, "b.raw"), (2, "c.d")] {
-        let stem = match InputLinks::PLATFORM {
-            InputLinks::Symlinks => format!("{}__{}", k + 1, input_stem(name)),
-            InputLinks::PathsOrHardLinks => input_stem(name),
-        };
+    for (k, name) in [(0, "a.mzML"), (1, "b.raw"), (2, "c.d")] {
+        let stem = stem_of(k, name);
         let outputs = outputs_of(&folder, &stem);
         assert_eq!(
-            outputs["spectra"],
-            json!(format!("nuxl/{stem}.spectra.mzML")),
+            outputs["mz"],
+            json!(format!("nuxl/{stem}.mz.parquet")),
             "{outputs}"
         );
-        assert_eq!(
-            fs::read(folder.join(format!("nuxl/{stem}.spectra.mzML"))).unwrap(),
-            converted_fixture()
+        // the view of this run's input (OpenNuXL's -in)
+        let nuxl_argv = fs::read_to_string(folder.join(format!("nuxl/{stem}.argv.txt"))).unwrap();
+        let lines: Vec<&str> = nuxl_argv.lines().collect();
+        let input = lines[lines.iter().position(|l| *l == "-in").unwrap() + 1];
+        let qpx = lines[lines.iter().position(|l| *l == "-out_qpx").unwrap() + 1];
+        assert!(qpx.ends_with("nuxl"), "{qpx}");
+        let text = fake_view_of(&folder.join(format!("nuxl/{stem}.mz.parquet")));
+        assert!(
+            text.contains(&format!(
+                "the fake mz view of {}",
+                input.trim_end_matches(['/', '\\'])
+            )),
+            "{text}"
         );
-        assert!(!folder
-            .join(format!("nuxl/{stem}.spectra.tmp.mzML"))
-            .exists());
         assert!(
             !outputs["notes"]
                 .as_array()
@@ -1966,34 +1947,13 @@ fn the_spectra_of_raw_and_d_inputs_are_converted_after_their_runs_and_recorded()
                 .any(|n| n.as_str().unwrap().contains("PSM view")),
             "{outputs}"
         );
-        // FileConverter got OpenNuXL's -in, and the reader's options
-        let argv =
-            fs::read_to_string(folder.join(format!("nuxl/{stem}.FileConverter.argv.txt"))).unwrap();
-        let nuxl_argv = fs::read_to_string(folder.join(format!("nuxl/{stem}.argv.txt"))).unwrap();
-        let input_of = |argv: &str| {
-            let lines: Vec<&str> = argv.lines().collect();
-            lines[lines.iter().position(|l| *l == "-in").unwrap() + 1].to_string()
-        };
-        assert_eq!(input_of(&argv), input_of(&nuxl_argv));
-        assert!(
-            argv.contains("-process_lowmemory\n-zstd_compression\n"),
-            "{argv}"
-        );
-        let reader = if name.ends_with(".raw") {
-            "-RawToMzML:reader\ninprocess\n"
-        } else {
-            "-bruker:load_ms1\nfalse\n"
-        };
-        assert!(argv.contains(reader), "{argv}");
     }
+    assert!(!folder.join("nuxl/runs").exists());
     let log = fs::read_to_string(folder.join("nuxl.log")).unwrap();
     let commands: Vec<&str> = log.lines().filter(|l| l.starts_with("$ ")).collect();
-    assert_eq!(commands.len(), 5, "three runs, two conversions: {log}");
-    assert!(
-        commands[2].contains("FileConverter") && commands[4].contains("FileConverter"),
-        "{commands:?}"
-    );
-    // the inputs are the user's: nothing beside them (OpenNuXL's debug table goes, FileConverter writes into nuxl/)
+    assert_eq!(commands.len(), 3, "three runs, nothing else: {log}");
+    assert_eq!(log.matches("-out_qpx: wrote ").count(), 3, "{log}");
+    // the inputs are the user's: nothing beside them (OpenNuXL's debug table goes)
     let mut left: Vec<String> = fs::read_dir(i.dir.path().join("data"))
         .unwrap()
         .flatten()
@@ -2018,10 +1978,10 @@ fn the_spectra_of_raw_and_d_inputs_are_converted_after_their_runs_and_recorded()
     );
 }
 
-/// Windows' way (on any platform): a .d folder by its own path beside a .raw of its name as a hard link; the
-/// conversions get those, and nothing is left beside the user's folder or in the search folder.
+/// Windows' way (on any platform): a .d folder by its own path, beside a .raw of its name as a hard link. OpenNuXL
+/// names each view after its -in (the user's `a`, the link's `2__a`); the shim moves each to its stem's name.
 #[test]
-fn the_windows_way_converts_a_d_by_its_own_path_and_a_raw_through_its_hard_link() {
+fn the_windows_way_moves_the_views_of_own_paths_and_hard_links() {
     let run = Run::with_links(InputLinks::PathsOrHardLinks);
     let i = inputs();
     let d = bruker_d(&i.dir, "data/a.d");
@@ -2029,18 +1989,12 @@ fn the_windows_way_converts_a_d_by_its_own_path_and_a_raw_through_its_hard_link(
     let (_, rx) = run.start(request(&[&d, &raw], &i.fasta, false, json!({})), None);
     let folder = done_folder(&until_terminal(&rx, WAIT));
     let own = outputs_of(&folder, "a");
-    assert_eq!(own["spectra"], json!("nuxl/a.spectra.mzML"), "{own}");
+    assert_eq!(own["mz"], json!("nuxl/a.mz.parquet"), "{own}");
+    assert!(fake_view_of(&folder.join("nuxl/a.mz.parquet")).contains(&format!("{}", d.display())));
     let linked = outputs_of(&folder, "2__a");
-    assert_eq!(
-        linked["spectra"],
-        json!("nuxl/2__a.spectra.mzML"),
-        "{linked}"
-    );
-    let argv = fs::read_to_string(folder.join("nuxl/a.FileConverter.argv.txt")).unwrap();
-    assert!(
-        argv.starts_with(&format!("-in\n{}\n", d.display())),
-        "{argv}"
-    );
+    assert_eq!(linked["mz"], json!("nuxl/2__a.mz.parquet"), "{linked}");
+    assert!(fake_view_of(&folder.join("nuxl/2__a.mz.parquet")).contains("2__a.raw"));
+    assert!(!folder.join("nuxl/runs").exists());
     let mut beside: Vec<String> = fs::read_dir(i.dir.path().join("data"))
         .unwrap()
         .flatten()
@@ -2051,19 +2005,18 @@ fn the_windows_way_converts_a_d_by_its_own_path_and_a_raw_through_its_hard_link(
     assert!(!folder.join("2__a.raw").exists(), "the hard link is gone");
 }
 
-/// A conversion that fails (FileConverter's error), writes nothing, or cannot run (no FileConverter beside
-/// OpenNuXL) fails not the search: the input's results are there, without spectra, and a note says why the PSM
-/// view shows the annotated peaks only.
+/// A run whose mz view OpenNuXL could not write (its `-out_qpx:` warning) fails not the search: the input's results
+/// are there, `mz` null, and a note says why the PSM view shows the annotated peaks only (OpenNuXL's warning, with
+/// the search's final folder for its partial one). The next input's view is its own.
 #[test]
-fn a_conversion_that_fails_leaves_a_note_and_not_a_failed_search() {
+fn an_mz_view_opennuxl_could_not_write_leaves_a_note_and_not_a_failed_search() {
     let run = Run::new();
     let i = inputs();
-    let fail = i.dir.write("data/convfail.raw", "raw");
-    let none = bruker_d(&i.dir, "data/convnone.d");
-    let (_, rx) = run.start(request(&[&fail, &none], &i.fasta, false, json!({})), None);
+    let fail = i.dir.write("data/qpxfail.raw", "raw");
+    let (_, rx) = run.start(request(&[&fail, &i.mzml], &i.fasta, false, json!({})), None);
     let folder = done_folder(&until_terminal(&rx, WAIT));
-    let failed = outputs_of(&folder, &stem_of(0, "convfail.raw"));
-    assert_eq!(failed["spectra"], Value::Null);
+    let failed = outputs_of(&folder, &stem_of(0, "qpxfail.raw"));
+    assert_eq!(failed["mz"], Value::Null, "{failed}");
     assert!(failed["all"].is_string(), "{failed}");
     let notes: Vec<&str> = failed["notes"]
         .as_array()
@@ -2073,95 +2026,32 @@ fn a_conversion_that_fails_leaves_a_note_and_not_a_failed_search() {
         .collect();
     let note = notes
         .iter()
-        .find(|n| n.starts_with("The PSM view shows the annotated peaks only: the spectra of convfail.raw could not be converted ("))
+        .find(|n| n.starts_with("The PSM view shows the annotated peaks only: the spectra of qpxfail.raw could not be kept ("))
         .unwrap_or_else(|| panic!("{notes:?}"));
     assert!(
-        note.contains("FileConverter ended with exit code 6")
-            && note.contains("Error: Unable to read file")
-            && !note.contains(".partial"),
+        note.contains("cannot be read again (the fake cannot)")
+            && !note.contains(".partial")
+            && !note.contains("-out_qpx:"),
         "{note}"
     );
-    let stem = stem_of(0, "convfail.raw");
-    assert!(!folder.join(format!("nuxl/{stem}.spectra.mzML")).exists());
+    assert!(
+        !notes.iter().any(|n| n.starts_with("-out_qpx:")),
+        "{notes:?}"
+    );
+    let next = outputs_of(&folder, &stem_of(1, "a.mzML"));
+    let stem = stem_of(1, "a.mzML");
+    assert_eq!(
+        next["mz"],
+        json!(format!("nuxl/{stem}.mz.parquet")),
+        "{next}"
+    );
+    assert!(fake_view_of(&folder.join(format!("nuxl/{stem}.mz.parquet"))).contains("a.mzML"));
     assert!(!folder
-        .join(format!("nuxl/{stem}.spectra.tmp.mzML"))
+        .join(format!("nuxl/{}.mz.parquet", stem_of(0, "qpxfail.raw")))
         .exists());
-
-    let empty = outputs_of(
-        &folder,
-        &match InputLinks::PLATFORM {
-            InputLinks::Symlinks => "2__convnone".to_string(),
-            InputLinks::PathsOrHardLinks => "convnone".to_string(),
-        },
-    );
-    assert_eq!(empty["spectra"], Value::Null);
-    assert!(
-        empty["notes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|n| n.as_str().unwrap().contains(
-                "the spectra of convnone.d could not be converted (FileConverter wrote no file)"
-            )),
-        "{empty}"
-    );
-
-    // no FileConverter beside OpenNuXL
-    let bare = Run::with(InputLinks::PLATFORM, FakeBundle::default());
-    let raw = i.dir.write("data/b.raw", "raw");
-    let (_, rx) = bare.start(request(&[&raw], &i.fasta, false, json!({})), None);
-    let folder = done_folder(&until_terminal(&rx, WAIT));
-    let outputs = outputs_of(&folder, &stem_of(0, "b.raw"));
-    assert_eq!(outputs["spectra"], Value::Null);
-    assert!(
-        outputs["notes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|n| n.as_str().unwrap().contains(&format!(
-                "there is no {} beside OpenNuXL",
-                tool::FILE_CONVERTER
-            ))),
-        "{outputs}"
-    );
 }
 
-/// Cancel during a conversion ends FileConverter (and what it started) as it ends OpenNuXL, and the search with
-/// it: no further run, no folder, no event but progress.
-#[test]
-fn cancel_during_a_conversion_ends_it_and_the_search() {
-    let run = Run::new();
-    let i = inputs();
-    let hang = i.dir.write("data/convhang.raw", "raw");
-    let (id, rx) = run.start(request(&[&hang, &i.mzml], &i.fasta, false, json!({})), None);
-    let id = id.unwrap();
-    let partial = run.dir().join(format!("{id}.partial"));
-    assert!(wait_for(WAIT, || read_pids(
-        &partial.join("converter-children.pid")
-    )
-    .len()
-        == 1));
-    let converter = read_pids(&partial.join("converter.pid"))[0];
-    let child = read_pids(&partial.join("converter-children.pid"))[0];
-    assert!(process_alive(converter) && process_alive(child));
-    run.searches.cancel(&id).unwrap();
-    assert!(!process_alive(converter), "FileConverter is gone");
-    assert!(
-        wait_for(Duration::from_secs(5), || !process_alive(child)),
-        "its child is gone"
-    );
-    assert!(run.listing().is_empty(), "{:?}", run.listing());
-    let events: Vec<SearchEvent> = rx.try_iter().collect();
-    assert!(events.iter().all(|e| matches!(e, SearchEvent::Progress(_))));
-    assert!(
-        progress_of(&events)
-            .iter()
-            .all(|p| !p.0.contains("(2 of 2)")),
-        "the second input's run never started: {events:?}"
-    );
-}
-
-/// The tools of a bundle run with its .NET runtime and Thermo bridge (OpenNuXL and FileConverter alike); a tool
+/// The tool of a bundle runs with its .NET runtime and Thermo bridge (which read a .raw, also for the mz view); a tool
 /// without them (a build tree's) with the user's environment.
 #[test]
 fn the_tools_run_with_the_bundles_dotnet_and_thermo_bridge() {
@@ -2178,27 +2068,23 @@ fn the_tools_run_with_the_bundles_dotnet_and_thermo_bridge() {
     let folder = done_folder(&until_terminal(&rx, WAIT));
     let root = run.tool.parent().unwrap().parent().unwrap();
     let stem = stem_of(0, "b.raw");
-    for dump in [
-        format!("nuxl/{stem}.env.txt"),
-        format!("nuxl/{stem}.FileConverter.env.txt"),
-    ] {
-        let env = env_dump(&folder.join(&dump));
-        let get = |name: &str| env.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
-        assert_eq!(get("DOTNET_ROOT"), root.join("dotnet").to_str(), "{dump}");
-        assert_eq!(
-            get("OPENMS_THERMO_MANAGED_DIR"),
-            root.join("share/OpenMS/openms_thermo_bridge/managed")
-                .to_str(),
-            "{dump}"
-        );
-        assert_eq!(get("DOTNET_ROLL_FORWARD"), Some("Major"), "{dump}");
-        assert_eq!(
-            get("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"),
-            Some("1"),
-            "{dump}"
-        );
-        assert_eq!(get("OPENMS_DISABLE_UPDATE_CHECK"), Some("ON"), "{dump}");
-    }
+    let dump = format!("nuxl/{stem}.env.txt");
+    let env = env_dump(&folder.join(&dump));
+    let get = |name: &str| env.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
+    assert_eq!(get("DOTNET_ROOT"), root.join("dotnet").to_str(), "{dump}");
+    assert_eq!(
+        get("OPENMS_THERMO_MANAGED_DIR"),
+        root.join("share/OpenMS/openms_thermo_bridge/managed")
+            .to_str(),
+        "{dump}"
+    );
+    assert_eq!(get("DOTNET_ROLL_FORWARD"), Some("Major"), "{dump}");
+    assert_eq!(
+        get("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"),
+        Some("1"),
+        "{dump}"
+    );
+    assert_eq!(get("OPENMS_DISABLE_UPDATE_CHECK"), Some("ON"), "{dump}");
 }
 
 /// The environment of the tools' command: with a bundle's .NET runtime its folder, and without the variables of the

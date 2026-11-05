@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 /// <reference types="node" />
 // The PSM view on the example search (fixtures/example: OpenNuXL's test output, one input with peptides and
-// cross-links; the input mzML is the app's example): the cross-link in the header (adduct, residue, the candidates of
-// the localization, FDR group, q-value at the cross-link FDR), the observed peaks with NuXL's annotation, and, when the
-// input mzML is not there, the reason in a quiet note and NuXL's annotated peaks instead.
+// cross-links, its QPX mz view; the input mzML is the app's example): the cross-link in the header (adduct, residue,
+// the candidates of the localization, FDR group, q-value at the cross-link FDR), the observed peaks with NuXL's
+// annotation (and the mz view's peak filter), and, when the spectra are not there, the reason in a quiet note and
+// NuXL's annotated peaks instead.
 import { readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { flushSync, mount, tick, unmount } from 'svelte'
@@ -23,10 +24,16 @@ import PsmView from './PsmView.svelte'
 const fixture = join(process.cwd(), 'src/lib/results/fixtures/example')
 const MZML = join(process.cwd(), 'src-tauri/resources/example/OpenNuXL_1_input.mzML')
 
-/** The example's folder; its input mzML there or not. */
-function files(withMzml: boolean): SearchFiles {
+/** The example's folder; its spectra (the run's mz view, the input mzML) there or not. */
+function files(withSpectra: boolean): SearchFiles {
   return async (name, range) => {
-    const path = /^\d+__.*\.mzML$/.test(name) ? (withMzml ? MZML : null) : name.startsWith('/') ? null : join(fixture, name)
+    const path = /^\d+__.*\.mzML$/.test(name)
+      ? withSpectra
+        ? MZML
+        : null
+      : name.startsWith('/') || (!withSpectra && name.endsWith('.mz.parquet'))
+        ? null
+        : join(fixture, name)
     if (path === null) throw new FileNotFound(name)
     try {
       return bytesOfRange(new Uint8Array(readFileSync(path)), range)
@@ -37,8 +44,8 @@ function files(withMzml: boolean): SearchFiles {
   }
 }
 
-async function open(withMzml: boolean, parameters: Record<string, unknown> = {}): Promise<OpenResult> {
-  const read = await readSearch(files(withMzml))
+async function open(withSpectra: boolean, parameters: Record<string, unknown> = {}): Promise<OpenResult> {
+  const read = await readSearch(files(withSpectra))
   return {
     id: 'example',
     createdAt: '2026-11-01T00:00:00Z',
@@ -75,8 +82,8 @@ describe('the PSM view', () => {
     document.body.innerHTML = ''
   })
 
-  async function show(withMzml: boolean, sequence: string, parameters: Record<string, unknown> = {}) {
-    const view = resultsViewFor(await open(withMzml, parameters))
+  async function show(withSpectra: boolean, sequence: string, parameters: Record<string, unknown> = {}) {
+    const view = resultsViewFor(await open(withSpectra, parameters))
     view.psm = { row: rowOf(view, sequence), origin: { kind: 'psms' } }
     const target = document.createElement('div')
     document.body.append(target)
@@ -127,6 +134,8 @@ describe('the PSM view', () => {
     expect(text('nuxl-scores')).toContain('total_loss_score')
     // no PeptDeep any more
     expect(target.textContent).not.toContain('PeptDeep')
+    // the peaks of the mz view, filtered as its footer says
+    expect(text('peak-filter-note')).toBe('Showing the top 100 peaks per 100 m/z, plus every peak NuXL annotated.')
   })
 
   it("says why the observed peaks are missing, and shows NuXL's annotated peaks instead", async () => {
@@ -140,6 +149,8 @@ describe('the PSM view', () => {
     expect(target.querySelectorAll('[data-testid="peak-label"]').length).toBeGreaterThan(0)
     expect(target.querySelector('[data-testid="spectrum-missing"]')).toBeNull()
     expect(view.spectrumExporter).not.toBeNull()
+    // (no filter note on NuXL's annotated peaks)
+    expect(text('peak-filter-note')).toBeNull()
   })
 
   it('says when a cross-link is not localized, and when a peptide PSM is above the peptide FDR', async () => {

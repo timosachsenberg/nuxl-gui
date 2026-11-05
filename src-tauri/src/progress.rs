@@ -25,7 +25,7 @@
 //! | `Calculating peptide and XL q-values.`                                  | `FDR: <name> (k of n)...`                   | 0.90         |
 //! | `Running percolator.`                                                   | `Percolator: <name> (k of n)...`            | 0.92         |
 //! | `Calculating peptide and XL q-values for percolator results.`           | `FDR: <name> (k of n)...`                   | 0.98         |
-//! | (a `.raw` or `.d` input's spectra are converted after the run: `run.rs`, [`ProgressTracker::start_conversion`]) | `Preparing the spectra of <name> for the PSM view (k of n)...` | 0.99 |
+//! | `-out_qpx: reading spectra` (the QPX mz view of the PSMs' spectra, after the other outputs)  | `Preparing the spectra of <name> for the PSM view (k of n)...` | 0.99 |
 //!
 //! `<name>` is the user's file name (the shim searches links named `<n>__<name>`; the tracker is given the
 //! original names). The scoring of the database is most of a run (the iPRG-sized runs of OpenNuXL's users spend
@@ -41,8 +41,8 @@
 //! `Running autotune...` and `IDFilter excludes`): that load is the autotune's, and moves nothing.
 //!
 //! A line that is not in the table gives no event; the fraction never goes back, so a step that comes again
-//! later in a run (OpenNuXL loads the mzML a second time for the post-processing) or a step of a run's stage
-//! that is over moves nothing.
+//! later in a run (OpenNuXL loads the mzML a second time for the post-processing, and reads the input once more for
+//! the mz view) or a step of a run's stage that is over moves nothing.
 
 /// Where each step is in a run's part of the bar (see the table above).
 const AUTOTUNE: f64 = 0.02;
@@ -57,7 +57,7 @@ const POST_PROCESSING: [f64; 3] = [0.80, 0.82, 0.86];
 const FDR: f64 = 0.90;
 const PERCOLATOR: f64 = 0.92;
 const PERCOLATOR_FDR: f64 = 0.98;
-const CONVERTING: f64 = 0.99;
+const MZ_VIEW: f64 = 0.99;
 
 /// The labels of the readers' loads of the spectra (OpenMS' FileHandler: MzMLFile, ThermoRawFile, BrukerTimsFile of
 /// TDF data, of TSF data).
@@ -101,8 +101,8 @@ enum Stage {
     PostProcessing,
     Fdr,
     Percolator,
-    /// The shim's conversion of the spectra after the run (FileConverter), which follows no line of OpenNuXL.
-    Converting,
+    /// The QPX mz view of the spectra of the PSMs (`-out_qpx`), after the other outputs.
+    MzView,
 }
 
 #[derive(Debug)]
@@ -230,25 +230,6 @@ impl ProgressTracker {
             .expect("the start of a run is reported")
     }
 
-    /// The spectra of input `file` are converted after its run (`run.rs`: FileConverter, for a `.raw` or `.d`):
-    /// `Preparing the spectra of <name> for the PSM view (k of n)...` near the end of the run's part. A line fed
-    /// after it moves nothing.
-    pub fn start_conversion(&mut self, file: usize) -> ProgressUpdate {
-        self.count = self.count.max(file + 1);
-        self.current = Some(file);
-        self.stage = Stage::Converting;
-        let name = self.names.get(file).map(String::as_str).unwrap_or("");
-        let label = format!(
-            "Preparing the spectra of {name} for the PSM view ({} of {})...",
-            file + 1,
-            self.count
-        );
-        let at = self.run_at(CONVERTING);
-        self.last = None;
-        self.report_at(label, file as i32, at)
-            .expect("the start of a conversion is reported")
-    }
-
     /// One line of the current run's stdout (its line end, `\n` or `\r`, removed); the progress it marks, if any.
     pub fn feed(&mut self, line: &str) -> Option<ProgressUpdate> {
         self.current?;
@@ -296,6 +277,16 @@ impl ProgressTracker {
                 PERCOLATOR,
                 self.label_of("Percolator:", true),
             );
+        }
+        if line.starts_with("-out_qpx: reading spectra") {
+            let file = self.current.unwrap_or(0);
+            let name = self.names.get(file).map(String::as_str).unwrap_or("");
+            let label = format!(
+                "Preparing the spectra of {name} for the PSM view ({} of {})...",
+                file + 1,
+                self.count
+            );
+            return self.step(Stage::MzView, MZ_VIEW, label);
         }
         None
     }
@@ -640,35 +631,38 @@ mod tests {
         }
     }
 
-    /// The conversion of a run's spectra (after the run) is near the end of the run's part, with its own label;
-    /// OpenNuXL's lines after it move nothing, and the next run starts at its part.
+    /// The mz view of a run's PSMs' spectra (`-out_qpx`, after its other outputs) is near the end of the run's part,
+    /// with its own label; the reading of the input for it moves nothing, and the next run starts at its part.
     #[test]
-    fn the_conversion_of_the_spectra_ends_the_runs_part() {
+    fn the_mz_view_ends_the_runs_part() {
         let mut tracker = ProgressTracker::new(vec!["a.raw".into(), "b.d".into()]);
         tracker.start_run(0);
         for line in run_lines(true) {
             tracker.feed(&line);
         }
         let before = tracker.fraction;
-        let p = tracker.start_conversion(0);
+        let p = tracker.feed("-out_qpx: reading spectra").unwrap();
         assert_eq!(
             p.label,
             "Preparing the spectra of a.raw for the PSM view (1 of 2)..."
         );
         assert_eq!(p.file, 0);
         assert!(
-            (p.fraction - CONVERTING / 2.0).abs() < 1e-9 && p.fraction >= before,
+            (p.fraction - MZ_VIEW / 2.0).abs() < 1e-9 && p.fraction >= before,
             "{p:?}"
         );
         assert!(tracker
             .feed("Progress of 'Loading Thermo RAW file':")
             .is_none());
         assert!(tracker.feed("50.00 %").is_none());
+        assert!(tracker
+            .feed("-out_qpx: writing /s/nuxl/runs/1__a.mz.parquet")
+            .is_none());
         assert_eq!(tracker.label(), p.label);
         let next = tracker.start_run(1);
         assert_eq!(next.label, "Searching b.d (2 of 2)...");
         assert!((next.fraction - 0.5).abs() < 1e-9);
-        let q = tracker.start_conversion(1);
+        let q = tracker.feed("  -out_qpx: reading spectra ").unwrap();
         assert!(q.fraction < 1.0 && q.fraction > next.fraction, "{q:?}");
     }
 

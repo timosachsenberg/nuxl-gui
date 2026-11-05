@@ -1,5 +1,5 @@
 {
-  "spectra": null,
+  "mz": null,
   "input": 1,
   "all": "nuxl/2__thermo.idXML",
   "xls": "nuxl/2__thermo_1.0000_XLs.idXML",
@@ -9,7 +9,7 @@
   "percolator": false,
   "notes": [
     "Too few PSMs for score recalibration. Skipped.",
-    "The PSM view shows the annotated peaks only: the spectra of thermo.raw could not be converted (FileConverter ended with exit code 1)."
+    "The PSM view shows the annotated peaks only: the spectra of thermo.raw could not be kept (the spectra of 2__thermo.raw cannot be read (no such file))."
   ],
   "seconds": 1.5,
   "fdr": {

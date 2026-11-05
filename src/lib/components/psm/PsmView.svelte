@@ -4,8 +4,10 @@
   // (SVG)"; the peptide with
   // its fragment ladder; whether the PSM is a cross-link, its adduct and cross-linked residue, its FDR group and q-value
   // at that group's FDR; the spectrum with NuXL's own annotation (the hit's fragment_annotation: shifted ions, marker
-  // ions, precursor, immonium and internal ions) on the observed peaks read from the input mzML (of a .raw or .d, the mzML
-  // of its spectra the search wrote), or, when they cannot be read, on the peaks NuXL annotated; mirrored against the
+  // ions, precursor, immonium and internal ions) on the observed peaks of its run's QPX mz view (OpenNuXL's -out_qpx;
+  // the top peaks per window and every annotated one, which a note says; of a search of an app before 0.7, from the
+  // input mzML or the mzML of a .raw or .d's spectra the search wrote), or, when they cannot be read, on the peaks NuXL
+  // annotated; mirrored against the
   // theoretical b/y spectrum of the linear peptide (psm/annotate.ts), with ion, charge, shift, precursor and loss toggles
   // (NuXL's precursor peaks shown unless switched off; the precursor's m/z is marked in the spectrum always); the ion
   // table, the fragment mass errors of the annotated ions shown, each against its m/z as OpenNuXL computes it
@@ -146,6 +148,8 @@
   const spectra = $derived(loaded && loaded.row === row && loaded.source === source ? loaded : null)
   const observed = $derived(spectra?.data && spectra.data.missing === null ? spectrumPeaks(spectra.data.spectra, spectra.data.spectrumRow) : null)
   const nuxlPeaks = $derived(spectra?.data?.annotation ?? [])
+  /** The peak filter of the mz view the peaks come from (OpenNuXL's -out_qpx); null: every peak of the file. */
+  const peakFilter = $derived(observed ? (spectra?.data?.peakFilter ?? null) : null)
   /** Why the observed peaks are not shown (the reader's words), when they are not. */
   const missing = $derived(spectra?.data && !observed ? (spectra.data.missing ?? 'The spectrum has no peaks.') : null)
   /**
@@ -738,6 +742,11 @@
         {measure}
         precursor={precursorMark}
         bind:pending={toolPending} />
+      {#if peakFilter}
+        <p class="pb-1 text-xs text-muted-foreground" data-testid="peak-filter-note">
+          Showing the top {peakFilter.top} peaks per {peakFilter.window} m/z, plus every peak NuXL annotated.
+        </p>
+      {/if}
       {#if annotationError}
         <p class="pb-1 text-xs text-muted-foreground" role="status">The theoretical spectrum could not be computed: {annotationError}</p>
       {/if}

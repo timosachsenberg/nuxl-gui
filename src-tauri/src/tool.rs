@@ -3,9 +3,10 @@
 //!
 //! OpenNuXL rescores with Percolator through another OpenMS tool, `PercolatorAdapter`, which it looks for
 //! beside its own executable (`File::findSiblingTOPPExecutable`), then on the PATH. The bundle has both in
-//! one `bin/` (`native/scripts/bundle-nuxl.sh`); a tool of a build tree has its sibling there too. The shim runs
-//! `FileConverter` from the same folder ([`file_converter`]) to write the spectra of a `.raw` or `.d` input as mzML
-//! for the PSM view. OpenMS finds its data (`share/OpenMS`: CHEMISTRY, the NUXL presets) next to the executable,
+//! one `bin/` (`native/scripts/bundle-nuxl.sh`); a tool of a build tree has its sibling there too. The bundle has
+//! `FileConverter` there as well ([`file_converter`]), which its start test converts a `.raw` and a `.d` with
+//! (`native/scripts/start-test.sh`); the app does not run it (OpenNuXL writes the spectra of its PSMs for the PSM
+//! view itself: `-out_qpx`). OpenMS finds its data (`share/OpenMS`: CHEMISTRY, the NUXL presets) next to the executable,
 //! `bin/../share/OpenMS`, which the bundle provides (and whose compiled-in alternatives it rules out), so the app
 //! sets no data path.
 //!
@@ -126,8 +127,8 @@ pub fn has_percolator_adapter(path: &Path) -> bool {
         .is_some_and(|bin| bin.join(PERCOLATOR_ADAPTER).is_file())
 }
 
-/// `FileConverter` beside the tool at `path` (the bundle's `bin/`, a build tree's), if it is there. Without it
-/// the spectra of a `.raw` or `.d` input are not converted, and the PSM view shows the annotated peaks only.
+/// `FileConverter` beside the tool at `path` (the bundle's `bin/`, a build tree's), if it is there: the smoke test
+/// reports it (the packages' start test converts with it).
 pub fn file_converter(path: &Path) -> Option<PathBuf> {
     path.parent()
         .map(|bin| bin.join(FILE_CONVERTER))

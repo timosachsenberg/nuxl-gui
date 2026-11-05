@@ -15,7 +15,12 @@
 //!   diskfull  writes OpenMS' error of an output it cannot write, exit code 12
 //!   fewpsms   as a search, but "Too few PSMs for score recalibration. Skipped." (stderr, also with
 //!             -percolator_backend none, as OpenNuXL prints it), no _perc_ files
+//!   qpxfail   as a search, but with `-out_qpx` its warning that the spectra cannot be read again and no mz view
+//!             (also for any input with `FAKE_NUXL_QPX_FAIL=1`)
 //!   <other>   searches the input and exits 0
+//!
+//! With `-out_qpx <dir>` a search ends as OpenNuXL's: `-out_qpx: reading spectra`, the reader's progress label,
+//! `-out_qpx: writing <dir>/runs/<basename of -in>.mz.parquet`, a placeholder file (PAR1 ... PAR1), `-out_qpx: wrote`.
 //!
 //! An input may be an mzML, a Thermo `.raw` (a file) or a Bruker `.d` (a folder): its spectra are read with the
 //! reader's progress label (`loading mzML`, `Loading Thermo RAW file`, `Loading DDA-PASEF data`). Beside -in it
@@ -51,6 +56,41 @@ fn ignore_sigterm() {
 
 #[cfg(not(unix))]
 fn ignore_sigterm() {}
+
+/// `-out_qpx`: the QPX mz view of the run's PSMs' spectra in `<dir>/runs/<basename of -in>.mz.parquet` (a placeholder),
+/// with OpenNuXL's lines; for `qpxfail` (or `FAKE_NUXL_QPX_FAIL=1`) its warning and no file.
+fn write_mz_view(dir: &str, input: &str, mode: &str, loading: &str) {
+    out("-out_qpx: reading spectra\n");
+    progress(loading);
+    done_line();
+    if mode == "qpxfail" || std::env::var("FAKE_NUXL_QPX_FAIL").is_ok_and(|v| v == "1") {
+        eprintln!("-out_qpx: the spectra of {input} cannot be read again (the fake cannot); no mz view is written");
+        return;
+    }
+    let input = input.trim_end_matches(['/', '\\']);
+    let name = Path::new(input)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let lower = name.to_ascii_lowercase();
+    let base = [".mzml", ".raw", ".d"]
+        .iter()
+        .find(|e| lower.ends_with(*e))
+        .map_or(name.as_str(), |e| &name[..name.len() - e.len()]);
+    let runs = Path::new(dir).join("runs");
+    if let Err(e) = fs::create_dir_all(&runs) {
+        eprintln!("-out_qpx: {} cannot be made ({e})", runs.display());
+        return;
+    }
+    let view = runs.join(format!("{base}.mz.parquet"));
+    out(&format!("-out_qpx: writing {}\n", view.display()));
+    fs::write(&view, format!("PAR1 the fake mz view of {input} PAR1")).unwrap();
+    out(&format!(
+        "-out_qpx: wrote {} (20 spectra, 1500 of 1500 peaks)\n",
+        view.display()
+    ));
+}
 
 /// Ends the process as a crash does: SIGSEGV.
 #[cfg(unix)]
@@ -260,6 +300,7 @@ fn main() {
     }
 
     let (mut input, mut output, mut tsv) = (String::new(), String::new(), String::new());
+    let mut out_qpx = String::new();
     let mut backend = "builtin".to_string();
     let mut thresholds: Vec<f64> = Vec::new();
     let mut i = 0;
@@ -269,6 +310,7 @@ fn main() {
             "-in" => input = value,
             "-out" => output = value,
             "-out_tsv" => tsv = value,
+            "-out_qpx" => out_qpx = value,
             "-percolator_backend" => backend = value,
             "-report:xlFDR" => {
                 i += 1;
@@ -432,6 +474,9 @@ fn main() {
     }
     if !tsv.is_empty() {
         fs::write(&tsv, "report\n").unwrap();
+    }
+    if !out_qpx.is_empty() {
+        write_mz_view(&out_qpx, &input, mode, loading);
     }
     out("OpenNuXL took 0.10 s (wall), 0.10 s (CPU), 0.00 s (system), 0.10 s (user); Peak Memory Usage: 10 MB.\n");
     exit(0);

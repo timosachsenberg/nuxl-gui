@@ -22,7 +22,12 @@
 //   FalseDiscoveryRate::apply(ids, true) gives it in each group: the q-values of the best target and the best decoy
 //   score of each unmodified sequence, the hit getting its sequence's of its own kind (before the tie-break).
 //
-// `all` of outputs.json names OpenNuXL's -out, which is not kept (the reader never reads it).
+// `all` of outputs.json names OpenNuXL's -out, which is not kept (the reader never reads it). `mz` names the run's QPX mz
+// view (`nuxl/<stem>.mz.parquet`, OpenNuXL's -out_qpx, which the shim moves there): the MS2 spectra of the run's PSMs
+// (one row per native ID, in the order of each one's first PSM), here the example's spectra under the run's native IDs,
+// written with the columns, types and footer of QPXDatasetExport::mzView (a real one's schema; zstd, row groups of
+// MZ_ROW_GROUP rows, small here so that the reader's row groups are tested), its peaks all kept (the example's spectra
+// have fewer than 100 peaks per 100 Th).
 //
 // The cases:
 //   example  one input (OpenNuXL_6: several hits per spectrum, a decoy among them), no Percolator (too few PSMs). The
@@ -38,10 +43,13 @@
 //            1e9 ppm) for the screenshots of docs/screens (e2e/screens.shot.ts; the fake serves it with
 //            FAKE_NUXL_RESULTS=screens). Every top hit is a cross-link, so its peptides file holds no PSM.
 //   vendor   two inputs that are not mzML: a Bruker timsTOF folder run.d (OpenNuXL_6, its native IDs Bruker's
-//            'frame=F scan=S precursor=P', where S is not unique) whose spectra the shim converted (outputs.json
-//            `spectra`: nuxl/1__run.spectra.mzML, the example's spectra under those IDs as FileConverter writes them:
-//            MS2 only, indexed, in another order than the native IDs), and a Thermo thermo.raw (OpenNuXL_1, IDs
-//            'controllerType=0 controllerNumber=1 scan=N') whose conversion failed (`spectra` null).
+//            'frame=F scan=S precursor=P', where S is not unique) with its mz view, and a Thermo thermo.raw
+//            (OpenNuXL_1, IDs 'controllerType=0 controllerNumber=1 scan=N') whose mz view OpenNuXL could not write
+//            (`mz` null, the shim's note).
+//   legacy   the vendor case as app versions before 0.7 saved it (no `mz`): run.d's spectra converted by FileConverter
+//            (outputs.json `spectra`: nuxl/1__run.spectra.mzML, the example's spectra under those IDs as FileConverter
+//            writes them: MS2 only, indexed, in another order than the native IDs), thermo.raw's conversion failed
+//            (`spectra` null).
 // And spectra/OpenNuXL_1_input.indexed.mzML: the example's mzML as an indexedmzML, its arrays zlib-compressed (the
 // reader's spectrum load by the index; the plain file is read by scanning).
 
@@ -49,7 +57,8 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
-import { deflateSync } from 'node:zlib'
+import { deflateSync, zstdCompressSync } from 'node:zlib'
+import { parquetWriteBuffer } from 'hyparquet-writer'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const fixtures = join(root, 'src/lib/results/fixtures')
@@ -218,10 +227,12 @@ function input(index, name) {
   return { id: `f${index}`, index, link, stem: link.replace(/\.(mzML|raw|d)$/i, ''), name, path: `/data/${name}` }
 }
 
-function outputs(stem, index, { percolator = false, notes = [], seconds = 1.5, spectra } = {}) {
+function outputs(stem, index, { percolator = false, notes = [], seconds = 1.5, spectra, mz } = {}) {
   return {
-    // (only for a .raw or .d input: the shim's mzML of its spectra, or null when it could not be written)
+    // (app versions before 0.7, a .raw or .d input: the shim's mzML of its spectra, or null when it could not be written)
     ...(spectra !== undefined ? { spectra } : {}),
+    // (the run's QPX mz view, or null when OpenNuXL could not write it)
+    ...(mz !== undefined ? { mz } : {}),
     input: index,
     all: `nuxl/${stem}.idXML`,
     xls: `nuxl/${stem}_1.0000_XLs.idXML`,
@@ -251,9 +262,158 @@ function writeFolder(name, records, runs) {
     writeFileSync(join(dir, out.xls), run.xls)
     writeFileSync(join(dir, out.peptides), run.peptides)
     if (run.spectra) writeFileSync(join(dir, out.spectra), run.spectra)
+    if (run.mzView) writeFileSync(join(dir, out.mz), run.mzView)
   }
   console.log(`${name}: ${records.length} input(s)`)
 }
+
+//------------------------------------------------------------------------------
+// The QPX mz view
+
+/** The rows per row group of the fixtures' mz views (OpenNuXL writes 256; fewer here, so that a view has several). */
+const MZ_ROW_GROUP = 8
+
+/** The MS2 spectra of the example's mzML by native ID: their peaks, RT (s), precursor m/z and charge. */
+function exampleSpectra() {
+  const text = readFileSync(join(example, 'OpenNuXL_1_input.mzML'), 'latin1')
+  const out = new Map()
+  for (const block of text.match(/<spectrum [\s\S]*?<\/spectrum>/g)) {
+    const id = /<spectrum [^>]*\bid="([^"]*)"/.exec(block)[1]
+    const value = (accession) => {
+      const at = block.indexOf(`accession="${accession}"`)
+      if (at < 0) return null
+      const tag = block.slice(block.lastIndexOf('<', at), block.indexOf('>', at))
+      return /value="([^"]*)"/.exec(tag)?.[1] ?? null
+    }
+    if (value('MS:1000511') !== '2') continue
+    const arrays = [...block.matchAll(/<binaryDataArray [\s\S]*?<\/binaryDataArray>/g)].map(([a]) => {
+      const bytes = Buffer.from(/<binary>([^<]*)<\/binary>/.exec(a)[1], 'base64')
+      const wide = a.includes('MS:1000523')
+      const values = wide ? new Float64Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)) : new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+      return { mz: a.includes('MS:1000514'), values: Array.from(values) }
+    })
+    const rt = Number(value('MS:1000016'))
+    const minutes = /MS:1000016[^>]*unitName="minute"/.test(block)
+    out.set(id, {
+      mz: arrays.find((a) => a.mz).values,
+      intensity: arrays.find((a) => !a.mz).values,
+      rt: minutes ? rt * 60 : rt,
+      precursorMz: Number(value('MS:1000744')),
+      charge: value('MS:1000041') === null ? null : Number(value('MS:1000041')),
+    })
+  }
+  return out
+}
+
+/** The schema of QPXDatasetExport::mzView's table, as Arrow writes it (from an mz view of the pinned OpenMS). */
+const MZ_SCHEMA = [
+  { repetition_type: 'REQUIRED', name: 'schema', num_children: 13 },
+  { type: 'BYTE_ARRAY', repetition_type: 'REQUIRED', name: 'id', converted_type: 'UTF8', logical_type: { type: 'STRING' } },
+  { type: 'BYTE_ARRAY', repetition_type: 'OPTIONAL', name: 'run_file_name', converted_type: 'UTF8', logical_type: { type: 'STRING' } },
+  { repetition_type: 'OPTIONAL', name: 'scan', num_children: 1, converted_type: 'LIST', logical_type: { type: 'LIST' } },
+  { repetition_type: 'REPEATED', name: 'list', num_children: 1 },
+  { type: 'INT32', repetition_type: 'OPTIONAL', name: 'element' },
+  { type: 'INT32', repetition_type: 'REQUIRED', name: 'ms_level' },
+  { type: 'BOOLEAN', repetition_type: 'REQUIRED', name: 'centroid' },
+  { type: 'FLOAT', repetition_type: 'REQUIRED', name: 'scan_start_time' },
+  { type: 'FLOAT', repetition_type: 'OPTIONAL', name: 'inverse_ion_mobility' },
+  { type: 'FLOAT', repetition_type: 'OPTIONAL', name: 'ion_injection_time' },
+  { type: 'FLOAT', repetition_type: 'REQUIRED', name: 'total_ion_current' },
+  { repetition_type: 'OPTIONAL', name: 'precursors', num_children: 1, converted_type: 'LIST', logical_type: { type: 'LIST' } },
+  { repetition_type: 'REPEATED', name: 'list', num_children: 1 },
+  { repetition_type: 'OPTIONAL', name: 'element', num_children: 7 },
+  { type: 'FLOAT', repetition_type: 'REQUIRED', name: 'selected_ion_mz' },
+  { type: 'INT32', repetition_type: 'OPTIONAL', name: 'selected_ion_charge' },
+  { type: 'FLOAT', repetition_type: 'OPTIONAL', name: 'selected_ion_intensity' },
+  { type: 'FLOAT', repetition_type: 'OPTIONAL', name: 'isolation_window_target' },
+  { type: 'FLOAT', repetition_type: 'OPTIONAL', name: 'isolation_window_lower' },
+  { type: 'FLOAT', repetition_type: 'OPTIONAL', name: 'isolation_window_upper' },
+  { type: 'BYTE_ARRAY', repetition_type: 'OPTIONAL', name: 'spectrum_ref', converted_type: 'UTF8', logical_type: { type: 'STRING' } },
+  { repetition_type: 'REQUIRED', name: 'mz', num_children: 1, converted_type: 'LIST', logical_type: { type: 'LIST' } },
+  { repetition_type: 'REPEATED', name: 'list', num_children: 1 },
+  { type: 'FLOAT', repetition_type: 'OPTIONAL', name: 'element' },
+  { repetition_type: 'REQUIRED', name: 'intensity', num_children: 1, converted_type: 'LIST', logical_type: { type: 'LIST' } },
+  { repetition_type: 'REPEATED', name: 'list', num_children: 1 },
+  { type: 'FLOAT', repetition_type: 'OPTIONAL', name: 'element' },
+  { repetition_type: 'OPTIONAL', name: 'cv_params', num_children: 1, converted_type: 'LIST', logical_type: { type: 'LIST' } },
+  { repetition_type: 'REPEATED', name: 'list', num_children: 1 },
+  { repetition_type: 'OPTIONAL', name: 'element', num_children: 2 },
+  { type: 'BYTE_ARRAY', repetition_type: 'REQUIRED', name: 'cv_name', converted_type: 'UTF8', logical_type: { type: 'STRING' } },
+  { type: 'BYTE_ARRAY', repetition_type: 'REQUIRED', name: 'cv_value', converted_type: 'UTF8', logical_type: { type: 'STRING' } },
+]
+
+/** The native IDs of the PSMs of the filtered files of `run`, in the order of their first PSM. */
+function psmIds(run) {
+  const ids = []
+  for (const text of [run.xls, run.peptides]) {
+    for (const m of text.matchAll(/spectrum_reference="([^"]*)"/g)) if (!ids.includes(m[1])) ids.push(m[1])
+  }
+  return ids
+}
+
+/**
+ * The QPX mz view of the run `run` (`runFile`: its run_file_name): a row per native ID of its PSMs, the example's
+ * spectrum `spectrum=N` of each (`back(id)` gives N's id `spectrum=N`), as OpenNuXL's -out_qpx writes it.
+ */
+function mzView(run, runFile, back = (id) => id) {
+  const spectra = exampleSpectra()
+  const rows = []
+  for (const id of psmIds(run)) {
+    const s = spectra.get(back(id))
+    if (!s) continue
+    const scan = /(?:scan|spectrum)=(\d+)/.exec(id)
+    rows.push({
+      id,
+      run_file_name: runFile,
+      scan: scan ? [Number(scan[1])] : null,
+      ms_level: 2,
+      centroid: true,
+      scan_start_time: s.rt / 60,
+      inverse_ion_mobility: null,
+      ion_injection_time: null,
+      total_ion_current: s.intensity.reduce((a, b) => a + b, 0),
+      precursors: [
+        {
+          selected_ion_mz: s.precursorMz,
+          selected_ion_charge: s.charge,
+          selected_ion_intensity: null,
+          isolation_window_target: null,
+          isolation_window_lower: null,
+          isolation_window_upper: null,
+          spectrum_ref: null,
+        },
+      ],
+      mz: s.mz,
+      intensity: s.intensity,
+      cv_params: null,
+    })
+  }
+  const names = ['id', 'run_file_name', 'scan', 'ms_level', 'centroid', 'scan_start_time', 'inverse_ion_mobility', 'ion_injection_time', 'total_ion_current', 'precursors', 'mz', 'intensity', 'cv_params']
+  const kv = {
+    qpx_version: '1.1',
+    file_type: 'mz_file',
+    creator: 'OpenMS',
+    software_provider: 'OpenMS (results-fixtures.mjs)',
+    compression_format: 'zstd',
+    nuxl_peak_annotated: 'kept',
+    nuxl_peak_top: '100',
+    nuxl_peak_window: '100',
+    scan_format: 'scan',
+  }
+  return new Uint8Array(
+    parquetWriteBuffer({
+      columnData: names.map((name) => ({ name, data: rows.map((r) => r[name]) })),
+      schema: MZ_SCHEMA,
+      rowGroupSize: MZ_ROW_GROUP,
+      codec: 'ZSTD',
+      compressors: { ZSTD: (input) => new Uint8Array(zstdCompressSync(input)) },
+      kvMetadata: Object.entries(kv).map(([key, value]) => ({ key, value })),
+    }),
+  )
+}
+
+/** The run `run` of input `stem` with its mz view (`back`: as for mzView). */
+const withView = (run, stem, back) => ({ ...run, mzView: mzView(run, stem, back), outputs: { ...run.outputs, mz: `nuxl/${stem}.mz.parquet` } })
 
 /** The identifications of OpenNuXL_6 whose top hit the example takes to be their best one without adduct. */
 const LINEAR = new Set([2, 6, 10, 11, 13, 17])
@@ -261,15 +421,15 @@ const six = filtered(SOURCE(6), LINEAR)
 const one = filtered(SOURCE(1))
 console.log('OpenNuXL_6:', six.counts, 'OpenNuXL_1:', one.counts)
 
-writeFolder('example', [input(0, 'OpenNuXL_1_input.mzML')], [{ ...six, outputs: { notes: [TOO_FEW] } }])
+writeFolder('example', [input(0, 'OpenNuXL_1_input.mzML')], [withView({ ...six, outputs: { notes: [TOO_FEW] } }, '1__OpenNuXL_1_input')])
 writeFolder(
   'runs',
   [input(0, 'OpenNuXL_1_input.mzML'), input(1, 'no_decoys.mzML'), input(2, 'unfinished.mzML')],
-  [{ ...six, outputs: { notes: [TOO_FEW] } }, { ...one, outputs: { notes: [TOO_FEW], seconds: 2.5 } }, null],
+  [withView({ ...six, outputs: { notes: [TOO_FEW] } }, '1__OpenNuXL_1_input'), withView({ ...one, outputs: { notes: [TOO_FEW], seconds: 2.5 } }, '2__no_decoys'), null],
 )
 const three = filtered(SOURCE(3))
 console.log('OpenNuXL_3:', three.counts)
-writeFolder('screens', [input(0, 'OpenNuXL_1_input.mzML')], [{ ...three, outputs: { notes: [TOO_FEW] } }])
+writeFolder('screens', [input(0, 'OpenNuXL_1_input.mzML')], [withView({ ...three, outputs: { notes: [TOO_FEW] } }, '1__OpenNuXL_1_input')])
 const nothing = withoutIds(SOURCE(6))
 writeFolder('empty', [input(0, 'a.mzML'), input(1, 'b.mzML')], [
   { xls: nothing, peptides: nothing, outputs: { notes: [TOO_FEW] } },
@@ -340,8 +500,29 @@ function convertedMzml(id) {
   return indexedMzml(text.slice(0, start) + reversed + text.slice(end))
 }
 
+/** The example's id `spectrum=N` of a native ID `id(n)` (the inverse of brukerId, thermoId). */
+const exampleIdOf = (id) => {
+  const n = /precursor=(\d+)/.exec(id)?.[1]
+  if (n !== undefined) return `spectrum=${Number(n) - 1001}`
+  return `spectrum=${Number(/scan=(\d+)$/.exec(id)[1]) - 1}`
+}
+const bruker = renamed(six, brukerId)
 writeFolder(
   'vendor',
+  [input(0, 'run.d'), input(1, 'thermo.raw')],
+  [
+    withView({ ...bruker, outputs: { notes: [TOO_FEW] } }, '1__run', exampleIdOf),
+    {
+      ...renamed(one, thermoId),
+      outputs: {
+        notes: [TOO_FEW, 'The PSM view shows the annotated peaks only: the spectra of thermo.raw could not be kept (the spectra of 2__thermo.raw cannot be read (no such file)).'],
+        mz: null,
+      },
+    },
+  ],
+)
+writeFolder(
+  'legacy',
   [input(0, 'run.d'), input(1, 'thermo.raw')],
   [
     { ...renamed(six, brukerId), spectra: convertedMzml(brukerId), outputs: { notes: [TOO_FEW], spectra: 'nuxl/1__run.spectra.mzML' } },

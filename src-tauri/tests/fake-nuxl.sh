@@ -15,7 +15,14 @@
 #   diskfull  writes OpenMS' error of an output it cannot write (in nuxl/ of the search folder), exit code 12
 #   fewpsms   as a search, but "Too few PSMs for score recalibration. Skipped." (stderr, also with
 #             -percolator_backend none, as OpenNuXL prints it), no _perc_ files
+#   qpxfail   as a search, but with -out_qpx its warning that the spectra cannot be read again (stderr, as OpenNuXL's
+#             "-out_qpx: ..." warning), and no mz view (also for any input with FAKE_NUXL_QPX_FAIL=1)
 #   <other>   searches the input and exits 0
+#
+# With -out_qpx <dir> a search ends as OpenNuXL's: "-out_qpx: reading spectra", the reader's progress label,
+# "-out_qpx: writing <dir>/runs/<basename of -in>.mz.parquet", the file, "-out_qpx: wrote <file> (...)". The file is a
+# placeholder (PAR1 ... PAR1), or with FAKE_NUXL_RESULTS that folder's mz view of the input (<n>__<name>.mz.parquet,
+# else the first of the folder): a real QPX mz view, so that the PSM view has peaks.
 #
 # An input may be an mzML, a Thermo .raw (a file) or a Bruker .d (a folder): its spectra are read as OpenNuXL reads
 # them, with the reader's progress label ('loading mzML', 'Loading Thermo RAW file', 'Loading DDA-PASEF data').
@@ -132,6 +139,7 @@ fi
 input=""
 out=""
 out_tsv=""
+out_qpx=""
 backend=builtin
 xl_fdr=()
 args=("$@")
@@ -142,6 +150,7 @@ while [ "$i" -lt "$n" ]; do
     -in) input="${args[$((i + 1))]}" ;;
     -out) out="${args[$((i + 1))]}" ;;
     -out_tsv) out_tsv="${args[$((i + 1))]}" ;;
+    -out_qpx) out_qpx="${args[$((i + 1))]}" ;;
     -percolator_backend) backend="${args[$((i + 1))]}" ;;
     -report:xlFDR)
       i=$((i + 1))
@@ -171,6 +180,37 @@ name=$(basename "$input")
 name=${name#*__}
 mode=${name%%.*}
 loading=$(loading_label "$input")
+
+# -out_qpx: the QPX mz view of the run's PSMs' spectra, after the other outputs ($1: the folder of real outputs, if any)
+write_mz_view() {
+  [ -n "$out_qpx" ] || return 0
+  echo "-out_qpx: reading spectra"
+  progress "$loading"
+  done_line
+  if [ "${FAKE_NUXL_QPX_FAIL:-}" = 1 ] || [ "$mode" = qpxfail ]; then
+    echo "-out_qpx: the spectra of $input cannot be read again (the fake cannot); no mz view is written" >&2
+    return 0
+  fi
+  local in base view source=""
+  in=${input%/}
+  base=$(basename "$in")
+  base=${base%.[mM][zZ][mM][lL]}
+  base=${base%.[rR][aA][wW]}
+  base=${base%.[dD]}
+  view="$out_qpx/runs/$base.mz.parquet"
+  mkdir -p "$out_qpx/runs" || { echo "-out_qpx: $out_qpx/runs cannot be made" >&2; return 0; }
+  echo "-out_qpx: writing $view"
+  if [ -n "${1:-}" ]; then
+    source=$(ls "$1"/*__"$2".mz.parquet 2>/dev/null | head -n 1)
+    [ -n "$source" ] || source=$(ls "$1"/*.mz.parquet 2>/dev/null | head -n 1)
+  fi
+  if [ -n "$source" ]; then
+    cp "$source" "$view"
+  else
+    printf 'PAR1 the fake mz view of %s PAR1' "$in" > "$view"
+  fi
+  echo "-out_qpx: wrote $view (20 spectra, 1500 of 1500 peaks)"
+}
 
 case "$mode" in
   hang | stubborn)
@@ -263,6 +303,7 @@ if [ -n "$results" ]; then
   # (also with -percolator_backend none, as OpenNuXL)
   echo "Too few PSMs for score recalibration. Skipped." >&2
   [ -n "$out_tsv" ] && printf 'report\n' > "$out_tsv"
+  write_mz_view "$results" "$key"
   echo "OpenNuXL took 0.10 s (wall), 0.10 s (CPU), 0.00 s (system), 0.10 s (user); Peak Memory Usage: 10 MB."
   exit 0
 fi
@@ -298,5 +339,6 @@ if [ "$backend" != none ]; then
   fi
 fi
 [ -n "$out_tsv" ] && printf 'report\n' > "$out_tsv"
+write_mz_view
 echo "OpenNuXL took 0.10 s (wall), 0.10 s (CPU), 0.00 s (system), 0.10 s (user); Peak Memory Usage: 10 MB."
 exit 0
