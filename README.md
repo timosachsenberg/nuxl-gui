@@ -55,10 +55,11 @@ libGLESv2.so.2"). Install it with `sudo apt install libgles2` (Ubuntu, Debian) o
 - Disk: each search keeps OpenNuXL's outputs (idXML of all PSMs and of the filtered cross-links and peptides, the TSV
   reports; docs/design.md §2) and, for the PSM view, the spectra of its PSMs as OpenNuXL keeps them: a QPX mz view per
   input (`nuxl/<stem>.mz.parquet`: the MS2 spectra of the PSMs only, the 100 most intense peaks per 100 m/z and every
-  annotated one; ProSE measured 2.8 MB per thousand PSMs of an Orbitrap HCD run for the same view), whatever the kind
-  of input. (Versions before 0.9 converted all spectra of a `.raw` or `.d` to mzML, about as large as the input.) How
-  much disk a NuXL search takes per thousand PSMs is not measured yet; History shows each search's size. For many or
-  large inputs, choose a searches folder on a drive with room before searching ("Where the data is").
+  annotated one), whatever the kind of input: 1.3 MB per thousand spectra of a timsTOF DDA run (CI's `real_nuxl`
+  test: 1336 spectra of about 270 peaks each); ProSE measured 2.8 MB per thousand PSMs of an Orbitrap HCD run for the
+  same view. (Versions before 0.9 converted all spectra of a `.raw` or `.d` to mzML, about as large as the input.) How
+  much the idXML and TSV files take per thousand PSMs is not measured yet; History shows each search's size. For many
+  or large inputs, choose a searches folder on a drive with room before searching ("Where the data is").
 
 ## Where the data is
 
