@@ -1,11 +1,17 @@
 <script lang="ts">
   // The web app's top bar without its engine chip: the OpenMS logo and the wordmark, the views, on Results the
   // result's chip and its Export menu, and a running search's progress on the other views; at the right end the
-  // About menu (versions, "Check for updates") and the theme menu. A newer release's banner is below it (App.svelte).
+  // Help (also F1: HelpDialog, at the section of what is on screen), the About menu (versions, "Check for updates")
+  // and the theme menu. A newer release's banner is below it (App.svelte).
   // the unmodified logo of OpenMS/Assets (src/assets/logo/README.txt), 180 px: sharp at 36 px on HiDPI screens;
   // its lettering is black, so in dark it stands on a light plate
   import openmsLogo from '../../assets/logo/openms-logo.png'
   import { Badge } from '$lib/components/ui/badge'
+  import { buttonVariants } from '$lib/components/ui/button'
+  import { helpSectionFor } from '$lib/help/help'
+  import { openHelp } from '$lib/help/help.svelte'
+  import CircleHelp from '@lucide/svelte/icons/circle-help'
+  import HelpDialog from './HelpDialog.svelte'
   import { formatHash, type Route, type View } from '$lib/route'
   import { exportName } from '$lib/results/exports'
   import { resultsViewFor } from '$lib/results/view.svelte'
@@ -34,6 +40,17 @@
     route.view === 'results' && openResult.current !== null && openResult.current.id === route.id ? openResult.current : null,
   )
   const resultView = $derived(result ? resultsViewFor(result) : null)
+
+  /** The help at the section of what is on screen. */
+  function help() {
+    openHelp(helpSectionFor(route.view, { psm: resultView?.psm != null, panel: resultView?.tab === 'proteins' && resultView.panel !== null }))
+  }
+
+  function onkeydown(event: KeyboardEvent) {
+    if (event.key !== 'F1' || event.defaultPrevented) return
+    event.preventDefault()
+    help()
+  }
   const resultChip = $derived.by(() => {
     if (!result) return ''
     const files = result.design.rows.length
@@ -43,6 +60,9 @@
     return `${exportName(result)} · ${files} ${files === 1 ? 'file' : 'files'} · finished ${finished} · ${took}`
   })
 </script>
+
+<svelte:window {onkeydown} />
+<HelpDialog />
 
 <!-- One row of 52 px: the result's chip (flex basis 0) shrinks and truncates before anything wraps; at
      1100 px or less the subtitle hides and the gaps narrow; on windows of 900 px or less (max-[901px]:
@@ -94,6 +114,15 @@
       <ExportMenu view={resultView} />
     {/if}
     <div class="flex items-center gap-1">
+      <button
+        type="button"
+        class={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'size-7 text-muted-foreground hover:text-foreground')}
+        title="Help (F1)"
+        aria-label="Help"
+        data-testid="help-button"
+        onclick={help}>
+        <CircleHelp class="size-4" aria-hidden="true" />
+      </button>
       <AboutMenu />
       <ThemeMenu />
     </div>

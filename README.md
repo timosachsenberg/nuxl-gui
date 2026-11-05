@@ -17,7 +17,8 @@ What it does: New search takes mzML or Thermo `.raw` files and Bruker timsTOF `.
 (RNA-UV (U), DNA-UV, RNA-DEB, ...), runs OpenNuXL once per input, one after the other, with its own decoys and,
 from 1000 PSMs on, Percolator, and shows the results: proteins with their cross-linked residues, peptides and PSMs,
 each PSM marked as cross-link or peptide with its nucleic acid adduct and its cross-linked residue, and the spectrum
-of a PSM with NuXL's own annotation (shifted ions, marker ions).
+of a PSM with NuXL's own annotation (shifted ions, marker ions). Help (the ? in the top bar, or F1) explains each
+view, the terms of the results and the keys, opened at the section of the view on screen.
 
 ## Install
 
