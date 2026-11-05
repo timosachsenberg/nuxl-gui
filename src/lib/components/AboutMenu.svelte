@@ -1,7 +1,7 @@
 <script lang="ts">
-  // The top bar's About menu: the app's version and OpenNuXL's, "Check for updates" with its result in place (the
-  // latest version, a newer one with Download, or why it could not check), and the setting "Check for new versions
-  // at start" (on by default; update.svelte.ts).
+  // The top bar's About menu: the app's version and OpenNuXL's (or why it cannot be run, in full), "Check for
+  // updates" with its result in place (the latest version, a newer one with Download, or why it could not check), and
+  // the setting "Check for new versions at start" (on by default; update.svelte.ts).
   import { Button, buttonVariants } from '$lib/components/ui/button'
   import * as Popover from '$lib/components/ui/popover'
   import { Switch } from '$lib/components/ui/switch'
@@ -20,7 +20,7 @@
     toolState.status === 'ready' && toolState.info
       ? `OpenNuXL ${toolState.info.version}`
       : toolState.status === 'failed'
-        ? 'OpenNuXL was not found'
+        ? 'OpenNuXL cannot be run'
         : 'OpenNuXL …',
   )
   const manual = $derived(updateState.manual)
@@ -38,6 +38,12 @@
     <div class="grid gap-0.5">
       <p class="font-semibold" data-testid="about-version">NuXL {updateState.appVersion ?? ''}</p>
       <p class="text-xs text-muted-foreground" data-testid="about-tool">{tool}</p>
+      {#if toolState.status === 'failed' && toolState.error}
+        <!-- why, in full (the search's problem line has one line for it): how it ended, the tool, its last output -->
+        <p
+          class="max-h-48 overflow-y-auto text-xs break-words whitespace-pre-line text-destructive select-text"
+          data-testid="about-tool-error">{toolState.error}</p>
+      {/if}
       <p class="text-xs text-muted-foreground" data-testid="about-author">Created by Timo Sachsenberg</p>
     </div>
     <div class="grid gap-2 border-t pt-3">

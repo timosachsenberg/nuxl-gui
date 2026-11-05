@@ -29,7 +29,7 @@ pub const INPUTS: &str = "inputs.json";
 pub const LEFT_OUT: [&str; 3] = ["database.fasta", "database.json", crate::args::LOG_FILE];
 
 /// Whether a project leaves out the file `name` of the folder (relative, `/`-separated): [`LEFT_OUT`], and the
-/// spectra the shim of an app before 0.7 converted from a `.raw` or `.d` input (`nuxl/<stem>.spectra.mzML`, about as
+/// spectra the shim of an app before 0.9 converted from a `.raw` or `.d` input (`nuxl/<stem>.spectra.mzML`, about as
 /// large as the input: they would make most such projects too large, [`MAX_UNPACKED`]); such a search imported from
 /// the project shows the annotated peaks only. The runs' QPX mz views (`nuxl/<stem>.mz.parquet`, the spectra of the
 /// PSMs) go with the project.

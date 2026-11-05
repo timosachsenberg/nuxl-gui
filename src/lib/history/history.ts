@@ -378,7 +378,7 @@ export const LEVEL = 1
 export const LEFT_OUT: ReadonlySet<string> = new Set(['database.fasta', 'database.json', 'nuxl.log'])
 
 /**
- * Whether a project leaves out the folder's file `name`: `LEFT_OUT`, and the spectra the shim of an app before 0.7
+ * Whether a project leaves out the folder's file `name`: `LEFT_OUT`, and the spectra the shim of an app before 0.9
  * converted from a .raw or .d input for the PSM view (`nuxl/<stem>.spectra.mzML`, or its `.spectra.tmp.mzML` while it
  * was written): about as large as the input, they would make most projects too large (a zip without zip64, read whole
  * when opened); such a project's PSM view shows the annotated peaks, and says why. The QPX mz views of the runs

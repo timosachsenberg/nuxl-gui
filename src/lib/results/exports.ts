@@ -1,12 +1,15 @@
-// The exports of the Export menu: the current view as CSV, the design, the idXML of a searched file; each saved
-// where the user chooses (the system's save dialog).
+// The exports of the Export menu: the current view as CSV or TSV, the curated PSMs as TSV, the design, the idXML of a searched file, the spectral
+// library (with its DIA-NN declarations beside it); each saved where the user chooses (the system's save dialog).
 
 import { writeDesignTsv } from '../design/design-tsv'
-import { errorText, saveSearchFile, searchFiles } from '../desktop'
+import { errorText, saveSearchFile, saveText, saveTextWithCompanion, searchFiles, type SavedWithCompanion } from '../desktop'
+import { MODS_SUFFIX } from './library/mods'
 import type { SearchFiles } from './read'
 import { download } from '../download'
 import type { OpenResult } from '../search/session.svelte'
+import { toTsv } from './csv'
 import { resultName } from './display'
+import { csvColumns } from './table-columns'
 import type { ResultsView } from './view.svelte'
 
 /** The name of a result's exports (see `resultName`). */
@@ -18,16 +21,39 @@ export function exportName(result: OpenResult): string {
 const painted = () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)))
 
 /**
- * The current level's view as `<name>-<level>.csv` (`view.exporting` meanwhile); false on a tab
+ * The current level's view as `<name>-<level>.csv` or `.tsv` (`view.exporting` meanwhile); false on a tab
  * without a table or while an export runs.
  */
-export async function exportCsv(view: ResultsView): Promise<boolean> {
+export async function exportCsv(view: ResultsView, format: 'csv' | 'tsv' = 'csv'): Promise<boolean> {
   const level = view.level
   if (!level || view.exporting) return false
   view.exporting = true
   try {
     await painted()
-    await download(`${exportName(view.result)}-${level.level}.csv`, level.csv(), 'text/csv;charset=utf-8')
+    const [text, type] = format === 'csv' ? [level.csv(), 'text/csv;charset=utf-8'] : [level.tsv(), 'text/tab-separated-values']
+    await download(`${exportName(view.result)}-${level.level}.${format}`, text, type)
+    return true
+  } finally {
+    view.exporting = false
+  }
+}
+
+/**
+ * The curated PSMs as `<name>-curated-psms.tsv`: every PSM with a mark or a note, whatever the PSM table's filters,
+ * in its order, with its visible columns and the Curation and Curation note columns (also when hidden). False when no
+ * PSM has either or while an export runs.
+ */
+export async function exportCurated(view: ResultsView): Promise<boolean> {
+  if (view.exporting) return false
+  const rows = view.curatedRows()
+  if (rows.length === 0) return false
+  view.exporting = true
+  try {
+    await painted()
+    const columns = csvColumns(view.psms.visible)
+    for (const id of ['curation', 'curationNote']) if (!columns.includes(id)) columns.push(id)
+    const text = toTsv(view.model, 'psms', rows, columns, view.psms.filters)
+    await download(`${exportName(view.result)}-curated-psms.tsv`, text, 'text/tab-separated-values')
     return true
   } finally {
     view.exporting = false
@@ -69,4 +95,24 @@ export async function exportIdXML(result: OpenResult, input = 0, files: SearchFi
   if (!record || typeof record.stem !== 'string' || record.stem === '') throw new Error(`The search has no input ${input + 1}.`)
   const name = result.design.rows[input]?.fileName ?? record.stem
   await saveSearchFile(result.id, `nuxl/${record.stem}.idXML`, `${stemOf(name)}.idXML`)
+}
+
+/**
+ * The spectral library `tsv` saved as `name` where the user chooses, and DIA-NN's declarations of its adducts `mods`
+ * beside it (`<chosen stem>_diann_mods.txt`; none when '': a library without cross-links). A declarations file that
+ * exists is replaced only when `replace` (asked with its path) says so. Resolves with the paths (`companion` '' when
+ * none was written), or null if the user cancelled.
+ */
+export async function saveLibrary(
+  name: string,
+  tsv: string,
+  mods: string,
+  replace: (path: string) => Promise<boolean>,
+): Promise<SavedWithCompanion | null> {
+  await painted()
+  if (mods === '') {
+    const path = await saveText(name, tsv)
+    return path === null ? null : { path, companion: '' }
+  }
+  return saveTextWithCompanion(name, tsv, MODS_SUFFIX, mods, replace)
 }

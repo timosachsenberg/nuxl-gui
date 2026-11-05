@@ -46,7 +46,7 @@
 //            'frame=F scan=S precursor=P', where S is not unique) with its mz view, and a Thermo thermo.raw
 //            (OpenNuXL_1, IDs 'controllerType=0 controllerNumber=1 scan=N') whose mz view OpenNuXL could not write
 //            (`mz` null, the shim's note).
-//   legacy   the vendor case as app versions before 0.7 saved it (no `mz`): run.d's spectra converted by FileConverter
+//   legacy   the vendor case as app versions before 0.9 saved it (no `mz`): run.d's spectra converted by FileConverter
 //            (outputs.json `spectra`: nuxl/1__run.spectra.mzML, the example's spectra under those IDs as FileConverter
 //            writes them: MS2 only, indexed, in another order than the native IDs), thermo.raw's conversion failed
 //            (`spectra` null).
@@ -229,7 +229,7 @@ function input(index, name) {
 
 function outputs(stem, index, { percolator = false, notes = [], seconds = 1.5, spectra, mz } = {}) {
   return {
-    // (app versions before 0.7, a .raw or .d input: the shim's mzML of its spectra, or null when it could not be written)
+    // (app versions before 0.9, a .raw or .d input: the shim's mzML of its spectra, or null when it could not be written)
     ...(spectra !== undefined ? { spectra } : {}),
     // (the run's QPX mz view, or null when OpenNuXL could not write it)
     ...(mz !== undefined ? { mz } : {}),

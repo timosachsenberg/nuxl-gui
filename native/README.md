@@ -141,7 +141,7 @@ configuration:
 - The targets: `OpenNuXL`, `PercolatorAdapter` (OpenNuXL runs it for the score recalibration, and looks for it
   beside itself: `File::findSiblingTOPPExecutable`), `FuzzyDiff` (the `TOPP_OpenNuXL` tests compare with it;
   without it they report "Not Run") and `Percolator_test`. CI builds `OpenMS OpenNuXL PercolatorAdapter`. (Before
-  the app 0.7 the bundle had FileConverter too, for the spectra of `.raw` and `.d` inputs; OpenNuXL keeps the spectra
+  the app 0.9 the bundle had FileConverter too, for the spectra of `.raw` and `.d` inputs; OpenNuXL keeps the spectra
   of its PSMs itself now: `-out_qpx`.)
 
 Check the build with OpenNuXL's tests:
@@ -230,7 +230,10 @@ Microsoft's signatures; `bundle-nuxl.sh` and `package-macos.sh` check them).
   OpenMS build tree (`NUXL_TOOL`) has neither folder beside it and keeps the user's environment.
 - **Size**: about 70 MB unpacked per platform (the CI summary's "Package sizes" shows it as a row of its own).
 
-**`tool_info`** is `{ version, path }` (`src-tauri/src/tool.rs`): the version from `OpenNuXL --help`. The app's
+**`tool_info`** is `{ version, path }` (`src-tauri/src/tool.rs`): the version from `OpenNuXL --help`. A tool that
+reports none fails it with how it ended (`run.rs` `how_tool_ended`: an exit code, a signal; on Windows the statuses of
+a tool Windows could not start spelled out, e.g. `0xC0000135, STATUS_DLL_NOT_FOUND`: a DLL missing), the tool's path
+and its last 8 lines of output; the search's problem line shows it on one line, the About panel in full. The app's
 `--smoke-test` also reports whether PercolatorAdapter is beside the tool. `NUXL_TOOL` names a tool to use
 instead of the bundled one (the e2e specs and the `real_nuxl` tests: `src-tauri/resources/nuxl/bin/OpenNuXL`, or
 `<build>/bin/OpenNuXL`, which has PercolatorAdapter beside it as well).

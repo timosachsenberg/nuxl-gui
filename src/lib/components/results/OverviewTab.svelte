@@ -138,7 +138,7 @@
 <div class="flex flex-col gap-6 pb-6">
   <section aria-labelledby="overview-search">
     <h2 id="overview-search" class="mb-2 text-[13px] font-semibold">Search</h2>
-    <dl class="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-x-6 gap-y-2 text-xs" data-testid="search-facts">
+    <dl class="grid grid-cols-[repeat(auto-fill,minmax(13rem,17rem))] gap-x-6 gap-y-2 text-xs" data-testid="search-facts">
       {#each facts as fact (fact.name)}
         <div class="min-w-0">
           <dt class="text-muted-foreground">{fact.name}</dt>
@@ -159,8 +159,9 @@
 
   <section aria-labelledby="overview-files">
     <h2 id="overview-files" class="mb-2 text-[13px] font-semibold">Files</h2>
-    <div class="rounded-lg border bg-background">
-      <Table.Root class="text-xs tabular-nums" aria-label="Searched files">
+    <!-- as wide as its columns need (up to the window's width), not stretched over a wide window -->
+    <div class="w-fit max-w-full rounded-lg border bg-background">
+      <Table.Root class="w-auto text-xs tabular-nums" aria-label="Searched files">
         <Table.Header>
           <Table.Row class="hover:bg-transparent">
             <Table.Head scope="col" class="{head} text-left">File</Table.Head>

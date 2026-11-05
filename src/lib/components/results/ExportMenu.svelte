@@ -1,10 +1,12 @@
 <script lang="ts">
-  // The header's Export menu of the open result.
+  // The header's Export menu of the open result; at its end, Show search folder (the search's folder in the system's
+  // file manager).
+  import LibraryDialog from '$lib/components/results/LibraryDialog.svelte'
   import { buttonVariants } from '$lib/components/ui/button'
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu'
-  import { showFolderTitle } from '$lib/history/folder'
+  import { canShowFolder, showFolderTitle } from '$lib/history/folder'
   import { revealSearch, saveProjectFile } from '$lib/history/history.svelte'
-  import { exportCsv, exportDesign, exportIdXML, idXMLFiles } from '$lib/results/exports'
+  import { exportCsv, exportCurated, exportDesign, exportIdXML, idXMLFiles } from '$lib/results/exports'
   import type { ResultsView } from '$lib/results/view.svelte'
   import { cn } from '$lib/utils'
   import ChevronDown from '@lucide/svelte/icons/chevron-down'
@@ -16,16 +18,20 @@
 
   let open = $state(false)
   let canSpectrum = $state(false)
+  /** PSMs with a curation mark or note (when the menu opened). */
+  let curated = $state(0)
   let busy = $state(false)
   let projecting = $state(false)
   /** How far the project file is written (0–1); null before the writing starts (the save dialog). */
   let written = $state<number | null>(null)
   let error = $state<string | null>(null)
+  let libraryOpen = $state(false)
 
   function openChange(next: boolean) {
     open = next
     if (next) {
       canSpectrum = view.psm !== null && view.spectrumExporter !== null
+      curated = view.curatedCount()
     }
   }
 
@@ -81,6 +87,13 @@
   <DropdownMenu.Content class="w-auto min-w-52" align="end">
     <DropdownMenu.Item disabled={view.level === null || view.exporting} onSelect={() => guard(() => exportCsv(view))}
       >CSV (current view)</DropdownMenu.Item>
+    <DropdownMenu.Item disabled={view.level === null || view.exporting} onSelect={() => guard(() => exportCsv(view, 'tsv'))}
+      >TSV (current view)</DropdownMenu.Item>
+    <DropdownMenu.Item
+      disabled={curated === 0 || view.exporting}
+      title={curated === 0 ? 'Mark PSMs as accepted or rejected in the PSM view first (keys A and R)' : `The ${curated} PSMs you marked or noted, whatever the filters, with their mark and note`}
+      class={explained}
+      onSelect={() => guard(() => exportCurated(view))}>Curated PSMs (TSV){#if curated > 0}<span class="ml-auto pl-3 text-muted-foreground tabular-nums">{curated}</span>{/if}</DropdownMenu.Item>
     <DropdownMenu.Item onSelect={() => guard(() => exportDesign(view.result))}>Design (design.tsv)</DropdownMenu.Item>
     <DropdownMenu.Item
       disabled={!canSpectrum}
@@ -91,6 +104,9 @@
       disabled={view.exporting}
       title="Saves the search's results as one file that you can open in NuXL desktop elsewhere. It contains OpenNuXL's outputs, which name folders on this computer, such as those of the database and the search. The spectra files (mzML, .raw, .d), the spectra converted from .raw and .d files and the log are not included: there, the PSM view shows the annotated peaks only."
       onSelect={project}>Project (.nuxl)</DropdownMenu.Item>
+    <DropdownMenu.Item
+      title="A DIA-NN library of the search's target peptides and localized cross-links with NuXL's b and y ions, at FDRs you choose, and DIA-NN's declarations of the adducts"
+      onSelect={() => (libraryOpen = true)}>Spectral library (DIA-NN TSV)…</DropdownMenu.Item>
     <DropdownMenu.Separator />
     {#each idXMLFiles(view.result) as f (f.input)}
       <DropdownMenu.Item
@@ -98,7 +114,12 @@
         onSelect={() => idXML(f.input)}>{f.label}</DropdownMenu.Item>
     {/each}
     <DropdownMenu.Separator />
-    <DropdownMenu.Item title={showFolderTitle()} onSelect={() => guard(() => revealSearch(view.result.id))}
-      >Show search folder</DropdownMenu.Item>
+    <DropdownMenu.Item
+      disabled={!canShowFolder(view.result.id)}
+      title={canShowFolder(view.result.id) ? showFolderTitle() : 'This result has no search folder of NuXL to show'}
+      class={explained}
+      data-testid="export-show-folder"
+      onSelect={() => guard(() => revealSearch(view.result.id))}>Show search folder</DropdownMenu.Item>
   </DropdownMenu.Content>
 </DropdownMenu.Root>
+<LibraryDialog {view} bind:open={libraryOpen} />

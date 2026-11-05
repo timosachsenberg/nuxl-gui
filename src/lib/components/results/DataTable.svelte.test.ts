@@ -76,3 +76,33 @@ describe('DataTable keys', () => {
     expect(clicked).toEqual([])
   })
 })
+
+describe('DataTable widths', () => {
+  function render(cols: Column[]) {
+    const target = document.createElement('div')
+    document.body.append(target)
+    const shown = mount(DataTable, {
+      target,
+      props: { rows: Uint32Array.from([0, 1]), columns: cols, sort: { key: 'n', dir: 'asc' as const }, onSort: () => {}, onRowClick: () => {}, label: 'Test' },
+    })
+    flushSync()
+    return { target, done: () => (unmount(shown), (document.body.innerHTML = '')) }
+  }
+  const fixed = (id: string): Column => ({ id, header: id, width: 80, align: 'right', cell: (i: number) => `${id}${i}` })
+
+  it('gives the rest of the width to an empty last column when no column takes it, so the others keep their widths', () => {
+    const { target, done } = render([fixed('a'), fixed('b')])
+    expect(target.querySelectorAll('col')).toHaveLength(3)
+    const row = target.querySelector('tbody tr[role="row"]')!
+    expect(row.querySelectorAll('td[role="gridcell"]')).toHaveLength(2)
+    expect(row.lastElementChild?.getAttribute('aria-hidden')).toBe('true')
+    done()
+  })
+
+  it('has no such column when one column takes the rest', () => {
+    const { target, done } = render([fixed('a'), { ...fixed('n'), width: 'auto' }])
+    expect(target.querySelectorAll('col')).toHaveLength(2)
+    expect(target.querySelector('tbody tr[role="row"] td[aria-hidden]')).toBeNull()
+    done()
+  })
+})

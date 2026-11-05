@@ -531,7 +531,7 @@ pub fn outputs_record(stem: &str) -> String {
     format!("{OUTPUT_DIR}/{stem}{OUTPUTS_SUFFIX}")
 }
 
-/// The end of the name of the spectra that the shim of app versions before 0.7 converted a `.raw` or `.d` input
+/// The end of the name of the spectra that the shim of app versions before 0.9 converted a `.raw` or `.d` input
 /// into, after its run (`nuxl/<stem>.spectra.mzML`, FileConverter; [`is_converted_spectra`]). Searches saved by those
 /// versions still have them, and the PSM view still reads them.
 pub const SPECTRA_SUFFIX: &str = ".spectra.mzML";

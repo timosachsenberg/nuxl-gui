@@ -26,11 +26,11 @@ export interface RunOutputs {
   /**
    * the QPX mz view of the spectra of the run's PSMs (OpenNuXL's `-out_qpx`, `nuxl/<stem>.mz.parquet`, relative to
    * the search folder), from which the PSM view reads the peaks of every input; null: OpenNuXL could not write it (its
-   * notes say why); undefined: a search of an app before 0.7, which has none (its peaks: `spectra`, else the input)
+   * notes say why); undefined: a search of an app before 0.9, which has none (its peaks: `spectra`, else the input)
    */
   mz?: string | null
   /**
-   * app versions before 0.7: the spectra of a Thermo .raw or Bruker .d input as mzML (the shim's FileConverter run
+   * app versions before 0.9: the spectra of a Thermo .raw or Bruker .d input as mzML (the shim's FileConverter run
    * after the search, `nuxl/<stem>.spectra.mzML`, relative to the search folder), which the PSM view reads instead of
    * the input; null: an mzML input (absent in its outputs.json), or a .raw/.d whose spectra could not be converted
    */

@@ -231,6 +231,44 @@ describe('the PSM view', () => {
       displaySettings.massErrors = true
     }
   })
+
+  it('accepts and rejects the PSM by its buttons and by A and R; again takes the mark away', async () => {
+    const { view, target } = await show(false, 'DYHTVLGAR')
+    const row = view.psm!.row
+    const [accept, reject] = Array.from(target.querySelectorAll<HTMLButtonElement>('[data-testid="psm-curation"] button'))
+    const press = (key: string) => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+      flushSync()
+    }
+    accept.click()
+    flushSync()
+    expect(view.curation[row]).toBe(1)
+    expect(accept.getAttribute('aria-pressed')).toBe('true')
+    press('r')
+    expect(view.curation[row]).toBe(2)
+    expect(accept.getAttribute('aria-pressed')).toBe('false')
+    expect(reject.getAttribute('aria-pressed')).toBe('true')
+    press('r')
+    expect(view.curation[row]).toBe(0)
+    expect(reject.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('keeps a note on the PSM; typing in it leaves A and R alone', async () => {
+    const { view, target } = await show(false, 'DYHTVLGAR')
+    const row = view.psm!.row
+    const field = target.querySelector<HTMLInputElement>('[data-testid="psm-note"] input')!
+    field.focus()
+    field.value = 'a clear series'
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true }))
+    field.dispatchEvent(new Event('change', { bubbles: true }))
+    flushSync()
+    expect(view.curationNotes.get(row)).toBe('a clear series')
+    expect(view.curation[row]).toBe(0)
+    field.value = '  '
+    field.dispatchEvent(new Event('change', { bubbles: true }))
+    flushSync()
+    expect(view.curationNotes.has(row)).toBe(false)
+  })
 })
 
 describe("the PSM view's tools: Measure and Label", () => {

@@ -79,7 +79,7 @@ nothing else the user puts there is ever listed, swept or deleted. The folder ca
     moves it to `<stem>.mz.parquet` when the run has ended (`run.rs` `take_mz_view`) and removes `runs/`. OpenNuXL
     that cannot write it warns (`-out_qpx: <why>`) and ends successfully: the search does not fail, `mz` is `null`
     and a note says "The PSM view shows the annotated peaks only: the spectra of <name> could not be kept (<why>)."
-    A few MB per thousand PSMs (ProSE's measured 2.8), where the mzML of all spectra that versions before 0.7
+    A few MB per thousand PSMs (ProSE's measured 2.8), where the mzML of all spectra that versions before 0.9
     converted a `.raw` or `.d` into (`<stem>.spectra.mzML`, FileConverter) was about as large as the input.
   - `<stem>.outputs.json`, written by the shim when the run of input `k` has ended successfully — the reader's
     only way to find the derived files (it never guesses their names):
@@ -109,7 +109,7 @@ nothing else the user puts there is ever listed, swept or deleted. The folder ca
     then the shim leaves that warning out), and the shim's note when the database's own decoys were left out. `fdr` are the search's cutoffs as the request gave them
     (`settings.peptideFdr`, `settings.xlFdr`, fractions): OpenNuXL ran without filtering, so the results view filters
     the peptide PSMs and the cross-link PSMs at these. `mz` is the run's mz view, relative to the search folder;
-    `null` when OpenNuXL could not write it. A search of an app before 0.7 has no `mz` (the reader takes the peaks
+    `null` when OpenNuXL could not write it. A search of an app before 0.9 has no `mz` (the reader takes the peaks
     from the input mzML then), and of a `.raw` or `.d` input `spectra`: the mzML its spectra were converted into
     (`null` when that failed). `seconds` is OpenNuXL's run, the mz view included.
 - OpenNuXL also writes a debug table beside its `-in` in every run, `<-in>.ambiguous_masses.csv`
@@ -117,17 +117,24 @@ nothing else the user puts there is ever listed, swept or deleted. The folder ca
   with the user's own path (Windows) it is beside the user's input. The shim removes it after each run, unless a file of that name was there before the run
   (OpenNuXL overwrites that one; the shim leaves it).
 - `search.json` and `proteins.fasta`: History's record and the identified proteins, as in ProSE desktop.
+- `curation.json` (once the user marks a PSM or gives it a note): the user's curation, `{ "schema": 1, "psms": [{ file,
+  spectrum, peptide, adduct, charge, mark?, note? }] }` with `mark` `accepted` or `rejected` and `note` one line of
+  text, at least one of them (`src/lib/results/curation.ts`), each PSM
+  named by its file's name, native ID, ProForma, adduct and charge (not its row). The results view reads it through
+  `read_search_file` and replaces it whole through `save_curation` (`history.rs`: a saved search, JSON of this
+  shape, at most 64 MB). A project holds it; marks of PSMs the result does not have are kept as they are.
 
 Show search folder (the Export menu, History's rows, the Overview, which also shows the path: `search_folder`) opens
 the system's file manager at the folder of a search, by its id (`show_search_folder`, `history.rs` `show_folder`;
 the page never names a path): the opener plugin's `reveal_item_in_dir`, called from Rust only (the plugin is not
 registered, the page has none of its commands), which selects the folder in `searches/` (Finder, Explorer; Linux: the
-file manager's `org.freedesktop.FileManager1` on D-Bus, else the desktop portal, else `xdg-open` of the folder).
+file manager's `org.freedesktop.FileManager1` on D-Bus, else the desktop portal, else `xdg-open` of the folder,
+waited for up to 5 s: an exit status other than 0, e.g. 3 without a file manager, is an error that names the folder).
 
 A project (`.nuxl`, `project.rs`, `history.ts` `leftOut`) holds the folder but `database.fasta`, `database.json`,
-`nuxl.log` and, of a search before 0.7, the converted spectra (`nuxl/<stem>.spectra.mzML`, `.spectra.tmp.mzML`:
+`nuxl.log` and, of a search before 0.9, the converted spectra (`nuxl/<stem>.spectra.mzML`, `.spectra.tmp.mzML`:
 about as large as the input, they would make most such projects too large for a zip without zip64). The mz views go
-with it: a search opened from a project shows the observed peaks (one before 0.7 the annotated peaks only).
+with it: a search opened from a project shows the observed peaks (one before 0.9 the annotated peaks only).
 
 ## 3. The command line of one run
 
@@ -244,7 +251,7 @@ The reading of the spectra is the reader's load, whichever it is: `loading mzML`
   peaks are filtered ("Showing the top 100 peaks per 100 m/z, plus every peak NuXL annotated", from the footer). When
   there is no view (`mz` null: OpenNuXL could not write it; the file gone or unreadable) the PSM view shows the peaks
   NuXL annotated (`fragment_annotation`) only, and says why;
-- of a search of an app before 0.7 (no `mz`): from the input mzML (by its index, else by scanning a file of at most
+- of a search of an app before 0.9 (no `mz`): from the input mzML (by its index, else by scanning a file of at most
   256 MB), by byte range; arrays uncompressed, zlib or zstd (plain, byte-shuffled, dictionary-encoded, as OpenMS
   develop writes them), not MS-Numpress; of a `.raw` or `.d` input from the mzML of its spectra that its
   `outputs.json` names (`spectra`), matched by native ID, the input itself (a vendor file, a folder) never read
@@ -255,12 +262,76 @@ The reading of the spectra is the reader's load, whichever it is: `loading mzML`
   `scan=` of `frame=12 scan=301 precursor=4711` is a mobility scan that other precursors share), and one without a
   precursor by its scan ("frame 12, scan 301").
 
+### The spectral library (DIA-NN TSV)
+
+Export › "Spectral library (DIA-NN TSV)…" (`LibraryDialog.svelte`, `src/lib/results/library/`) is a TypeScript port
+of nuxl-app's `src/nuxl2dia.py` (NuXL Team; NuXLDIA, github.com/timosachsenberg/NuXLDIA; BSD-3, Copyright OpenMS Inc.),
+run in the page on the PSMs the reader has (`tables.psms`, with NuXL:score and the hit's `IM` kept for it in
+`psms.xl.nuxlScore` and `psms.xl.ccs`), so that it works for imported projects too (no spectra needed).
+
+As nuxl2dia.py:
+- targets only: a hit whose proteins are all decoys is left out (one with a target protein too stays, its ProteinId
+  naming both);
+- cross-links only when localized: NuXL:best_localization_score > 0 (0 and none are left out, and counted);
+- one cross-link per (peptide, NuXL:NA, charge), the best localization score, then the best NuXL:score; one peptide
+  per (modified peptide, charge), the best NuXL:score (the oxidised and the plain peptide stay apart); the peptide is
+  the TextExporter's (OpenMS' notation) without OpenNuXL's adduct modification, so two localizations of an adduct are
+  one entry; the cross-links first, by localization score, then the peptides, by NuXL:score;
+- ModifiedPeptideSequence: OpenMS' notation with `(Oxidation)` and `(Carbamidomethyl)` as `(UniMod:35)`, `(UniMod:4)`,
+  every other modification as OpenMS writes it, the adduct as `[<NuXL:NA>]` after its residue, before it when the
+  residue has another modification (`PE[U]M(UniMod:35)K`, nuxl2dia.py's rule for its TextExporter input), a leading
+  dinucleotide in alphabetical order (`UC-H3N1` is `CU-H3N1`, as NuXLDIA's DIA-NN declarations have them);
+  PeptideSequence the residues; PrecursorMz, PrecursorCharge and AverageExperimentalRetentionTime (s) the PSM's;
+  PrecursorIonMobility 1/K0 from the CCS (Mason–Schamp, N2, 305 K, nuxl2dia.py's constants), empty without; ProteinId
+  the accessions, `;`-separated;
+- the fragments: the b and y ions of `fragment_annotation` (shifted ones and those with losses included; a, c, x, z,
+  precursor, immonium, marker and internal ions left out), at the annotated m/z and NuXL's relative intensity, with
+  the peak's charge and NuXL's label as Annotation; a precursor without one is left out;
+- the columns in nuxl2dia.py's order; numbers in full (the shortest text that reads back as the same double).
+
+Decisions where it differs:
+- **The PSMs**: the search's within the dialog's own peptide and cross-link FDR (`psmPasses`: a peptide PSM by its
+  peptide-level q-value too), each 1 % at first (the usual library FDR; nuxl-app reads Percolator's 1 % files only),
+  or the search's tighter cutoff; never looser than the search's ("A looser cutoff needs a new search"). The tables'
+  filters do not count: a library is the whole search's (the PSM table starts at cross-links only). The file name
+  says the FDRs (`<name>_library_pep1%_xl1%.tsv`). Rescored and RDDF identifications are not offered.
+- **FragmentLossType** (nuxl2dia.py writes `FragmenLossType`, which DIA-NN ignores, and leaves it empty but for
+  shifted ions; an empty value would read as an unknown loss): `noloss`, `H2O` for one `-H2O1`, `NH3` for one
+  `-H3N1`, `unknown` for any other loss or several and for every ion shifted by a nucleotide (fragment): an apostrophe
+  ion (`y9+C'-NH3`) or any `+<shift>` (`+U`, `+C-NH3`, `+tU-H2S` of 4SU, which nuxl2dia.py's `+C/+U/+G/+A` rule
+  misses). DIA-NN has no loss classes of its own for these.
+- **The adduct in the sequence**: OpenNuXL of the pin writes a localized adduct as a modification of its residue
+  (`K(NuXL:C-H3N1)DIHPK`); it becomes the bracket at that residue, never a second one. On a residue with a
+  modification already OpenNuXL merges the two (`M(NuXL:U-H2O1~Oxidation)`): the bracket is the adduct, the other
+  modification stays the residue's (`[U-H2O1]M(UniMod:35)`, also in the deduplication). Where it could not merge, it
+  writes the adduct's mass as a mass delta (`K[+306.0253]`): within 0.01 Da of NuXL:NA_MASS_z0 that is the bracket.
+  An `IM` of 0 (a spectrum OpenNuXL could not convert) is no ion mobility.
+- **iRT**: an optional reference (MSFragger/EasyPQP `library.tsv`, also gzipped; RT `RT` or
+  `AverageExperimentalRetentionTime`, iRT `iRT` or `NormalizedRetentionTime`, as nuxl2dia.py): a straight
+  least-squares line of its iRT over its retention time, applied to NuXL's retention times. Linear only (nuxl-app's
+  piecewise mode falls back to linear without pwlf); the right slope (nuxl2dia.py's fallback without scipy divides
+  the sample covariance by the population variance).
+- **DIA-NN's declarations**: beside the TSV, `<stem>_diann_mods.txt` (`save_text_with_companion`, `export.rs`): one
+  `--mod <name>,<mass>` per adduct in the library's brackets, 6 decimals, the mass OpenNuXL computed
+  (NuXL:NA_MASS_z0), else from the name and the protocol's nucleotide formulas (nucleotides less a water per bond,
+  then the formulas added or lost; checked against NuXLDIA's `declare_mod_UV_UCGA_ext.txt`, all 99). The dialog
+  shows them with Copy. A companion that exists writes nothing: the shim keeps the chosen file and the dialog asks
+  "Replace <name>?"; Replace writes both there (`replace: true`, no second save dialog). Without cross-links no file.
+- ProteinId names each accession once; integers are written without nuxl2dia.py's `.0`; of PSMs of a peptide with
+  the same best score the first is kept (nuxl2dia.py's unstable pandas sort keeps any).
+
+Parity (`library.parity.test.ts`): 45 cross-link and 30 peptide rows of NuXLDIA's timsTOF TextExporter output through
+the real nuxl2dia.py and through the port give the same precursors and, but for two tied peptides, the same rows, in
+the same order, with the differences above only (and the last bit of a double that pandas' fast parser rounds
+differently). Questions for DIA-NN and NuXL experts: `docs/library-open-questions.md`. No OpenSWATH variant: OpenMS'
+TargetedFileConverter cannot read the bracket names (AASequence takes a bracket as a mass).
+
 ## 6. Left out (for now)
 
 PeptDeep; open search; pooled FDR over files; OpenNuXL's `optimize`, `RTpredict` and `pcrecalibration` filters;
 custom presets files. Inputs: `.mzML.gz` and zipped `.d` folders (`.d.zip`: unpack them first), `.d` folders without
 timsTOF data (Agilent, Waters), Waters `.raw` folders and mzPeak (which OpenNuXL reads, but the app does not take);
-the converted spectra of searches before 0.7 in projects.
+the converted spectra of searches before 0.9 in projects.
 
 ## 7. The new-version check
 
@@ -279,8 +350,9 @@ timeout, HTTP errors and GitHub's rate limit, 403/429, an answer that is not JSO
   is read out): Download (hides it for this start only), Not now (localStorage `nuxl.updateDismissed`: no banner
   again for that version, one for a newer). No banner either when, while it waited for GitHub, the setting was turned
   off or "Check for updates" was clicked (that check shows its own result). Errors are silent.
-- The About menu (AboutMenu.svelte, ⓘ in the top bar): the app's and OpenNuXL's versions, "Check for updates" with
-  its result in place, and the setting. A Download that cannot open the page says so where it was clicked (banner or
+- The About menu (AboutMenu.svelte, ⓘ in the top bar): the app's and OpenNuXL's versions (when OpenNuXL cannot be
+  run, `tool_info`'s error in full: how it ended, the tool, its last output), "Check for updates" with its result in
+  place, and the setting. A Download that cannot open the page says so where it was clicked (banner or
   panel); a new check or Not now clears it.
 - The release page opens in the system's browser through the shim, `open_release_page(version)`
   (`src-tauri/src/update.rs`): the version must be digits and dots (`major.minor.patch`); the URL

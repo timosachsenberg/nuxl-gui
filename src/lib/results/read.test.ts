@@ -3,8 +3,8 @@
 // from OpenNuXL's own test outputs): example (one input, peptides and cross-links), runs (three inputs, one without
 // decoys and one that did not finish), empty (two inputs without PSMs), screens (the screenshots' set, OpenNuXL's test 3),
 // vendor (a Bruker .d with its mz view, a Thermo .raw whose mz view OpenNuXL could not write), legacy (the vendor case
-// as app versions before 0.7 saved it: the .d's spectra converted by the shim, the .raw's conversion failed); each run's
-// peaks are in its QPX mz view (nuxl/<stem>.mz.parquet). A search before 0.7 (`legacy: true`: its outputs.json without
+// as app versions before 0.9 saved it: the .d's spectra converted by the shim, the .raw's conversion failed); each run's
+// peaks are in its QPX mz view (nuxl/<stem>.mz.parquet). A search before 0.9 (`legacy: true`: its outputs.json without
 // `mz`) reads them from the input mzML, which is the app's example (src-tauri/resources/example), as it is and as an
 // indexed, zlib-compressed copy (fixtures/spectra).
 
@@ -28,7 +28,7 @@ interface Folder {
 
 /**
  * The folder of fixture `name` as the `files` contract has it. The inputs' links (`<n>__<name>`) are `mzml` (the plain
- * or indexed example; null: not there); absolute paths do not exist. `legacy`: as an app before 0.7 left it, its
+ * or indexed example; null: not there); absolute paths do not exist. `legacy`: as an app before 0.9 left it, its
  * outputs.json without `mz` (no mz view).
  */
 function folder(
@@ -499,7 +499,7 @@ describe("the spectra of the PSMs: the run's QPX mz view (OpenNuXL's -out_qpx)",
   })
 })
 
-describe('the spectra of the PSMs of a search before 0.7 (no mz view): from the input mzML', () => {
+describe('the spectra of the PSMs of a search before 0.9 (no mz view): from the input mzML', () => {
   const readOld = () => readSearch(folder('example', { legacy: true }).files)
 
   test('of an indexed mzML: by its index, the spectrum element alone by byte range', async () => {
@@ -603,7 +603,7 @@ describe('the spectra of the PSMs of a search before 0.7 (no mz view): from the 
   })
 })
 
-describe('the spectra of the PSMs of a search before 0.7: Thermo .raw and Bruker .d inputs', () => {
+describe('the spectra of the PSMs of a search before 0.9: Thermo .raw and Bruker .d inputs', () => {
   // (fixtures/legacy: run.d, its spectra converted by the shim, nuxl/1__run.spectra.mzML: the example's spectra under
   // Bruker IDs, MS2 only, indexed, in reverse order; thermo.raw, whose conversion failed: outputs.json spectra null)
   const BRUKER_9 = 'frame=102 scan=201 precursor=1010'

@@ -14,7 +14,7 @@
 // The peaks of a PSM are read when it is opened (`SearchResult.spectra`), from the QPX mz view of its run (outputs.json
 // `mz`, `nuxl/<stem>.mz.parquet`: OpenNuXL's -out_qpx, the MS2 spectra of the run's PSMs, their peaks filtered as
 // its footer says) by row group, its row found by the PSM's native ID (the view's `id`), for every kind of input. A
-// search of an app before 0.7 has no mz view: from the input mzML by byte range (by the file's index, else by
+// search of an app before 0.9 has no mz view: from the input mzML by byte range (by the file's index, else by
 // scanning it, mzml.ts), or of a Thermo .raw or Bruker .d input from the mzML the shim then converted its spectra to
 // (outputs.json `spectra`; FileConverter, indexed), never from the input itself (a vendor file, a folder); the spectra
 // are matched by native ID alone, so that file may hold them in another order and MS2 only. When the peaks cannot be
@@ -352,6 +352,8 @@ const P = {
   // FalseDiscoveryRate's peptide-level q-value (Constants::UserParam::PEPTIDE_Q_VALUE), which NuXLFDR also filters on
   peptideQValue: 'peptide q-value',
   annotation: 'fragment_annotation',
+  // the precursor's CCS (OpenNuXL, spectra with ion mobility)
+  ccs: 'IM',
 } as const
 
 /** A value of NuXL:NA or NuXL:NT that means none. */
@@ -472,6 +474,8 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     fdrGroup: new Array<string>(count),
     peptideQValue: new Float64Array(count),
     annotation: new Array<string>(count),
+    nuxlScore: new Float64Array(count),
+    ccs: new Float64Array(count),
   }
 
   const peptideRow = new Map<string, number>()
@@ -522,6 +526,7 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     const fdrGroup = txt(P.fdrGroup)
     const peptideQValue = num(P.peptideQValue)
     const annotation = txt(P.annotation)
+    const ccs = num(P.ccs)
     const featureColumns = featureNames.map((f) => (hits.params.has(f) ? num(f) : null))
     // the custom modifications of the run: OpenNuXL's precursor adducts by id, with their masses
     const definitions = new Map<string, number>()
@@ -578,6 +583,8 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
       xl.fdrGroup[i] = part.kind === 'peptides' ? PEPTIDE_GROUP : fdrGroup[h] || 'XL'
       xl.peptideQValue[i] = peptideQValue[h]
       xl.annotation[i] = annotation[h]
+      xl.nuxlScore[i] = nuxlScore[h]
+      xl.ccs[i] = ccs[h]
 
       // its peptide, unique by the OpenMS string and the adduct
       const openms = hits.sequence[h]
@@ -1052,7 +1059,7 @@ function psmSpectra(files: SearchFiles, inputs: InputRecord[], runs: (RunOutputs
     const id = psms.nativeId[row]
     if (!input) return result(NO_PEAKS(psms.mz[row]), 'The PSM has no input file.')
     if (id === '') return result(NO_PEAKS(psms.mz[row]), 'The PSM has no native ID of its spectrum.')
-    // the run's mz view (a search of an app before 0.7 has none: `mz` undefined)
+    // the run's mz view (a search of an app before 0.9 has none: `mz` undefined)
     const view = runs[k]?.mz
     if (view === null) {
       return result(NO_PEAKS(psms.mz[row]), `OpenNuXL could not keep the spectra of ${input.name} (the Overview's notes say why); the PSM view shows the annotated peaks only.`)
