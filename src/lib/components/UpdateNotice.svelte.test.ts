@@ -4,7 +4,12 @@
 // (the modules are fresh for each test, `load`: Svelte's runtime too, so that the components and mount share one)
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const shim = vi.hoisted(() => ({ opened: [] as string[], atStart: true, openFails: null as string | null }))
+const shim = vi.hoisted(() => ({
+  opened: [] as string[],
+  atStart: true,
+  openFails: null as string | null,
+  toolFails: null as string | null,
+}))
 vi.mock('$lib/desktop', () => ({
   appVersion: async () => '0.3.0',
   updateCheckAtStart: async () => shim.atStart,
@@ -13,7 +18,10 @@ vi.mock('$lib/desktop', () => ({
     shim.opened.push(version)
   },
   errorText: (e: unknown) => String(e),
-  toolInfo: async () => ({ version: '3.5.0', path: '/opt/OpenNuXL' }),
+  toolInfo: async () => {
+    if (shim.toolFails) throw shim.toolFails
+    return { version: '3.5.0', path: '/opt/OpenNuXL' }
+  },
   cpuCount: async () => 8,
 }))
 
@@ -57,6 +65,7 @@ beforeEach(() => {
   shim.opened = []
   shim.atStart = true
   shim.openFails = null
+  shim.toolFails = null
   localStorage.clear()
   latest('desktop-native-v0.4.0')
 })
@@ -157,6 +166,7 @@ describe('the About menu', () => {
     expect(byId('about-version')!.textContent).toBe('NuXL 0.3.0')
     expect(byId('about-tool')!.textContent).toBe('OpenNuXL 3.5.0')
     expect(byId('about-author')!.textContent).toBe('Created by Timo Sachsenberg')
+    expect(byId('about-tool-error')).toBeNull()
     const toggle = byId('update-at-start')!
     expect(toggle.getAttribute('aria-checked')).toBe('true')
     expect(document.querySelector('label[for="about-check-at-start"]')!.textContent).toBe('Check for new versions at start')
@@ -167,6 +177,14 @@ describe('the About menu', () => {
     expect(localStorage.getItem('nuxl.updateCheck')).toBe('off')
     // nothing was asked of GitHub by opening it
     expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('says why OpenNuXL cannot be run, in full', async () => {
+    shim.toolFails =
+      'OpenNuXL could not start (0xC0000135, STATUS_DLL_NOT_FOUND: a DLL it needs is missing; …).\nThe tool: C:\\NuXL\\OpenNuXL.exe\nIt printed nothing.'
+    await open()
+    expect(byId('about-tool')!.textContent).toBe('OpenNuXL cannot be run')
+    expect(byId('about-tool-error')!.textContent).toBe(shim.toolFails)
   })
 
   it('Check for updates: a newer version, with Download', async () => {

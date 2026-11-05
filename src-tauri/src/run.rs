@@ -509,6 +509,9 @@ mod tests_windows {
             how_it_ended(&ExitStatus::from_raw(0xC000_0005)).as_deref(),
             Some("OpenNuXL crashed (exception 0xC0000005)")
         );
+        assert!(how_it_ended(&ExitStatus::from_raw(0xC000_0135))
+            .unwrap()
+            .starts_with("OpenNuXL could not start (0xC0000135, STATUS_DLL_NOT_FOUND: a DLL it needs is missing;"));
     }
 }
 
@@ -1050,9 +1053,50 @@ pub fn how_it_ended(status: &ExitStatus) -> Option<String> {
     how_tool_ended("OpenNuXL", status)
 }
 
+/// What a Windows status (NTSTATUS) a process ended with says when Windows could not start the program at all: a
+/// DLL missing, damaged or refused while it was being loaded. Its name and what it means, for the statuses a user can
+/// act on (reinstall, look at the antivirus program); None for any other (a crash while the program ran).
+pub fn windows_start_failure(code: u32) -> Option<&'static str> {
+    Some(match code {
+        0xC000_0135 => {
+            "STATUS_DLL_NOT_FOUND: a DLL it needs is missing; an antivirus program may have removed it, and \
+             reinstalling NuXL brings it back"
+        }
+        0xC000_0139 => {
+            "STATUS_ENTRYPOINT_NOT_FOUND: its DLLs do not fit together, as after an incomplete update; reinstalling \
+             NuXL replaces them"
+        }
+        0xC000_007B => {
+            "STATUS_INVALID_IMAGE_FORMAT: one of its DLLs is damaged or for another kind of computer; reinstalling \
+             NuXL replaces it"
+        }
+        0xC000_0142 => "STATUS_DLL_INIT_FAILED: one of its DLLs failed to start",
+        0xC000_0022 => {
+            "STATUS_ACCESS_DENIED: Windows denied it one of its files; an antivirus program or a policy of the \
+             computer's administrators may block it"
+        }
+        0xC000_0428 => {
+            "STATUS_INVALID_IMAGE_HASH: Windows refused one of its files for its signature; Smart App Control or a \
+             policy of the computer's administrators may block it"
+        }
+        _ => return None,
+    })
+}
+
+/// How the tool `tool` ended on Windows with the status `code` (an error, 0xC…): "OpenNuXL could not start
+/// (0xC0000135, STATUS_DLL_NOT_FOUND: a DLL it needs is missing; ...)" when Windows could not start it
+/// ([`windows_start_failure`]), else "OpenNuXL crashed (exception 0xC0000005)".
+pub fn windows_ending(tool: &str, code: u32) -> String {
+    match windows_start_failure(code) {
+        Some(why) => format!("{tool} could not start (0x{code:08X}, {why})"),
+        None => format!("{tool} crashed (exception 0x{code:08X})"),
+    }
+}
+
 /// How the tool `tool` (its name) ended when it did not succeed, the lead of its failure: "OpenNuXL crashed (signal
-/// 11, SIGSEGV)" (SIGKILL: the system may have ended it for lack of memory), on Windows "OpenNuXL crashed
-/// (exception 0xC0000005)" for an exception's status, else "OpenNuXL ended with exit code 3"; None for success.
+/// 11, SIGSEGV)" (SIGKILL: the system may have ended it for lack of memory), on Windows for an error status
+/// [`windows_ending`] ("OpenNuXL could not start (0xC0000135, STATUS_DLL_NOT_FOUND: ...)", "OpenNuXL crashed
+/// (exception 0xC0000005)"), else "OpenNuXL ended with exit code 3"; None for success.
 pub fn how_tool_ended(tool: &str, status: &ExitStatus) -> Option<String> {
     if status.success() {
         return None;
@@ -1070,9 +1114,9 @@ pub fn how_tool_ended(tool: &str, status: &ExitStatus) -> Option<String> {
         return Some(format!("{tool} crashed (signal {signal}{name}{oom})"));
     }
     Some(match status.code() {
-        // an NTSTATUS error (0xC…): an access violation, a stack overflow, ...
+        // an NTSTATUS error (0xC…): a DLL missing at the start, an access violation, a stack overflow, ...
         Some(code) if cfg!(windows) && (code as u32) >= 0xC000_0000 => {
-            format!("{tool} crashed (exception 0x{:08X})", code as u32)
+            windows_ending(tool, code as u32)
         }
         Some(code) => format!("{tool} ended with exit code {code}"),
         None => format!("{tool} ended unexpectedly"),

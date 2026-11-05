@@ -231,7 +231,10 @@ Microsoft's signatures; `bundle-nuxl.sh` and `package-macos.sh` check them).
 - FileConverter's `-RawToMzML:reader` defaults to ThermoRawFileParser (`external`) on Windows; the app always passes
   `inprocess`.
 
-**`tool_info`** is `{ version, path }` (`src-tauri/src/tool.rs`): the version from `OpenNuXL --help`. The app's
+**`tool_info`** is `{ version, path }` (`src-tauri/src/tool.rs`): the version from `OpenNuXL --help`. A tool that
+reports none fails it with how it ended (`run.rs` `how_tool_ended`: an exit code, a signal; on Windows the statuses of
+a tool Windows could not start spelled out, e.g. `0xC0000135, STATUS_DLL_NOT_FOUND`: a DLL missing), the tool's path
+and its last 8 lines of output; the search's problem line shows it on one line, the About panel in full. The app's
 `--smoke-test` also reports whether PercolatorAdapter is beside the tool. `NUXL_TOOL` names a tool to use
 instead of the bundled one (the e2e specs and the `real_nuxl` tests: `src-tauri/resources/nuxl/bin/OpenNuXL`, or
 `<build>/bin/OpenNuXL`, which has PercolatorAdapter beside it as well).

@@ -10,7 +10,7 @@ use nuxl_desktop_lib::args::{
     Placement, SearchRequest, FILTER_STEPS, MAX_STEM,
 };
 use nuxl_desktop_lib::decoys::Marker;
-use nuxl_desktop_lib::run::{SearchEvent, Searches};
+use nuxl_desktop_lib::run::{self, SearchEvent, Searches};
 use nuxl_desktop_lib::tool;
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
@@ -1429,6 +1429,138 @@ fn probing_a_tool_reports_its_version_and_path() {
     assert!(tool::probe(&dir.path().join("none")).is_err());
     // the fake answers --help as OpenNuXL does
     assert_eq!(probe_written_script(&fake_nuxl()).unwrap().version, "9.9.9");
+}
+
+/// A tool that gives no version: why, from how it ended, the tool and its last lines (Linux' loader without the
+/// bundle's libraries: exit code 127 and the library on stderr).
+#[cfg(unix)]
+#[test]
+fn a_tool_without_a_version_says_how_it_ended_and_what_it_printed() {
+    let dir = TempDir::new("probe-fails");
+    let script = executable(&dir, "OpenNuXL");
+    fs::write(
+        &script,
+        "#!/bin/sh\necho 'OpenNuXL: error while loading shared libraries: libOpenMS.so: cannot open shared object file: No such file or directory' >&2\nexit 127\n",
+    )
+    .unwrap();
+    let message = probe_written_script(&script).unwrap_err();
+    assert_eq!(
+        message,
+        format!(
+            "OpenNuXL ended with exit code 127.\nThe tool: {}\nIt printed:\nOpenNuXL: error while loading shared \
+             libraries: libOpenMS.so: cannot open shared object file: No such file or directory",
+            script.display()
+        )
+    );
+    // a crash, silent
+    fs::write(&script, "#!/bin/sh\nkill -SEGV $$\n").unwrap();
+    let message = probe_written_script(&script).unwrap_err();
+    assert_eq!(
+        message,
+        format!(
+            "OpenNuXL crashed (signal 11, SIGSEGV).\nThe tool: {}\nIt printed nothing.",
+            script.display()
+        )
+    );
+    // another program: it ends well, without a version
+    fs::write(&script, "#!/bin/sh\necho 'usage: other [options]'\n").unwrap();
+    let message = probe_written_script(&script).unwrap_err();
+    assert_eq!(
+        message,
+        format!(
+            "The tool did not report a version; is it OpenNuXL of OpenMS?\nThe tool: {}\nIt printed:\nusage: other \
+             [options]",
+            script.display()
+        )
+    );
+}
+
+#[test]
+fn the_message_of_a_tool_without_a_version_quotes_its_last_lines() {
+    // stdout, then stderr; no blank lines, escape sequences or line ends (Windows: CRLF); the last ones
+    let (lines, cut) = tool::last_lines(b"out\r\n\r\n", b"\x1b[1mError:\x1b[0m one\r\n  two  \n");
+    assert_eq!(lines, ["out", "Error: one", "two"]);
+    assert!(!cut);
+    let many: String = (1..=12).map(|i| format!("line {i}\n")).collect();
+    let (lines, cut) = tool::last_lines(b"", many.as_bytes());
+    assert_eq!(lines.len(), tool::QUOTED_LINES);
+    assert_eq!(lines[0], "line 5");
+    assert_eq!(lines.last().unwrap(), "line 12");
+    assert!(cut);
+    let (lines, _) = tool::last_lines("é".repeat(400).as_bytes(), b"");
+    assert_eq!(lines[0].chars().count(), 301, "300 characters and …");
+    assert!(lines[0].ends_with('…'));
+    assert_eq!(tool::last_lines(b"", b"\n \n"), (vec![], false));
+
+    let path = Path::new("/x/OpenNuXL");
+    #[cfg(unix)]
+    let failed = {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(3 << 8)
+    };
+    #[cfg(windows)]
+    let failed = {
+        use std::os::windows::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(3)
+    };
+    assert_eq!(
+        tool::no_version_message(path, &failed, b"", many.as_bytes()),
+        format!(
+            "OpenNuXL ended with exit code 3.\nThe tool: {}\nIt printed (the last 8 lines):\n{}",
+            path.display(),
+            (5..=12)
+                .map(|i| format!("line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    );
+    // Windows: a DLL missing at the start
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt;
+        let message = tool::no_version_message(
+            path,
+            &std::process::ExitStatus::from_raw(0xC000_0135),
+            b"",
+            b"",
+        );
+        assert!(
+            message.starts_with("OpenNuXL could not start (0xC0000135, STATUS_DLL_NOT_FOUND: a DLL it needs is missing;"),
+            "{message}"
+        );
+        assert!(message.ends_with("It printed nothing."), "{message}");
+    }
+}
+
+/// What Windows' error statuses say (any platform: the formatting only).
+#[test]
+fn windows_says_why_a_tool_could_not_start() {
+    assert_eq!(
+        run::windows_ending("OpenNuXL", 0xC000_0135),
+        "OpenNuXL could not start (0xC0000135, STATUS_DLL_NOT_FOUND: a DLL it needs is missing; an antivirus program \
+         may have removed it, and reinstalling NuXL brings it back)"
+    );
+    assert!(run::windows_ending("OpenNuXL", 0xC000_0139)
+        .starts_with("OpenNuXL could not start (0xC0000139, STATUS_ENTRYPOINT_NOT_FOUND: its DLLs do not fit together"));
+    assert!(run::windows_ending("FileConverter", 0xC000_0022)
+        .starts_with("FileConverter could not start (0xC0000022, STATUS_ACCESS_DENIED"));
+    // a crash while it ran
+    assert_eq!(
+        run::windows_ending("OpenNuXL", 0xC000_0005),
+        "OpenNuXL crashed (exception 0xC0000005)"
+    );
+    assert_eq!(run::windows_start_failure(0xC000_0005), None);
+    for code in [
+        0xC000_0135,
+        0xC000_0139,
+        0xC000_007B,
+        0xC000_0142,
+        0xC000_0022,
+        0xC000_0428,
+    ] {
+        let why = run::windows_start_failure(code).unwrap();
+        assert!(why.starts_with("STATUS_") && !why.ends_with('.'), "{why}");
+    }
 }
 
 #[test]

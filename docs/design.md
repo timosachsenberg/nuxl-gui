@@ -327,8 +327,9 @@ timeout, HTTP errors and GitHub's rate limit, 403/429, an answer that is not JSO
   is read out): Download (hides it for this start only), Not now (localStorage `nuxl.updateDismissed`: no banner
   again for that version, one for a newer). No banner either when, while it waited for GitHub, the setting was turned
   off or "Check for updates" was clicked (that check shows its own result). Errors are silent.
-- The About menu (AboutMenu.svelte, ⓘ in the top bar): the app's and OpenNuXL's versions, "Check for updates" with
-  its result in place, and the setting. A Download that cannot open the page says so where it was clicked (banner or
+- The About menu (AboutMenu.svelte, ⓘ in the top bar): the app's and OpenNuXL's versions (when OpenNuXL cannot be
+  run, `tool_info`'s error in full: how it ended, the tool, its last output), "Check for updates" with its result in
+  place, and the setting. A Download that cannot open the page says so where it was clicked (banner or
   panel); a new check or Not now clears it.
 - The release page opens in the system's browser through the shim, `open_release_page(version)`
   (`src-tauri/src/update.rs`): the version must be digits and dots (`major.minor.patch`); the URL
