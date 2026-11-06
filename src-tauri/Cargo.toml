@@ -1,6 +1,6 @@
 [package]
 name = "nuxl-desktop"
-version = "0.9.0"
+version = "0.9.1"
 description = "NuXL desktop: protein-nucleic acid cross-link identification with OpenNuXL of OpenMS"
 edition = "2021"
 license = "BSD-3-Clause"
