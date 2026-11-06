@@ -202,7 +202,8 @@ the bundle's `libOpenMS.so` with a path of the same length that cannot exist (`/
 with the prefix (OpenMS reads it through a volatile pointer for this; `File.cpp`, `installPath_`). The source and
 build tree paths are the build machine's (in CI below `/home/runner/work`) and cannot be patched (GCC writes them
 into the code as immediates); they do not exist on a user's machine. On the build machine they do, so the smoke
-test hides them (`--hide-openms`, below).
+test hides them (`--hide-openms`, below). On Windows the source tree's `share/OpenMS` is overwritten in `OpenMS.dll`
+(below, "The install prefix").
 
 ### .NET runtime (`scripts/fetch-dotnet-runtime.sh`)
 
@@ -298,6 +299,17 @@ search in a folder named `Größe ü` (or under a user `Jörg`) read its inputs 
 Windows OpenMS does not probe its install prefix at all (`File.cpp`: CMake's default prefix is the wrong
 `(x86)` tree), and the string is not in `OpenMS.dll`; should it ever be, it is overwritten with
 `<no-install-path>///...` (`<` cannot be part of a Windows path).
+
+**The source tree's share/OpenMS** (`OPENMS_DATA_PATH`, in CI `D:/a/nuxl-gui/nuxl-gui/openms/share/OpenMS`) is
+overwritten in `OpenMS.dll` on Windows, with `<no-data-path>///...` (`bundle_closure.py pe --data-path`; the script
+stops if the string is not in `OpenMS.dll` as one, as with GCC's immediates). OpenMS looks at it before the tool's own
+`bin/../share/OpenMS` with `std::filesystem::exists`, which throws when Windows cannot answer for the path's drive,
+`ERROR_NOT_READY` ("The device is not ready"): on a computer whose `D:` is an empty DVD drive, OpenNuXL and
+PercolatorAdapter ended at their start (`TOPPBase`'s constructor, through `ToolHandler`'s registry) with `0xC0000409`
+and printed nothing (seen with 0.9.0). A path Windows rejects as invalid (`<`) is one that does not exist for
+`std::filesystem`. `bundle-nuxl.sh` checks that the tools look at no other `share/OpenMS` than the bundle's: with its
+`CHEMISTRY/unimod.xml` set aside, and the source tree still there, both have to report that they find none. (The fix
+in OpenMS itself: `File::isOpenMSDataPath_` with the `error_code` overload of `exists`.)
 
 ### Packages
 
