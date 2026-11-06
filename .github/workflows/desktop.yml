@@ -20,11 +20,12 @@
 # the scripts and licence files that make it (fetch-dotnet-runtime.sh, with the .NET runtime's pin, among them), so
 # OpenMS is built only when one of them changes; the vendor test data, keyed by its script; vcpkg's binary cache, keyed by
 # the pin and the triplet (plus the hash of its content when saved), so a rebuild of OpenMS does not rebuild
-# its dependencies; on macOS and Windows ccache's objects of OpenMS, so a rebuild after a change of the
-# bundling scripts (or a build cut short) compiles little. They are saved right after the step that fills
-# them, also when it failed, so a later failure (tests, packaging) or a time-out does not lose hours of
-# building. On every platform the vcpkg dependencies are built in a step of their own (configure), saved,
-# and OpenMS is built after: a first run that runs out of time keeps the dependencies.
+# its dependencies; vcpkg's asset cache, the sources and tools it downloads, one per system for any pin, so a
+# dependency rebuilt from source does not need its download site; on macOS and Windows ccache's objects of
+# OpenMS, so a rebuild after a change of the bundling scripts (or a build cut short) compiles little. They are
+# saved right after the step that fills them, also when it failed, so a later failure (tests, packaging) or a
+# time-out does not lose hours of building. On every platform the vcpkg dependencies are built in a step of their
+# own (configure), saved, and OpenMS is built after: a first run that runs out of time keeps the dependencies.
 name: desktop
 
 on:
@@ -157,6 +158,28 @@ jobs:
         if: steps.bundle.outputs.cache-hit != 'true'
         run: git -C openms submodule update --init --depth 1 vcpkg
 
+      # vcpkg's asset cache: the files vcpkg downloads (the ports' sources, its tools), stored by their SHA-512 and
+      # read before the original URL (X_VCPKG_ASSET_SOURCES), so that a dependency rebuilt from source does not
+      # depend on its download site being up (archive.apache.org, which serves Thrift's source, timed out for an
+      # hour once and failed main's run). One cache per system, of any pin (sources outlive pins), saved below as
+      # <this key>-<hash of the content>. Restored on every run, also when OpenMS is not built: a cache unused
+      # for 7 days is removed by GitHub.
+      - name: Restore vcpkg's asset cache
+        id: assets
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg-assets
+          key: vcpkg-assets-v1-${{ runner.os }}
+          restore-keys: vcpkg-assets-v1-${{ runner.os }}-
+
+      - name: vcpkg's asset cache for the build
+        if: steps.bundle.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p vcpkg-assets
+          assets=$PWD/vcpkg-assets
+          if command -v cygpath >/dev/null; then assets=$(cygpath -m "$assets"); fi
+          echo "X_VCPKG_ASSET_SOURCES=clear;x-azurl,file://$assets/,,readwrite" >> "$GITHUB_ENV"
+
       - name: Restore vcpkg's binary cache
         if: steps.bundle.outputs.cache-hit != 'true'
         id: vcpkg
@@ -196,6 +219,16 @@ jobs:
         with:
           path: vcpkg-bincache
           key: ${{ steps.vcpkg.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-bincache/**') }}
+
+      # (with what this run downloaded; not saved again when nothing was)
+      - name: Save vcpkg's asset cache
+        if: >-
+          always() && steps.bundle.outputs.cache-hit != 'true' && hashFiles('vcpkg-assets/**') != '' &&
+          steps.assets.outputs.cache-matched-key != format('{0}-{1}', steps.assets.outputs.cache-primary-key, hashFiles('vcpkg-assets/**'))
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg-assets
+          key: ${{ steps.assets.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-assets/**') }}
 
       - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter)
         if: steps.bundle.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
@@ -437,6 +470,23 @@ jobs:
         if: steps.bundle.outputs.cache-hit != 'true'
         run: git -C openms submodule update --init --depth 1 vcpkg
 
+      # (vcpkg's asset cache: as in the Linux job)
+      - name: Restore vcpkg's asset cache
+        id: assets
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg-assets
+          key: vcpkg-assets-v1-${{ runner.os }}
+          restore-keys: vcpkg-assets-v1-${{ runner.os }}-
+
+      - name: vcpkg's asset cache for the build
+        if: steps.bundle.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p vcpkg-assets
+          assets=$PWD/vcpkg-assets
+          if command -v cygpath >/dev/null; then assets=$(cygpath -m "$assets"); fi
+          echo "X_VCPKG_ASSET_SOURCES=clear;x-azurl,file://$assets/,,readwrite" >> "$GITHUB_ENV"
+
       - name: Restore vcpkg's binary cache
         if: steps.bundle.outputs.cache-hit != 'true'
         id: vcpkg
@@ -481,6 +531,16 @@ jobs:
         with:
           path: vcpkg-bincache
           key: ${{ steps.vcpkg.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-bincache/**') }}
+
+      # (with what this run downloaded; not saved again when nothing was)
+      - name: Save vcpkg's asset cache
+        if: >-
+          always() && steps.bundle.outputs.cache-hit != 'true' && hashFiles('vcpkg-assets/**') != '' &&
+          steps.assets.outputs.cache-matched-key != format('{0}-{1}', steps.assets.outputs.cache-primary-key, hashFiles('vcpkg-assets/**'))
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg-assets
+          key: ${{ steps.assets.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-assets/**') }}
 
       - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter)
         if: steps.bundle.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'
@@ -699,6 +759,23 @@ jobs:
         if: steps.bundle.outputs.cache-hit != 'true'
         run: git -C openms submodule update --init --depth 1 vcpkg
 
+      # (vcpkg's asset cache: as in the Linux job)
+      - name: Restore vcpkg's asset cache
+        id: assets
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg-assets
+          key: vcpkg-assets-v1-${{ runner.os }}
+          restore-keys: vcpkg-assets-v1-${{ runner.os }}-
+
+      - name: vcpkg's asset cache for the build
+        if: steps.bundle.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p vcpkg-assets
+          assets=$PWD/vcpkg-assets
+          if command -v cygpath >/dev/null; then assets=$(cygpath -m "$assets"); fi
+          echo "X_VCPKG_ASSET_SOURCES=clear;x-azurl,file://$assets/,,readwrite" >> "$GITHUB_ENV"
+
       - name: Restore vcpkg's binary cache
         if: steps.bundle.outputs.cache-hit != 'true'
         id: vcpkg
@@ -747,6 +824,16 @@ jobs:
         with:
           path: vcpkg-bincache
           key: ${{ steps.vcpkg.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-bincache/**') }}
+
+      # (with what this run downloaded; not saved again when nothing was)
+      - name: Save vcpkg's asset cache
+        if: >-
+          always() && steps.bundle.outputs.cache-hit != 'true' && hashFiles('vcpkg-assets/**') != '' &&
+          steps.assets.outputs.cache-matched-key != format('{0}-{1}', steps.assets.outputs.cache-primary-key, hashFiles('vcpkg-assets/**'))
+        uses: actions/cache/save@v6
+        with:
+          path: vcpkg-assets
+          key: ${{ steps.assets.outputs.cache-primary-key }}-${{ hashFiles('vcpkg-assets/**') }}
 
       - name: Build OpenMS (libOpenMS, OpenNuXL, PercolatorAdapter)
         if: steps.bundle.outputs.cache-hit != 'true' && steps.configure.outcome == 'success'

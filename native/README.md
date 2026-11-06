@@ -419,8 +419,9 @@ their own and saved before OpenMS is built, so a first run that runs out of time
 on macOS and Windows, minutes after a push) and `release`. Concurrency is per job and platform: a push waits for
 the running build of its platform instead of cancelling it. GitHub keeps at most 10 GB of Actions caches per
 repository and evicts the least recently used beyond that; ccache's objects are saved under a key per run
-(`…-<run id>-<attempt>`) and vcpkg's binary cache under the hash of its content, so each failed or changed build
-adds an entry: delete the superseded ones (`gh cache list`, `gh cache delete`) when the total nears the limit.
+(`…-<run id>-<attempt>`) and vcpkg's binary and asset caches under the hash of their content, so each failed or
+changed build adds an entry: delete the superseded ones (`gh cache list`, `gh cache delete`) when the total nears
+the limit.
 
 The `linux` job of `.github/workflows/desktop.yml` (branch `main`) is a matrix of two architectures with the same
 steps: x64 on `ubuntu-22.04` (vcpkg triplet `x64-linux-dynamic`, artifact `nuxl-desktop-linux`) and arm64 on
@@ -455,8 +456,13 @@ Caches (`actions/cache`) belong to the ref that saved them and are readable from
 triplet and the scripts that make it, `fetch-dotnet-runtime.sh` with the .NET runtime's pin among them), so OpenMS
 is only built when one of them changes, and vcpkg's binary cache
 (key: the pin and the triplet, plus the hash of its content, so the packages built before a failure are kept;
-restored from an earlier pin's when the pin moves). Pull requests read `main`'s caches; their own saves stay with
-the pull request.
+restored from an earlier pin's when the pin moves). vcpkg's asset cache holds what vcpkg downloads (the ports'
+sources, its tools; `X_VCPKG_ASSET_SOURCES` points vcpkg at it, `x-azurl,file://…,,readwrite`): one per system
+(`vcpkg-assets-v1-<Linux|macOS|Windows>`, plus the hash of its content), for any pin, read before a source's own
+site, so a dependency built from source does not need that site to be up (archive.apache.org, which serves
+Thrift's source, once timed out for an hour and failed a run of `main`). It is restored on every run, also when
+OpenMS is not built, because GitHub removes a cache that has not been used for 7 days; after a week without any
+run it is gone like the others. Pull requests read `main`'s caches; their own saves stay with the pull request.
 
 A tag `desktop-native-v*` builds nothing (it releases the packages that were built and tested on `main`): its
 release job looks up the successful `main` run of the tagged commit, downloads that run's packages, the ones its
