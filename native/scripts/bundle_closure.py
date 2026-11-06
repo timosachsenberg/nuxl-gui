@@ -4,7 +4,7 @@ Windows, for bundle-nuxl.sh.
 
     bundle_closure.py macho <exe>... <out> [--search DIR]... [--install-path PATH]
     bundle_closure.py macho-verify <out>
-    bundle_closure.py pe <exe>... <out> [--search DIR]... [--redist DIR]... [--install-path PATH]
+    bundle_closure.py pe <exe>... <out> [--search DIR]... [--redist DIR]... [--install-path PATH] [--data-path PATH]
     bundle_closure.py pe-verify <out> [--system DIR]
 
 macho (macOS): copies each <exe> to <out>/bin/<its name> and every dylib they load, directly or not, to
@@ -27,6 +27,11 @@ place it looks.
 --install-path: OpenMS looks for share/OpenMS at its compiled-in install prefix before it looks next to
 the tool; that string is overwritten in the bundled OpenMS library, at the same length, with a path that
 cannot exist (see bundle-nuxl.sh).
+
+--data-path (pe): the same for the build machine's share/OpenMS (OPENMS_DATA_PATH, in the OpenMS source tree),
+which OpenMS also looks at before the tool's own: on Windows a drive of that path that is not ready on the
+user's computer (CI builds on D:, an empty DVD drive there) makes the look a fatal error, so OpenMS.dll gets
+'<no-data-path>///...' instead ('<' cannot be part of a Windows path: Windows answers that no such file exists).
 
 The verify commands check a bundle (also one inside a package): macho-verify that every reference is
 the system's or @rpath/<a bundled dylib>, the LC_RPATHs are the two above, the signatures are valid,
@@ -71,6 +76,26 @@ def patch_install_path(path, old, new_prefix):
         die(f"{path} still holds {old}")
     Path(path).write_bytes(data)
     print(f"  compiled-in install path {old} overwritten in {Path(path).name}")
+
+
+def patch_data_path(path, old, new_prefix):
+    """Overwrites every copy of the C string `old` (the path and its NUL; at least one) in `path` with `new_prefix`
+    padded with '/' to the same length. (Not required to follow a NUL: the linker may put any constant before a
+    string literal.)"""
+    old_b = old.encode()
+    new_b = new_prefix.encode()
+    if len(old_b) < len(new_b):
+        die(f"the data path {old!r} is shorter than {new_prefix!r}")
+    new_b += b"/" * (len(old_b) - len(new_b))
+    data = Path(path).read_bytes()
+    count = data.count(old_b + b"\0")
+    if count == 0:
+        die(f"{path}: the compiled-in data path {old} is not in it (did the build of OpenMS change?)")
+    data = data.replace(old_b + b"\0", new_b + b"\0")
+    if old_b in data:
+        die(f"{path} still holds {old}, in a longer string")
+    Path(path).write_bytes(data)
+    print(f"  compiled-in data path {old} overwritten in {Path(path).name} ({count}x)")
 
 
 # --- Mach-O --------------------------------------------------------------------------------------
@@ -348,6 +373,16 @@ def pe_bundle(args):
             patch_install_path(openms, args.install_path, "<no-install-path>")
         else:
             print(f"  the install path {args.install_path} is not in OpenMS.dll (not probed on Windows)")
+    if args.data_path:
+        # The build machine's share/OpenMS (the source tree's), which OpenMS looks at before the tool's own
+        # bin/../share/OpenMS: with std::filesystem::exists, which throws when Windows cannot answer for the path's
+        # drive (ERROR_NOT_READY: an empty DVD drive), and the throw ends the tool before it has printed anything
+        # (0xC0000409). CI builds on D:, often a DVD drive. '<' makes it a path Windows rejects as invalid, which
+        # std::filesystem takes for "does not exist".
+        openms = out / "OpenMS.dll"
+        if not openms.is_file():
+            die("OpenMS.dll is not in the closure")
+        patch_data_path(openms, args.data_path, "<no-data-path>")
     for exe in exes:
         utf8_code_page(out / exe.name)
     own_names = {exe.name.lower() for exe in exes}
@@ -422,6 +457,7 @@ def main():
         p.add_argument("--install-path")
         if name == "pe":
             p.add_argument("--redist", action="append", default=[])
+            p.add_argument("--data-path")
     sub.add_parser("macho-verify").add_argument("out")
     p = sub.add_parser("pe-verify")
     p.add_argument("out")

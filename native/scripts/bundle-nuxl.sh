@@ -241,6 +241,12 @@ closure_macos() {
 # the closure is OpenMS's DLLs, the Visual C++ runtime and vcomp140 (MSVC's OpenMP), taken app-locally
 # from the redistributable folders of the Visual Studio that built it; openms_thermo_bridge.dll is in the
 # build's bin, the nethost.dll it imports in the .NET SDK's host pack (nethost_search).
+# The build machine's share/OpenMS (OPENMS_DATA_PATH, the source tree's; in CI below D:/a), which OpenMS looks at
+# before the tool's own, is overwritten in OpenMS.dll with '<no-data-path>///...' (--data-path): on a user's
+# computer whose D: is a drive that is not ready (an empty DVD drive), looking at it threw, and OpenNuXL and
+# PercolatorAdapter ended at their start with 0xC0000409, printing nothing. (Should MSVC ever write the string into
+# the code, as GCC does on Linux, above, the script stops: the string has to be found in OpenMS.dll, and the check
+# at the end, that the tools no longer look there, has to pass.)
 closure_windows() {
   [ -n "${VCToolsRedistDir:-}" ] || die "VCToolsRedistDir is not set: run in a Visual Studio developer environment"
   local redist=() d root
@@ -251,7 +257,7 @@ closure_windows() {
   [ "${#redist[@]}" -gt 0 ] || die "no x64 runtime folders in $root"
   "$PY" -I "$HERE/bundle_closure.py" pe "${EXES[@]}" "$OUT" \
     --search "$BUILD/bin" --search "$BUILD/vcpkg_installed/$TRIPLET/bin" ${nethost_search[@]+"${nethost_search[@]}"} \
-    "${redist[@]}" --install-path "$install_data_path"
+    "${redist[@]}" --install-path "$install_data_path" --data-path "$build_data_path"
   rmdir "$OUT/lib"
   omp=(vcomp140.dll)
 }
@@ -260,6 +266,8 @@ header=$BUILD/src/openms/include/OpenMS/openms_data_path.h
 [ -f "$header" ] || die "$header is missing"
 install_data_path=$(sed -n 's/^#define OPENMS_INSTALL_DATA_PATH "\(.*\)"$/\1/p' "$header")
 [ -n "$install_data_path" ] || die "no OPENMS_INSTALL_DATA_PATH in $header"
+build_data_path=$(sed -n 's/^#define OPENMS_DATA_PATH "\(.*\)"$/\1/p' "$header")
+[ -n "$build_data_path" ] || die "no OPENMS_DATA_PATH in $header"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/share/OpenMS"
@@ -457,6 +465,26 @@ for name in "${TOOL_NAMES[@]}"; do
 done
 run_empty "$OUT/bin/OpenNuXL$SUFFIX" --help 2>&1 | tr -s ' \n' '  ' | grep -q 'RNA-UV (U)' \
   || die "the bundled OpenNuXL does not list the presets of share/OpenMS/NUXL/nuxl_presets.json"
+
+# Windows: the tools do not look at the build machine's share/OpenMS (OPENMS_DATA_PATH, overwritten in OpenMS.dll
+# above), which is still here: with the bundle's own share/OpenMS made unrecognisable (its CHEMISTRY/unimod.xml, by
+# which OpenMS knows the folder, set aside), they have to find none at all. Had one taken the source tree's, it
+# would run as usual.
+if [ "$PLATFORM" = windows ]; then
+  [ -f "$build_data_path/CHEMISTRY/unimod.xml" ] || die "no $build_data_path/CHEMISTRY/unimod.xml: the check below needs the source tree"
+  unimod=$share/CHEMISTRY/unimod.xml
+  mv "$unimod" "$unimod.aside"
+  for name in "${TOOL_NAMES[@]}"; do
+    # (the tool ends with an error, or crashes on the exception OpenMS throws after the message)
+    printed=$(run_empty "$OUT/bin/$name$SUFFIX" --help 2>&1 || true)
+    if ! grep -q 'Cannot find the OpenMS shared data directory' <<<"$printed"; then
+      mv "$unimod.aside" "$unimod"
+      die "the bundled $name still finds a share/OpenMS without the bundle's (the build machine's, $build_data_path?): $(tail -n 5 <<<"$printed")"
+    fi
+  done
+  mv "$unimod.aside" "$unimod"
+  echo "  the tools look at no compiled-in share/OpenMS ($build_data_path is overwritten), only at the bundle's"
+fi
 
 # Native .raw and .d reading is compiled in: OpenNuXL's -in takes 'raw' and 'd' (WITH_OPENTIMS), and it writes the
 # QPX mz view the app's PSM view reads (-out_qpx). The in-process Thermo reader (WITH_THERMO_RAW) is checked above:
