@@ -333,7 +333,7 @@ const P = {
   nuxlScore: 'NuXL:score',
   // the score before NuXLFDR set the q-value: `<score type>_score` (FalseDiscoveryRate), Percolator's svm
   svmScore: 'svm_score',
-  // PercolatorAdapter's own (svm score, PEP)
+  // Percolator's own (svm score, PEP), as PercolatorAdapter and OpenNuXL's in-process rescoring write them
   percolatorScore: 'MS:1001492',
   pep: 'MS:1001493',
   pepScore: 'Posterior Error Probability_score',

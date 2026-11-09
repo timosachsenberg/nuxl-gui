@@ -1,12 +1,10 @@
-//! Finding OpenNuXL, asking it for its version, and building the command that runs it (and the other OpenMS tools
-//! of the bundle).
+//! Finding OpenNuXL, asking it for its version, and building the command that runs it.
 //!
-//! OpenNuXL rescores with Percolator through another OpenMS tool, `PercolatorAdapter`, which it looks for
-//! beside its own executable (`File::findSiblingTOPPExecutable`), then on the PATH. The bundle has both in
-//! one `bin/` (`native/scripts/bundle-nuxl.sh`); a tool of a build tree has its sibling there too. OpenNuXL keeps
-//! the spectra of its PSMs for the PSM view itself (`-out_qpx`): no other tool runs. OpenMS finds its data (`share/OpenMS`: CHEMISTRY, the NUXL presets) next to the executable,
-//! `bin/../share/OpenMS`, which the bundle provides (and whose compiled-in alternatives it rules out), so the app
-//! sets no data path.
+//! OpenNuXL rescores its PSMs with the Percolator built into OpenMS in its own process (`-percolator_backend
+//! builtin`, the only backend the app uses; OpenMS#10843), and keeps the spectra of its PSMs for the PSM view itself
+//! (`-out_qpx`): no other tool runs, and the bundle has OpenNuXL alone in its `bin/` (`native/scripts/bundle-nuxl.sh`).
+//! OpenMS finds its data (`share/OpenMS`: CHEMISTRY, the NUXL presets) next to the executable, `bin/../share/OpenMS`,
+//! which the bundle provides (and whose compiled-in alternatives it rules out), so the app sets no data path.
 //!
 //! Thermo `.raw` files are read by Thermo's RawFileReader, a .NET library that OpenMS loads through its bridge
 //! (`openms_thermo_bridge`): its managed part in `share/OpenMS/openms_thermo_bridge/managed`, run by the .NET
@@ -29,13 +27,6 @@ pub const EXE: &str = if cfg!(windows) {
     "OpenNuXL.exe"
 } else {
     "OpenNuXL"
-};
-
-/// The tool OpenNuXL rescores with, which it expects beside itself.
-pub const PERCOLATOR_ADAPTER: &str = if cfg!(windows) {
-    "PercolatorAdapter.exe"
-} else {
-    "PercolatorAdapter"
 };
 
 /// The variable that names the tool to use instead of the bundled one (a development build, a test).
@@ -111,13 +102,6 @@ pub fn resolve(resource_dir: Option<&Path>) -> Result<PathBuf, String> {
     )
 }
 
-/// Whether `PercolatorAdapter` is beside the tool at `path` (where OpenNuXL looks first; else it tries the
-/// PATH, and without one a rescoring fails with OpenNuXL's warning "Score recalibration failed.").
-pub fn has_percolator_adapter(path: &Path) -> bool {
-    path.parent()
-        .is_some_and(|bin| bin.join(PERCOLATOR_ADAPTER).is_file())
-}
-
 /// The folder above the tool's `bin/` (the bundle's `resources/nuxl`, a build tree), where the bundle's other
 /// parts are.
 fn tool_root(path: &Path) -> Option<&Path> {
@@ -172,11 +156,10 @@ pub const LOADER_VARIABLES: &[&str] = &[
 /// the check (CMake's `ENABLE_UPDATE_CHECK`, on by default) otherwise contacts openms-update.cs.uni-tuebingen.de
 /// once a day, waits up to 5 s for it when offline, and writes `<tool>.ver` beside the user's OpenMS
 /// settings. The bundled tools are built without the check (`native/scripts/build-openms.sh`); the variable
-/// covers a tool from `NUXL_TOOL` or the PATH, and the `PercolatorAdapter` OpenNuXL starts (which inherits
-/// it). Any value but `OFF` turns the check off.
+/// covers a tool from `NUXL_TOOL` or the PATH. Any value but `OFF` turns the check off.
 pub const NO_UPDATE_CHECK: (&str, &str) = ("OPENMS_DISABLE_UPDATE_CHECK", "ON");
 
-/// The command that runs the tool at `path` (OpenNuXL, an OpenMS tool of the bundle's `bin/`):
+/// The command that runs the tool at `path` (OpenNuXL, the OpenMS tool of the bundle's `bin/`):
 /// `OPENBLAS_NUM_THREADS=1` unless the user has set it (Percolator's linear algebra would otherwise start a thread
 /// per core inside the tool's own threads), as the FASTag shim does. `openblas` is the variable's current value.
 /// Always with [`NO_UPDATE_CHECK`] (a user's `OFF` included: the tool makes no network contact). On macOS without
@@ -185,8 +168,7 @@ pub const NO_UPDATE_CHECK: (&str, &str) = ("OPENMS_DISABLE_UPDATE_CHECK", "ON");
 /// With the bundle's .NET runtime ([`bundled_dotnet`]) `DOTNET_ROOT` names it, without the [`DOTNET_ARCH_ROOTS`]
 /// and with the [`DOTNET_SETTINGS`]; with the bundle's Thermo bridge ([`bundled_thermo_bridge`])
 /// [`THERMO_MANAGED_DIR`] names it (a user's would win over the bundle's folder). A tool without them (a build
-/// tree's, `NUXL_TOOL`) gets the user's environment for these, as OpenMS documents it. PercolatorAdapter, which
-/// OpenNuXL starts, inherits all of it.
+/// tree's, `NUXL_TOOL`) gets the user's environment for these, as OpenMS documents it.
 pub fn command_with(path: &Path, openblas: Option<OsString>) -> Command {
     let mut command = Command::new(path);
     command.env(NO_UPDATE_CHECK.0, NO_UPDATE_CHECK.1);

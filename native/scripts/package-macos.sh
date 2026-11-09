@@ -23,7 +23,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 NUXL=$ROOT/src-tauri/resources/nuxl
 BUNDLE_DIR=$ROOT/src-tauri/target/release/bundle
 die() { echo "error: $*" >&2; exit 1; }
-[ -x "$NUXL/bin/OpenNuXL" ] && [ -x "$NUXL/bin/PercolatorAdapter" ] \
+[ -x "$NUXL/bin/OpenNuXL" ] \
   && [ -d "$NUXL/dotnet/host/fxr" ] && [ -f "$NUXL/build.json" ] \
   || die "src-tauri/resources/nuxl holds no bundled OpenNuXL: run native/scripts/bundle-nuxl.sh <openms-build> src-tauri/resources/nuxl"
 
@@ -50,7 +50,7 @@ done
 app=$(find "$BUNDLE_DIR/macos" -maxdepth 1 -name '*.app' | head -n 1)
 [ -n "$app" ] || die "no .app in $BUNDLE_DIR/macos"
 inside=$app/Contents/Resources/resources/nuxl
-for exe in OpenNuXL PercolatorAdapter; do
+for exe in OpenNuXL; do
   [ -x "$inside/bin/$exe" ] || die "$inside/bin/$exe is missing"
 done
 diff <(cd "$NUXL" && find . -type f | sort) <(cd "$inside" && find . -type f | sort) \

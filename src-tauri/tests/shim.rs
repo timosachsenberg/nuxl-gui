@@ -1306,15 +1306,6 @@ fn the_tool_is_found_through_nuxl_tool_then_the_bundle_then_path() {
     );
 }
 
-#[test]
-fn percolator_adapter_is_looked_for_beside_the_tool() {
-    let dir = TempDir::new("adapter");
-    let nuxl = executable(&dir, &format!("bin/{}", tool::EXE));
-    assert!(!tool::has_percolator_adapter(&nuxl));
-    executable(&dir, &format!("bin/{}", tool::PERCOLATOR_ADAPTER));
-    assert!(tool::has_percolator_adapter(&nuxl));
-}
-
 /// macOS: Tauri names no resource folder when the app's path goes through a symbolic link; the app then
 /// takes the Resources folder of the bundle its executable really is in.
 #[cfg(unix)]

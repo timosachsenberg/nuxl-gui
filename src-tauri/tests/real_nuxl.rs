@@ -1,8 +1,7 @@
 //! The shim against the real OpenNuXL, on the app's example (OpenMS' OpenNuXL test data).
 //!
 //! Gated: set `NUXL_TOOL` to the tool to run these tests: the bundled pin (`src-tauri/resources/nuxl/bin/OpenNuXL`,
-//! made by `native/scripts/bundle-nuxl.sh`) or the pin in its build tree (`<build>/bin/OpenNuXL`, with
-//! `PercolatorAdapter` beside it); without it each test prints a skip message (shown with `--nocapture`) and
+//! made by `native/scripts/bundle-nuxl.sh`) or the pin in its build tree (`<build>/bin/OpenNuXL`); without it each test prints a skip message (shown with `--nocapture`) and
 //! passes. `NUXL_EXAMPLE_DIR` names the folder with `OpenNuXL_1_input.mzML` and `OpenNuXL_1_input.fasta` (default:
 //! the app's `resources/example`); a missing folder skips as well.
 //!
@@ -125,15 +124,11 @@ fn example_request_with(real: &Real, work: &TempDir, copies: usize, extra: Value
 }
 
 #[test]
-fn the_real_tool_reports_its_version_and_has_percolator_adapter_beside_it() {
+fn the_real_tool_reports_its_version() {
     let Some(real) = real() else { return };
     let info = tool::probe(&real.bin).unwrap();
     assert!(!info.version.is_empty());
     assert_eq!(info.path, real.bin.to_string_lossy());
-    assert!(
-        tool::has_percolator_adapter(&real.bin),
-        "OpenNuXL rescores through the PercolatorAdapter beside it"
-    );
 }
 
 #[test]

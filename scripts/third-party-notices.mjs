@@ -15,7 +15,7 @@
 // - copyright: the app's licence in Debian's machine-readable format, the .deb's /usr/share/doc/nuxl/copyright
 //   (tauri.conf.json, bundle.linux.deb.files).
 //
-// The tools' (OpenNuXL, PercolatorAdapter) own libraries and data, the Thermo RawFileReader and the
+// The tool's (OpenNuXL) own libraries and data, the Thermo RawFileReader and the
 // bundled .NET runtime come with their licences in resources/nuxl/share/OpenMS/LICENSES (native/scripts/bundle-nuxl.sh). No dependency: Node and cargo.
 
 import { execFileSync } from 'node:child_process'
@@ -226,7 +226,7 @@ const notices = [
   'NuXL desktop: third-party notices',
   '',
   'NuXL desktop is released under the licence below. It bundles the software listed after it, under their licences.',
-  'OpenNuXL, PercolatorAdapter and their libraries (resources/nuxl), with the Thermo RawFileReader',
+  'OpenNuXL and its libraries (resources/nuxl), with the Thermo RawFileReader',
   'and the .NET runtime (resources/nuxl/dotnet) that read Thermo .raw files, come with their licences in',
   'resources/nuxl/share/OpenMS/LICENSES.',
   'The example (resources/example) is OpenMS test data under the licence of NuXL desktop below: the run',
@@ -251,8 +251,8 @@ const debian = [
   'Source: https://github.com/timosachsenberg/nuxl-gui',
   'Comment: The software bundled with NuXL and its licences: /usr/lib/NuXL/resources/notices/THIRD-PARTY-NOTICES.txt',
   ' (the Rust crates, JavaScript packages, fonts and OpenMS logo of the app) and',
-  ' /usr/lib/NuXL/resources/nuxl/share/OpenMS/LICENSES (OpenNuXL, PercolatorAdapter,',
-  ' their libraries, the Thermo RawFileReader and the .NET runtime).',
+  ' /usr/lib/NuXL/resources/nuxl/share/OpenMS/LICENSES (OpenNuXL,',
+  ' its libraries, the Thermo RawFileReader and the .NET runtime).',
   '',
   'Files: *',
   'Copyright: OpenMS Inc. -- Eberhard Karls University Tuebingen, ETH Zurich, and Freie Universitaet Berlin 2002-present',

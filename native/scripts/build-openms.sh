@@ -1,14 +1,13 @@
 #!/bin/bash
-# Native (host toolchain) build of libOpenMS, OpenNuXL and PercolatorAdapter (OpenNuXL's rescoring), and the tests
-# of OpenNuXL.
+# Native (host toolchain) build of libOpenMS and OpenNuXL, and the tests of OpenNuXL.
 #
 #   build-openms.sh <openms-src> <build-dir>
 #
 # <openms-src> is any OpenMS checkout; <build-dir> is created if needed (an existing configured
 # directory is reconfigured in place, so the script is safe to re-run). It runs on the host
 # toolchain, outside native/scripts/in-env.sh. Environment overrides: JOBS (default 100),
-# VCPKG_BINARY_CACHE, VCPKG_MAX_CONCURRENCY (default 32), OPENMS_TARGETS (default: the library, the two
-# tools and what their tests run, below; CI builds "OpenMS OpenNuXL PercolatorAdapter" only),
+# VCPKG_BINARY_CACHE, VCPKG_MAX_CONCURRENCY (default 32), OPENMS_TARGETS (default: the library, the
+# tool and what its tests run, below; CI builds "OpenMS OpenNuXL" only),
 # VCPKG_INSTALL_OPTIONS (a CMake list, for
 # example --clean-after-build, which CI uses to save disk space), CC and CXX (CI: gcc-13; cl on
 # Windows), VCPKG_TRIPLET (default x64-linux-dynamic; CI: arm64-osx-dynamic-sysroot-vcrel on macOS,
@@ -99,10 +98,10 @@ if [ "${OPENMS_CONFIGURE_ONLY:-}" = 1 ]; then
   exit 0
 fi
 
-# OpenNuXL rescores through PercolatorAdapter (File::findSiblingTOPPExecutable: beside it in bin/), with the
-# Percolator built into OpenMS. FuzzyDiff is what the TOPP_OpenNuXL tests compare the outputs with; without it
+# OpenNuXL rescores in its own process with the Percolator built into OpenMS ('-percolator_backend builtin'; OpenMS
+# #10843): no PercolatorAdapter. FuzzyDiff is what the TOPP_OpenNuXL tests compare the outputs with; without it
 # those tests report "Not Run". Percolator_test checks the built-in Percolator. (OpenNuXL writes the spectra of its
 # PSMs for the app's PSM view itself, -out_qpx: no FileConverter.)
-TARGETS=${OPENMS_TARGETS:-OpenMS OpenNuXL PercolatorAdapter FuzzyDiff Percolator_test}
+TARGETS=${OPENMS_TARGETS:-OpenMS OpenNuXL FuzzyDiff Percolator_test}
 # shellcheck disable=SC2086 # a list of targets
 cmake --build "$BUILD" -j "$JOBS" --target $TARGETS

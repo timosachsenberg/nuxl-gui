@@ -1,8 +1,8 @@
 # NuXL desktop: design
 
 A desktop application for protein–nucleic acid cross-link searches with **OpenNuXL** of OpenMS, built as ProSE
-desktop (timosachsenberg/prose-gui) is built: Tauri 2 around the OS webview, the native `OpenNuXL` tool (with
-`PercolatorAdapter` for the score recalibration) as the only native code, with the .NET runtime that OpenMS' Thermo
+desktop (timosachsenberg/prose-gui) is built: Tauri 2 around the OS webview, the native `OpenNuXL` tool (which
+recalibrates its scores with the Percolator built into OpenMS, in its own process) as the only native code, with the .NET runtime that OpenMS' Thermo
 reader runs on, a small Rust shim that starts the tools and reads nothing it need not, and the Svelte 5 / Tailwind /
 shadcn-svelte screens of ProSE desktop. The tool stays the source of truth; the app's only network connection is the
 new-version check (§7); files are read where they are and never copied (OpenNuXL keeps the spectra of its PSMs, their
@@ -18,7 +18,7 @@ OpenNuXL's options and outputs are those of OpenMS `develop` (pinned in `native/
 | Tool | `ProSE`, all inputs in one run, pooled FDR | `OpenNuXL`, **one run per input file**, run one after the other; FDR per file |
 | Inputs | `.mzML`, `.mzML.gz` | `.mzML` and Thermo `.raw` files, Bruker timsTOF `.d` folders, all read by OpenNuXL itself (OpenMS built with `WITH_THERMO_RAW` and `WITH_OPENTIMS`; the bundle has the .NET runtime for `.raw`, `native/README.md`) |
 | Outputs | QPX Parquet | idXML (all hits, and FDR-filtered cross-links and peptides) and TSV reports |
-| Rescoring | Percolator + PeptDeep | Percolator (built into OpenMS, through `PercolatorAdapter`); OpenNuXL skips it below 1000 PSMs |
+| Rescoring | Percolator + PeptDeep | Percolator (built into OpenMS, in OpenNuXL's process: `-percolator_backend builtin`, OpenMS#10843); OpenNuXL skips it below 1000 PSMs |
 | Decoys | ProSE's | always OpenNuXL's own (prefix `DECOY_`): its FDR, filtered outputs and Percolator exist only with them, so a database's own decoys are left out of `database.fasta` (with a note) |
 | Settings | enzyme, tolerances, modifications, FDR, ... | the same plus the **NuXL preset** (cross-linking protocol: RNA-UV (U), DNA-UV, RNA-DEB, ...), the longest nucleotide adduct (`NuXL:length`), scoring (`fast`/`slow`), cross-link FDR |
 | Results | proteins, peptides, PSMs, QC, open-search panels | the same levels, each PSM marked **cross-link or peptide**, with its **adduct**, its **cross-linked residue** (localization) and NuXL's own fragment annotation; Proteins show the cross-linked sites |
@@ -178,8 +178,7 @@ defaults of its search, so the native IDs are those of its PSMs (Thermo `control
 Bruker `frame=F scan=S precursor=P`). Its annotation is on the peaks as the input has them (OpenNuXL does not move
 fragments to their 1+ m/z), so every annotated peak keeps its place in the view.
 
-The tools' environment (`tool.rs` `command_with`; OpenNuXL and the version probe, and the PercolatorAdapter OpenNuXL
-starts inherits it): always `OPENMS_DISABLE_UPDATE_CHECK=ON` and, unless the user set it,
+The tool's environment (`tool.rs` `command_with`; OpenNuXL and the version probe): always `OPENMS_DISABLE_UPDATE_CHECK=ON` and, unless the user set it,
 `OPENBLAS_NUM_THREADS=1`; on macOS without the `DYLD_*` search variables. When the bundle has its .NET runtime
 (`<tool dir>/../dotnet`): `DOTNET_ROOT` names it, `DOTNET_ROOT_X64`, `DOTNET_ROOT_ARM64` and `DOTNET_ROOT(x86)` are
 removed, and `DOTNET_ROLL_FORWARD=Major` (the Thermo bridge targets .NET 8, the bundle has 10),
@@ -187,9 +186,9 @@ removed, and `DOTNET_ROLL_FORWARD=Major` (the Thermo bridge targets .NET 8, the 
 bridge's managed part (`<tool dir>/../share/OpenMS/openms_thermo_bridge/managed`), `OPENMS_THERMO_MANAGED_DIR` names
 it. A tool without these folders (a build tree's, `NUXL_TOOL`) keeps the user's environment for them.
 
-The packaged app's `--smoke-test` reports, beside the tool's version, whether PercolatorAdapter is beside it
-(`percolatorAdapter`) and whether the bundle has `dotnet/` and the managed part (`dotnet`, `thermoBridge`); it fails
-without PercolatorAdapter.
+The packaged app's `--smoke-test` reports, beside the tool's version, whether the bundle has `dotnet/` and the managed
+part (`dotnet`, `thermoBridge`); it fails when the tool cannot be used. (The bundle has no PercolatorAdapter since
+OpenNuXL rescores in its own process, OpenMS#10843.)
 
 ## 4. Progress
 

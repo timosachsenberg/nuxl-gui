@@ -1,7 +1,7 @@
 # Native tools and Tauri toolchain
 
-The NuXL desktop app (Tauri 2) runs OpenNuXL of OpenMS, with PercolatorAdapter for its score recalibration, as its
-only native code (plus the .NET runtime that OpenMS's Thermo reader hosts); OpenNuXL keeps the spectra of its PSMs for
+The NuXL desktop app (Tauri 2) runs OpenNuXL of OpenMS, which recalibrates its scores with the Percolator built into
+OpenMS in its own process, as its only native code (plus the .NET runtime that OpenMS's Thermo reader hosts); OpenNuXL keeps the spectra of its PSMs for
 the PSM view itself (`-out_qpx`, the QPX mz view). This directory holds the tooling for the two things the app needs: a user-space
 toolchain for the Tauri and Rust side, and a native OpenMS build of the tools, bundled with their libraries and data.
 (It started as ProSE desktop's, whose toolchain sections below are unchanged.)
@@ -107,8 +107,8 @@ and a webview under Xvfb, for example a minimal Tauri 2 app built with
 
 ## Native OpenMS build
 
-`scripts/build-openms.sh <openms-src> <build-dir>` configures and builds libOpenMS, `OpenNuXL`,
-`PercolatorAdapter` and what their tests run, with the host toolchain (outside `in-env.sh`):
+`scripts/build-openms.sh <openms-src> <build-dir>` configures and builds libOpenMS, `OpenNuXL`
+and what its tests run, with the host toolchain (outside `in-env.sh`):
 
 ```bash
 native/scripts/build-openms.sh <OpenMS checkout> <OpenMS checkout>/build
@@ -135,14 +135,13 @@ configuration:
 - `ENABLE_UPDATE_CHECK=OFF`: an OpenMS tool otherwise contacts `openms-update.cs.uni-tuebingen.de` once a day
   (and waits up to 5 s for it when offline), and the tools make no network contact (the app's only one is its own
   new-version check, docs/design.md §7). The app also runs OpenNuXL
-  with `OPENMS_DISABLE_UPDATE_CHECK=ON` (`src-tauri/src/tool.rs`), for a tool from `NUXL_TOOL` or the PATH, and
-  the PercolatorAdapter it starts inherits it.
+  with `OPENMS_DISABLE_UPDATE_CHECK=ON` (`src-tauri/src/tool.rs`), for a tool from `NUXL_TOOL` or the PATH.
 - `PATH` is rebuilt without linuxbrew (its binutils are older than the toolchain's).
-- The targets: `OpenNuXL`, `PercolatorAdapter` (OpenNuXL runs it for the score recalibration, and looks for it
-  beside itself: `File::findSiblingTOPPExecutable`), `FuzzyDiff` (the `TOPP_OpenNuXL` tests compare with it;
-  without it they report "Not Run") and `Percolator_test`. CI builds `OpenMS OpenNuXL PercolatorAdapter`. (Before
-  the app 0.9 the bundle had FileConverter too, for the spectra of `.raw` and `.d` inputs; OpenNuXL keeps the spectra
-  of its PSMs itself now: `-out_qpx`.)
+- The targets: `OpenNuXL`, `FuzzyDiff` (the `TOPP_OpenNuXL` tests compare with it; without it they report "Not
+  Run") and `Percolator_test`. CI builds `OpenMS OpenNuXL`. (Before the app 0.9 the bundle had FileConverter too, for
+  the spectra of `.raw` and `.d` inputs; OpenNuXL keeps the spectra of its PSMs itself now: `-out_qpx`. Later it
+  still had PercolatorAdapter, which OpenNuXL ran for its score recalibration; since OpenMS#10843 OpenNuXL rescores in
+  its own process with `-percolator_backend builtin`, the only backend the app uses.)
 
 Check the build with OpenNuXL's tests:
 
@@ -158,9 +157,13 @@ progress (`progress.rs`) and the names of its derived outputs (`run.rs`, `find_o
 of the pinned `OpenNuXL.cpp`: check them when the pin moves. The pin has to include OpenMS#10816 (develop
 `f3581006`): from there OpenNuXL reads `.raw`, `.d` (and mzPeak) through `FileHandler` itself instead of converting a
 `.raw` with ThermoRawFileParser, and writes `<input stem>_pc.mzML` beside its `-in` when it recalibrates; and
-OpenMS#10829 (develop `5e974cd`, the current pin): OpenNuXL's `-out_qpx` (the QPX mz view of the spectra of its PSMs,
-which the app's PSM view reads; the app passes it to every run, and an OpenNuXL without it refuses the option). CI checks the
-commit out of OpenMS/OpenMS; it never builds from local state.
+OpenMS#10829 (develop `5e974cd`): OpenNuXL's `-out_qpx` (the QPX mz view of the spectra of its PSMs, which the app's
+PSM view reads; the app passes it to every run, and an OpenNuXL without it refuses the option); and OpenMS#10843
+(develop `8c6fce6`, the current pin): OpenNuXL rescores with the Percolator built into OpenMS in its own process
+(`-percolator_backend builtin`), so the bundle has no PercolatorAdapter (an older OpenNuXL would find none and skip the
+rescoring with "Score recalibration failed."). It includes OpenMS#10834 and #10836 as well: a compiled-in path that
+cannot be checked (a drive that is not ready) no longer ends the tools at their start. CI checks the commit out of
+OpenMS/OpenMS; it never builds from local state.
 
 ## Bundling OpenNuXL
 
@@ -174,7 +177,7 @@ native/scripts/bundle-nuxl.sh <OpenMS checkout>/build src-tauri/resources/nuxl
 
 | Part | What |
 | --- | --- |
-| `bin/OpenNuXL`, `bin/PercolatorAdapter` | stripped, `DT_RPATH` `$ORIGIN/../lib`; PercolatorAdapter beside OpenNuXL, where OpenNuXL looks for it |
+| `bin/OpenNuXL` | stripped, `DT_RPATH` `$ORIGIN/../lib`; no PercolatorAdapter (OpenNuXL rescores in its own process) |
 | `lib/` | the closure of the tools that `ldd` lists, each library once, under its sonames, stripped, `DT_RPATH` `$ORIGIN`: libOpenMS, `libopenms_thermo_bridge.so`, Arrow/Parquet, Xerces, HiGHS, ..., libgomp (the one OpenMP runtime; the script fails on any other) and the GCC runtime (libstdc++, libgcc_s: OpenMS needs GCC 13, newer than Ubuntu 22.04's). Left out: glibc only. |
 | `share/OpenMS/` | `CHEMISTRY` (without the 49 MB of HMDB tables), `CV`, `MAPPING`, `SCHEMAS`, the `TOOLS` registry (the set ProSE desktop's bundle had, checked with strace there) and `NUXL` (`nuxl_presets.json`: the cross-linking protocols of `NuXL:presets`, read when OpenNuXL registers its options) |
 | `share/OpenMS/openms_thermo_bridge/managed/` | the Thermo bridge's managed half (about 1.6 MB of IL assemblies, the same on every platform), from the build's `OpenMSThermoBridge_MANAGED_DIR` without `*.pdb` and `*.zip` (as OpenMS installs it); its `ThermoWrapperManaged.runtimeconfig.json` patched to `"rollForward": "Major"` |
@@ -234,10 +237,9 @@ Microsoft's signatures; `bundle-nuxl.sh` and `package-macos.sh` check them).
 **`tool_info`** is `{ version, path }` (`src-tauri/src/tool.rs`): the version from `OpenNuXL --help`. A tool that
 reports none fails it with how it ended (`run.rs` `how_tool_ended`: an exit code, a signal; on Windows the statuses of
 a tool Windows could not start spelled out, e.g. `0xC0000135, STATUS_DLL_NOT_FOUND`: a DLL missing), the tool's path
-and its last 8 lines of output; the search's problem line shows it on one line, the About panel in full. The app's
-`--smoke-test` also reports whether PercolatorAdapter is beside the tool. `NUXL_TOOL` names a tool to use
-instead of the bundled one (the e2e specs and the `real_nuxl` tests: `src-tauri/resources/nuxl/bin/OpenNuXL`, or
-`<build>/bin/OpenNuXL`, which has PercolatorAdapter beside it as well).
+and its last 8 lines of output; the search's problem line shows it on one line, the About panel in full.
+`NUXL_TOOL` names a tool to use instead of the bundled one (the e2e specs and the `real_nuxl` tests:
+`src-tauri/resources/nuxl/bin/OpenNuXL`, or `<build>/bin/OpenNuXL`).
 
 ## macOS and Windows
 
@@ -248,7 +250,7 @@ them. The same scripts run there:
 | --- | --- | --- |
 | OpenMS | `build-openms.sh` with `VCPKG_TRIPLET=arm64-osx-dynamic-sysroot-vcrel` (OpenMS's own macOS triplet, release builds only), `OPENMS_CMAKE_ARGS="-DOpenMP_ROOT=$(brew --prefix libomp) -DMT_REQUIRE_OPENMP=ON"`, `MACOSX_DEPLOYMENT_TARGET=15.0` | `build-openms.sh` in Git Bash inside Visual Studio's developer environment, `CC=CXX=cl`, `VCPKG_TRIPLET=x64-windows-static-md-release` (OpenMS's own Windows triplet: the dependencies static, the C runtime dynamic), `-DMT_REQUIRE_OPENMP=ON` |
 | .NET SDK (build only) | `actions/setup-dotnet` 8.0.x | `actions/setup-dotnet` 8.0.x |
-| bundle | `bundle-nuxl.sh`: `bin/OpenNuXL`, `bin/PercolatorAdapter`, `lib/*.dylib` (with `libopenms_thermo_bridge.dylib`), `dotnet/` (`osx-arm64`) | `bundle-nuxl.sh`: `bin/OpenNuXL.exe`, `bin/PercolatorAdapter.exe`, `bin/*.dll` (with `openms_thermo_bridge.dll` and `nethost.dll`), `dotnet/` (`win-x64`) |
+| bundle | `bundle-nuxl.sh`: `bin/OpenNuXL`, `lib/*.dylib` (with `libopenms_thermo_bridge.dylib`), `dotnet/` (`osx-arm64`) | `bundle-nuxl.sh`: `bin/OpenNuXL.exe`, `bin/*.dll` (with `openms_thermo_bridge.dll` and `nethost.dll`), `dotnet/` (`win-x64`) |
 | package | `package-macos.sh`: `NuXL.app`, `.dmg` | `package-windows.sh`: the NSIS installer `*-setup.exe` |
 | test | `start-test.sh <dmg>`; `cargo test --test real_nuxl` with the bundled tool, with the vendor test data (`.raw`, `.d`) | `start-test.sh <setup.exe>`; the same |
 
@@ -304,12 +306,13 @@ Windows OpenMS does not probe its install prefix at all (`File.cpp`: CMake's def
 overwritten in `OpenMS.dll` on Windows, with `<no-data-path>///...` (`bundle_closure.py pe --data-path`; the script
 stops if the string is not in `OpenMS.dll` as one, as with GCC's immediates). OpenMS looks at it before the tool's own
 `bin/../share/OpenMS` with `std::filesystem::exists`, which throws when Windows cannot answer for the path's drive,
-`ERROR_NOT_READY` ("The device is not ready"): on a computer whose `D:` is an empty DVD drive, OpenNuXL and
-PercolatorAdapter ended at their start (`TOPPBase`'s constructor, through `ToolHandler`'s registry) with `0xC0000409`
-and printed nothing (seen with 0.9.0). A path Windows rejects as invalid (`<`) is one that does not exist for
+`ERROR_NOT_READY` ("The device is not ready"): on a computer whose `D:` is an empty DVD drive, the bundled tools
+ended at their start (`TOPPBase`'s constructor, through `ToolHandler`'s registry) with `0xC0000409` and printed nothing
+(seen with 0.9.0). A path Windows rejects as invalid (`<`) is one that does not exist for
 `std::filesystem`. `bundle-nuxl.sh` checks that the tools look at no other `share/OpenMS` than the bundle's: with its
-`CHEMISTRY/unimod.xml` set aside, and the source tree still there, both have to report that they find none. (The fix
-in OpenMS itself: `File::isOpenMSDataPath_` with the `error_code` overload of `exists`.)
+`CHEMISTRY/unimod.xml` set aside, and the source tree still there, the tool has to report that it finds none. (The fix
+in OpenMS itself, in the pin since 0.9.1's: `File::isOpenMSDataPath_` and `File::find()` with the `error_code` overload
+of `exists`, OpenMS#10834 and #10836.)
 
 ### Packages
 
@@ -330,9 +333,9 @@ in OpenMS itself: `File::isOpenMSDataPath_` with the `error_code` overload of `e
 
 1. The package is opened as a user would: the `.dmg` is mounted and `NuXL.app` copied out; the installer is
    run silently (`/S /D=<folder>`). The bundle inside is verified (`macho-verify`, `pe-verify`).
-2. The bundled OpenNuXL and PercolatorAdapter print their version (the same) from an empty environment
-   (Windows: only Windows' folders on `PATH`). The package has the managed folder, `dotnet/` of the version in
-   `build.json` and the licences of Thermo, the bridge and .NET. With `NUXL_RAW_EXAMPLE` and `NUXL_D_EXAMPLE` set (CI
+2. The bundled OpenNuXL prints its version from an empty environment (Windows: only Windows' folders on `PATH`);
+   the package has no PercolatorAdapter (a stale bundle would). The package has the managed folder, `dotnet/` of the
+   version in `build.json` and the licences of Thermo, the bridge and .NET. With `NUXL_RAW_EXAMPLE` and `NUXL_D_EXAMPLE` set (CI
    sets them, below), OpenNuXL searches both (with the example's FASTA) with the command line and the environment the
    app uses (`DOTNET_ROOT` the package's `dotnet/`, ...): exit 0, and the QPX mz view of `-out_qpx` written.
 3. OpenNuXL searches the example (`OpenNuXL_1_input.mzML`, `OpenNuXL_1_input.fasta`) from the command line as
@@ -341,8 +344,8 @@ in OpenMS itself: `File::isOpenMSDataPath_` with the `error_code` overload of `e
    and PSMs. (The example has far fewer than the 1000 PSMs OpenNuXL rescores, so Percolator is skipped.) The same
    in a folder named `Größe ü` has to give the same number of PSMs.
 4. The app starts with `--smoke-test` (`src-tauri/src/lib.rs`): when its page has loaded it prints
-   `{"page", "tool", "percolatorAdapter"}` and exits. The tool has to be the package's own, with PercolatorAdapter
-   beside it, and of the version of step 2.
+   `{"page", "tool", "dotnet", "thermoBridge"}` and exits. The tool has to be the package's own, with its .NET runtime
+   and Thermo bridge, and of the version of step 2.
 
 CI removes the OpenMS build before these steps, so the tools can only use the package's `share/OpenMS`.
 A WebDriver run of the screens (as the AppImage's smoke test) is not part of it: tauri-driver does not support
@@ -359,7 +362,7 @@ macOS, and on Windows it needs msedgedriver of the runner's WebView2 version.
   is ever copied (`args.rs`, `InputLinks`, `input_placements`). Stems are shortened (as links) so that the longest
   output path, `<folder>\nuxl\<stem>_perc_proteins0.0100_XLs.tsv`, stays within MAX_PATH.
 - **Cancel** ends a job object the tool runs in (`run.rs`): Windows has no SIGTERM for a console tool; the job
-  takes every process the tool starts (PercolatorAdapter), and it is closed with the app (`KILL_ON_JOB_CLOSE`), so
+  takes every process the tool starts, and it is closed with the app (`KILL_ON_JOB_CLOSE`), so
   OpenNuXL ends with the app however the app ends. The tool runs without a console window.
 - **If the app dies** while OpenNuXL runs: on Linux OpenNuXL gets SIGKILL (`PR_SET_PDEATHSIG`), on Windows the job
   ends it. macOS has no death signal, so the app starts, for each run of the tool, its own executable once more as
@@ -440,8 +443,8 @@ steps: x64 on `ubuntu-22.04` (vcpkg triplet `x64-linux-dynamic`, artifact `nuxl-
 `ubuntu-22.04-arm`, GitHub's arm64 runner for public repositories (`arm64-linux-dynamic`, OpenMS's own arm64
 triplet, which builds OpenBLAS for any ARMv8 CPU; artifact `nuxl-desktop-linux-arm64`). Both are Ubuntu 22.04, so
 both packages need glibc 2.35. Each job checks out OpenMS at `OPENMS_COMMIT`, builds the vcpkg dependencies (a
-configure step of their own, saved before OpenMS is built, as on macOS and Windows) and libOpenMS, OpenNuXL,
-PercolatorAdapter with GCC 13 (toolchain PPA) through `build-openms.sh`, bundles them, runs
+configure step of their own, saved before OpenMS is built, as on macOS and Windows) and libOpenMS and OpenNuXL
+with GCC 13 (toolchain PPA) through `build-openms.sh`, bundles them, runs
 svelte-check, vitest and `cargo test` (with the bundled OpenNuXL, so the `real_nuxl` tests run too), builds the packages with
 `package-linux.sh`, runs the smoke test and uploads the AppImage and the `.deb` (kept 14 days). Tauri downloads
 linuxdeploy, its AppImage plugin and AppRun for the machine's architecture (none of them checksum-verified, on
