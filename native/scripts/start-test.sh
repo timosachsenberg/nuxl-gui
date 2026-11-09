@@ -6,9 +6,10 @@
 # 1. The package is opened: the .dmg is mounted and NuXL.app copied out of it; the installer is run
 #    silently (/S). Either goes into a folder named 'Größe ü/install', as under a user profile of a
 #    non-ASCII name. The bundled tools inside are checked (bundle_closure.py macho-verify / pe-verify).
-# 2. The bundled OpenNuXL and PercolatorAdapter print their version (the same), from an empty environment
-#    (Windows: only Windows' folders on PATH). With NUXL_RAW_EXAMPLE (a Thermo .raw file) and NUXL_D_EXAMPLE (a
-#    Bruker timsTOF .d folder) set, OpenNuXL searches each as the app runs it (src-tauri/src/args.rs, tool.rs), with
+# 2. The bundled OpenNuXL prints its version, from an empty environment (Windows: only Windows' folders on PATH);
+#    the package has no PercolatorAdapter (OpenNuXL rescores in its own process). With NUXL_RAW_EXAMPLE (a Thermo
+#    .raw file) and NUXL_D_EXAMPLE (a Bruker timsTOF .d folder) set, OpenNuXL searches each as the app runs it
+#    (src-tauri/src/args.rs, tool.rs), with
 #    -out_qpx: from that empty environment plus DOTNET_ROOT=<the package's dotnet> and the rest of what the app
 #    sets, so the .raw is read through the package's own .NET runtime and Thermo bridge (twice: for the search, and
 #    for the QPX mz view of the spectra of its PSMs, which has to be written).
@@ -20,8 +21,8 @@
 #    The same in a folder named 'Größe ü', with the temporary folder there too, has to give the same number
 #    of PSMs.
 # 4. The app starts with --smoke-test (src-tauri/src/lib.rs): once its page has loaded it reports the page,
-#    tool_info, whether PercolatorAdapter is beside the tool and whether the bundle's .NET runtime and Thermo
-#    bridge are found, and exits; all three have to be. tool_info has to be the bundled
+#    tool_info and whether the bundle's .NET runtime and Thermo bridge are found, and exits; both have to be.
+#    tool_info has to be the bundled
 #    OpenNuXL inside the package, with the version of step 2. On macOS the app is started a second time through a
 #    symbolic link to it, where Tauri names no resource folder and the app finds its bundle by the executable's
 #    real path.
@@ -61,7 +62,7 @@ case "$(uname -s)" in
     APP_BIN=$app/Contents/MacOS/$executable
     BUNDLE=$app/Contents/Resources/resources/nuxl
     TOOL=$BUNDLE/bin/OpenNuXL
-    ADAPTER=$BUNDLE/bin/PercolatorAdapter
+    ADAPTER=$BUNDLE/bin/PercolatorAdapter # (not in the package any more)
     HOSTFXR=libhostfxr.dylib
     "$PY" -I "$HERE/bundle_closure.py" macho-verify "$BUNDLE"
     native() { printf '%s\n' "$1"; }
@@ -81,7 +82,7 @@ case "$(uname -s)" in
     [ -n "$APP_BIN" ] || die "the installer put no app into $install: $(ls "$install" 2>&1); its default folder: $(ls "$(cygpath -u "$LOCALAPPDATA")/NuXL" 2>&1 | head -n 5)"
     BUNDLE=$install/resources/nuxl
     TOOL=$BUNDLE/bin/OpenNuXL.exe
-    ADAPTER=$BUNDLE/bin/PercolatorAdapter.exe
+    ADAPTER=$BUNDLE/bin/PercolatorAdapter.exe # (not in the package any more)
     HOSTFXR=hostfxr.dll
     "$PY" -I "$HERE/bundle_closure.py" pe-verify "$(cygpath -m "$BUNDLE")"
     native() { cygpath -w "$1"; }
@@ -94,9 +95,10 @@ case "$(uname -s)" in
     ;;
   *) die "start-test.sh is for the macOS and Windows packages (Linux: smoke-appimage.sh)" ;;
 esac
-for exe in "$TOOL" "$ADAPTER"; do
-  [ -x "$exe" ] || [ -f "$exe" ] || die "the package has no bundled $(basename "$exe") at $exe"
-done
+[ -x "$TOOL" ] || [ -f "$TOOL" ] || die "the package has no bundled $(basename "$TOOL") at $TOOL"
+# OpenNuXL rescores with the Percolator built into OpenMS in its own process ('-percolator_backend builtin', the only
+# backend the app uses): a PercolatorAdapter in the package would be a stale bundle
+[ ! -e "$ADAPTER" ] || die "the package still has $(basename "$ADAPTER") (a bundle from before OpenMS #10843?)"
 # the .raw reader: the Thermo bridge's managed half and the .NET runtime that hosts it
 MANAGED=$BUNDLE/share/OpenMS/openms_thermo_bridge/managed
 [ -f "$MANAGED/ThermoWrapperManaged.dll" ] || die "the package has no $MANAGED/ThermoWrapperManaged.dll"
@@ -123,12 +125,7 @@ cat "$BUNDLE/build.json"
 tool_version() { clean "$1" --help 2>&1 | sed -n 's/^ *Version: *\([^ ]*\).*/\1/p' | head -n 1; }
 version=$(tool_version "$TOOL")
 [ -n "$version" ] || die "the bundled OpenNuXL does not run: $(clean "$TOOL" --help 2>&1 | tail -n 5)"
-for exe in "$ADAPTER"; do
-  other_version=$(tool_version "$exe")
-  [ "$other_version" = "$version" ] \
-    || die "the bundled $(basename "$exe") reports version '${other_version}', OpenNuXL $version: $(clean "$exe" --help 2>&1 | tail -n 5)"
-done
-echo "OpenNuXL and PercolatorAdapter version: $version; .NET runtime $dotnet_version"
+echo "OpenNuXL version: $version; .NET runtime $dotnet_version"
 
 # --- 2b. .raw and .d searched as the app searches them (with NUXL_RAW_EXAMPLE, NUXL_D_EXAMPLE) -------------
 # The environment the app gives the tools when its bundle has dotnet/ (tool.rs), and OpenNuXL's command line as the
@@ -248,8 +245,6 @@ def norm(p):
     return os.path.normcase(os.path.realpath(p))
 if norm(info["path"]) != norm(tool):
     sys.exit(f"the app runs {info['path']}, not its bundled {tool}")
-if data.get("percolatorAdapter") is not True:
-    sys.exit("the app finds no PercolatorAdapter beside its OpenNuXL")
 # (the .NET runtime and the Thermo bridge's managed part read a .raw: src-tauri/src/tool.rs)
 if data.get("dotnet") is not True:
     sys.exit("the app finds no .NET runtime (dotnet/) beside its OpenNuXL's bin/")
@@ -262,7 +257,7 @@ if not data.get("page"):
 if linked == "1" and not str(data.get("tauriResources", "")).startswith("(none"):
     sys.exit(f"started through a link, Tauri still named a resource folder: {data.get('tauriResources')}")
 how = " (Tauri named none: the bundle's own Resources)" if linked == "1" else ""
-print(f"app: page {data['page']}, OpenNuXL {info['version']} with PercolatorAdapter, .NET and the Thermo bridge, inside the package{how}")
+print(f"app: page {data['page']}, OpenNuXL {info['version']} with .NET and the Thermo bridge, inside the package{how}")
 PY
 }
 smoke "$APP_BIN" installed 0
@@ -277,7 +272,7 @@ fi
 summary "### Start test ($platform)"
 summary ""
 summary "- package: \`$(basename "$PACKAGE")\`"
-summary "- bundled OpenNuXL and PercolatorAdapter: \`$version\`; .NET runtime \`$dotnet_version\`"
+summary "- bundled OpenNuXL: \`$version\`; .NET runtime \`$dotnet_version\`"
 summary "- OpenNuXL, Thermo .raw: $raw_result"
 summary "- OpenNuXL, Bruker .d: $d_result"
 summary "- command-line search of the example: $psms PSMs, ${seconds} s (${percolator:-no word of Percolator})"

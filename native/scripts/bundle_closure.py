@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The shared-library closure of the bundled tools (OpenNuXL, PercolatorAdapter) on macOS and
+"""The shared-library closure of the bundled tools (OpenNuXL) on macOS and
 Windows, for bundle-nuxl.sh.
 
     bundle_closure.py macho <exe>... <out> [--search DIR]... [--install-path PATH]

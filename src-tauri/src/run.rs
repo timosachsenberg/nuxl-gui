@@ -32,7 +32,7 @@
 //!
 //! Each run of the tool is a process group of its own, started from the supervising thread, which waits for
 //! it. Cancel signals the group (SIGTERM, then SIGKILL after a grace period), and the group is swept with
-//! SIGKILL after the tool has ended, so nothing it started (PercolatorAdapter) outlives it. If the app dies:
+//! SIGKILL after the tool has ended, so nothing it started outlives it. If the app dies:
 //! - Linux: the tool gets SIGKILL (`PR_SET_PDEATHSIG`; the thread that starts it lives as long as it runs);
 //! - Windows: the group is a job object, closed with the app, which ends whatever is still in it (cancel
 //!   terminates the job: Windows has no SIGTERM for a console tool);
@@ -686,8 +686,8 @@ mod sys {
 
     impl Group {
         /// Puts the child into a job of its own. (The child runs from its start; a process it starts
-        /// before it is assigned, within microseconds, would not be in the job. OpenNuXL starts PercolatorAdapter
-        /// only at the end of its run, long after.)
+        /// before it is assigned, within microseconds, would not be in the job. OpenNuXL starts no other process
+        /// with the app's settings: it rescores in its own.)
         pub fn new(child: &std::process::Child) -> Group {
             let job = new_job().filter(|job| {
                 // SAFETY: the child's process handle is valid while `child` lives.

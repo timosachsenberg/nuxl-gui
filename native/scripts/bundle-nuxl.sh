@@ -1,7 +1,7 @@
 #!/bin/bash
-# Bundles OpenNuXL for the desktop app (Linux, macOS, Windows): the OpenNuXL executable, PercolatorAdapter
-# (which OpenNuXL runs for its score recalibration and looks for beside itself, File::findSiblingTOPPExecutable),
-# their shared-library closure, the OpenMS share/ data they read, the managed half of the Thermo .raw reader
+# Bundles OpenNuXL for the desktop app (Linux, macOS, Windows): the OpenNuXL executable (which rescores its PSMs
+# with the Percolator built into OpenMS in its own process, '-percolator_backend builtin': no PercolatorAdapter),
+# its shared-library closure, the OpenMS share/ data it reads, the managed half of the Thermo .raw reader
 # and a .NET runtime to host it (fetch-dotnet-runtime.sh), the licences, plus a build manifest.
 #
 #   bundle-nuxl.sh <openms-build> <out>
@@ -9,14 +9,14 @@
 # <openms-build> is a build directory made by build-openms.sh; <out> is normally
 # src-tauri/resources/nuxl (tauri.conf.json bundles that folder). <out> is emptied first. The layout:
 #
-#   Linux    bin/OpenNuXL, bin/PercolatorAdapter     RPATH $ORIGIN/../lib
+#   Linux    bin/OpenNuXL                            RPATH $ORIGIN/../lib
 #            lib/*.so*                the closure of the tools (with libopenms_thermo_bridge.so), RPATH $ORIGIN;
 #                                     system libraries left out (below)
-#   macOS    bin/OpenNuXL, bin/PercolatorAdapter     LC_RPATH @loader_path/../lib, ad-hoc signed
+#   macOS    bin/OpenNuXL                            LC_RPATH @loader_path/../lib, ad-hoc signed
 #            lib/*.dylib              the closure (one libomp, libopenms_thermo_bridge.dylib), ids and references
 #                                     @rpath/<name>, LC_RPATH @loader_path, ad-hoc signed; /usr/lib and /System
 #                                     left out
-#   Windows  bin/OpenNuXL.exe, bin/PercolatorAdapter.exe, bin/*.dll
+#   Windows  bin/OpenNuXL.exe, bin/*.dll
 #                                     the closure beside the exes (Windows has no RPATH; the exe's folder
 #                                     is searched first), with the Visual C++ runtime and vcomp140 (the one
 #                                     OpenMP runtime), openms_thermo_bridge.dll and the nethost.dll it imports
@@ -63,8 +63,9 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CACHE=$BUILD/CMakeCache.txt
 SUFFIX=
 [ "$PLATFORM" = windows ] && SUFFIX=.exe
-# the tools, OpenNuXL first; PercolatorAdapter has to be beside it
-TOOL_NAMES=(OpenNuXL PercolatorAdapter)
+# the tools: OpenNuXL only (it rescores in process, '-percolator_backend builtin', the only backend the app uses;
+# PercolatorAdapter runs only for 'executable')
+TOOL_NAMES=(OpenNuXL)
 EXES=()
 for name in "${TOOL_NAMES[@]}"; do EXES+=("$BUILD/bin/$name$SUFFIX"); done
 # (Windows has python, not always python3)
@@ -243,10 +244,10 @@ closure_macos() {
 # build's bin, the nethost.dll it imports in the .NET SDK's host pack (nethost_search).
 # The build machine's share/OpenMS (OPENMS_DATA_PATH, the source tree's; in CI below D:/a), which OpenMS looks at
 # before the tool's own, is overwritten in OpenMS.dll with '<no-data-path>///...' (--data-path): on a user's
-# computer whose D: is a drive that is not ready (an empty DVD drive), looking at it threw, and OpenNuXL and
-# PercolatorAdapter ended at their start with 0xC0000409, printing nothing. (Should MSVC ever write the string into
-# the code, as GCC does on Linux, above, the script stops: the string has to be found in OpenMS.dll, and the check
-# at the end, that the tools no longer look there, has to pass.)
+# computer whose D: is a drive that is not ready (an empty DVD drive), looking at it threw, and the tools ended at
+# their start with 0xC0000409, printing nothing (NuXL 0.9.0; OpenMS since #10834 and #10836 skips such a path
+# itself). (Should MSVC ever write the string into the code, as GCC does on Linux, above, the script stops: the
+# string has to be found in OpenMS.dll, and the check at the end, that the tools no longer look there, has to pass.)
 closure_windows() {
   [ -n "${VCToolsRedistDir:-}" ] || die "VCToolsRedistDir is not set: run in a Visual Studio developer environment"
   local redist=() d root
@@ -451,8 +452,7 @@ PY
     run_empty() { env -i SYSTEMROOT="$SYSTEMROOT" WINDIR="$WINDIR" PATH="/c/Windows/System32:/c/Windows" "$@"; }
     ;;
 esac
-# (both: PercolatorAdapter runs only at the end of a search, so a broken one would show late; the two are one build,
-# of one version. OpenNuXL's help lists the presets among the valid values of
+# (OpenNuXL's help lists the presets among the valid values of
 # NuXL:presets, which it reads from share/OpenMS/NUXL; the help wraps its lines, so line ends and indentation are
 # squeezed to one space first.)
 version=

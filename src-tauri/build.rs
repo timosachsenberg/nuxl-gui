@@ -1,5 +1,5 @@
 fn main() {
-    // `resources/nuxl` (the bundled OpenNuXL and PercolatorAdapter, a resource in tauri.conf.json) is made by
+    // `resources/nuxl` (the bundled OpenNuXL, a resource in tauri.conf.json) is made by
     // native/scripts/bundle-nuxl.sh and is not in git. Tauri refuses a resource path that does not exist, so a
     // build without the bundle (development, the unit tests) gets an empty folder; the app then finds the tool
     // through NUXL_TOOL or the PATH.

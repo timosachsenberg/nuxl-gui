@@ -6,3 +6,4 @@ src-tauri/gen/
 .superpowers/
 src-tauri/resources/nuxl/
 src-tauri/resources/notices/
+__pycache__/

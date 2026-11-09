@@ -1,11 +1,11 @@
 # NuXL desktop
 
 A desktop app for protein–RNA and protein–DNA cross-link searches with **OpenNuXL** of OpenMS: [Tauri 2](https://tauri.app)
-around the OS webview, the native `OpenNuXL` tool (with `PercolatorAdapter` for the score recalibration) as the only
-native code, and the screens of ProSE desktop (same theme, shadcn-svelte components and colours). Design:
+around the OS webview, the native `OpenNuXL` tool (which recalibrates its scores with the Percolator built into
+OpenMS, in its own process) as the only native code, and the screens of ProSE desktop (same theme, shadcn-svelte components and colours). Design:
 `docs/design.md`.
 
-The packages come from CI (`.github/workflows/desktop.yml`); they bundle OpenNuXL and PercolatorAdapter with their
+The packages come from CI (`.github/workflows/desktop.yml`); they bundle OpenNuXL with its
 libraries and data, the cross-linking protocols (NuXL presets) among them, and the .NET runtime that
 reads Thermo `.raw` files (`native/README.md`). Everything runs on the
 computer. The app's only network connection is its new-version check: one request to GitHub at start (on by
@@ -220,8 +220,8 @@ OpenNuXL does, one named `qpxfail` writes no mz view). Screenshots for `docs/scr
 `src/lib/results/fixtures/screens` instead (`FAKE_NUXL_RESULTS=screens`: OpenMS' OpenNuXL test 3 at 10 ppm, made by
 `node scripts/results-fixtures.mjs`).
 
-The specs that run searches need the tool: `NUXL_TOOL=/path/to/OpenNuXL` (without it they skip), with
-PercolatorAdapter beside it (`src-tauri/resources/nuxl/bin/OpenNuXL`, or `<build>/bin/OpenNuXL`). Each spec file gets
+The specs that run searches need the tool: `NUXL_TOOL=/path/to/OpenNuXL` (without it they skip;
+`src-tauri/resources/nuxl/bin/OpenNuXL`, or `<build>/bin/OpenNuXL`). Each spec file gets
 an app of its own with its own data folder (`XDG_DATA_HOME`, made per run, removed at its end); port 4444 must be free
 (a leftover `tauri-driver` stops the run with a message). The shim's tests against the real tool
 (`cargo test --test real_nuxl`, gated by `NUXL_TOOL`) also search a Thermo `.raw` file and a Bruker `.d` folder when
