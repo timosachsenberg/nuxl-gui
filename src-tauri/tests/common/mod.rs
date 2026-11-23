@@ -51,20 +51,22 @@ pub fn fake_nuxl() -> PathBuf {
     }
 }
 
-/// The example `fake_nuxl`, which `cargo test` builds with the tests (into `<target>/<profile>/examples`,
-/// beside the tests' own `deps` folder).
+/// The example `fake_nuxl`, which `cargo test` builds with the tests (into `<target>/<profile>/examples`).
+/// The tests run from `<profile>/deps` (Cargo up to 1.99) or from deeper in `<profile>/build` (the build-dir
+/// layout of Cargo 1.100), so the `examples` folder is looked for above the test's own executable.
 pub fn fake_nuxl_exe() -> PathBuf {
     let test = std::env::current_exe().unwrap();
-    let profile = test.parent().and_then(Path::parent).unwrap();
-    let exe = profile
-        .join("examples")
-        .join(format!("fake_nuxl{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        exe.is_file(),
-        "{} is missing: run all of `cargo test` (or `cargo build --example fake_nuxl`)",
-        exe.display()
-    );
-    exe
+    let name = format!("fake_nuxl{}", std::env::consts::EXE_SUFFIX);
+    test.ancestors()
+        .skip(1)
+        .map(|dir| dir.join("examples").join(&name))
+        .find(|exe| exe.is_file())
+        .unwrap_or_else(|| {
+            panic!(
+                "examples/{name} is missing above {}: run all of `cargo test` (or `cargo build --example fake_nuxl`)",
+                test.display()
+            )
+        })
 }
 
 /// What [`fake_tools`] puts into its folder beside the fake OpenNuXL.
