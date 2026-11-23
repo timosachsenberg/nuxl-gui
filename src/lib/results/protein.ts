@@ -217,7 +217,7 @@ export type CrossLinkedSite = {
   psms: number
   /** The adducts of those PSMs with their PSMs, most PSMs first (equal ones by name). */
   adducts: { adduct: string; psms: number }[]
-  /** The best localization score of those PSMs (NuXL:best_localization_score, 0..1); NaN: none has one. */
+  /** The best localization score of those PSMs (NuXL:best_localization_score, types.ts `siteScore`); NaN: none has one. */
   score: number
   /** Of those PSMs, the ones the user accepted and rejected (`ResultModel.curation`). */
   accepted: number

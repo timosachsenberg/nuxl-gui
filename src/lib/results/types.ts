@@ -49,10 +49,27 @@ export type CrossLinkColumns = {
   adductLength: Uint8Array
   /** 0-based residue of the cross-link in the peptide (NuXL:best_localization_position); -1: not localized */
   site: Int16Array
-  /** NuXL:best_localization_score (0..1); NaN: none */
+  /**
+   * NuXL:best_localization_score; NaN: none. With the 'fragments' localization between 0 and 1; with the 'loss_aware' one (OpenNuXL's default) in units of the summed shifted-ion
+   * votes: 1 when every shifted ion contains the site and none speaks against it, lower (also 0 or below) with
+   * contradicting ions, above 1 with shifted immonium ions of its amino acid
+   */
   siteScore: Float64Array
-  /** NuXL:best_localization, the peptide with the residues the cross-link may be on in lower case (e.g. 'YTPyLGR'); '' none */
+  /**
+   * NuXL:best_localization, the peptide with the residues the cross-link may be on in lower case (e.g. 'YTPyLGR'); ''
+   * none. With the 'loss_aware' localization a localized cross-link's tied residues (no fragment ion tells them apart;
+   * `site` is the N-terminal-most)
+   */
   siteSequence: string[]
+  /** NuXL:localization_delta ('loss_aware'): the score distance from the site to the best residue not tied with it; NaN: none */
+  siteDelta: Float64Array
+  /**
+   * NuXL:secondary_localization_position ('loss_aware'): 0-based residue of a second cross-linked form that the fragment
+   * ions show and distinguish from the first; -1: none
+   */
+  secondarySite: Int16Array
+  /** NuXL:secondary_localization_gain: how much the second form improves the explanation of the ions (units of siteDelta); NaN: none */
+  secondaryGain: Float64Array
   /** the FDR group of the PSM: 'peptide', 'XL' or 'short_XL' (NuXL:fdr_group; cross-links without it: 'XL') */
   fdrGroup: string[]
   /**

@@ -8,6 +8,7 @@ import { describe, expect, test } from 'vitest'
 import { readIdXML, textColumn, numberColumn } from '../results/idxml'
 import { classifyLabel, parseFragmentAnnotation } from './nuxl-annotation'
 import { nuxlChemistry, nuxlPeptide, nuxlTheoreticalMz, searchChemistry, DEFAULT_FRAGMENT_ADDUCTS } from './nuxl-theoretical'
+import { monoWeight, parseFormula } from './annotate'
 
 const PROTON = 1.007276466771
 
@@ -107,5 +108,33 @@ describe('nuxlTheoreticalMz', () => {
     // the default marker ions of DNA: T'
     expect(searchChemistry({ 'NuXL:presets': 'DNA-UV' })!.markers.has("T'")).toBe(true)
     expect(searchChemistry({ 'NuXL:presets': 'unknown' })).toBeNull()
+  })
+})
+
+describe('the larger fragment adducts of oligonucleotide adducts (NuXL:oligo_fragment_adducts)', () => {
+  const mass = (f: string) => monoWeight(parseFormula(f)!)
+  const water = mass('H2O')
+  const ump = mass('C9H13N2O9P')
+  // UU: two UMP, less one water (the phosphodiester bond)
+  const uu = 2 * ump - water
+  const peptide = nuxlPeptide('PEPTIDEK', undefined, 'UU', uu)
+  const chemistry = searchChemistry({ 'NuXL:presets': 'RNA-UV (U)' })!
+  const plain = (label: string, z: number) => nuxlTheoreticalMz(label, z, peptide, chemistry).mz!
+
+  test('the complete adduct and it minus H2O, named as the precursor adduct', () => {
+    expect(nuxlTheoreticalMz('y3+UU+', 1, peptide, chemistry).mz).toBeCloseTo(plain('y3+', 1) + uu, 6)
+    expect(nuxlTheoreticalMz('y3+UU-H2O++', 2, peptide, chemistry).mz).toBeCloseTo(plain('y3++', 2) + (uu - water) / 2, 6)
+    // another precursor adduct's name is no fragment adduct of this hit
+    expect(nuxlTheoreticalMz('y3+CU+', 1, peptide, chemistry).mz).toBeNull()
+  })
+
+  test("pNp, pNp-H2O and N-H2O-H2O from the target nucleotide's formula", () => {
+    const hpo3 = mass('HPO3')
+    expect(nuxlTheoreticalMz('b4+pUp+', 1, peptide, chemistry).mz).toBeCloseTo(plain('b4+', 1) + ump + hpo3, 6)
+    expect(nuxlTheoreticalMz('b4+pUp-H2O+', 1, peptide, chemistry).mz).toBeCloseTo(plain('b4+', 1) + ump + hpo3 - water, 6)
+    expect(nuxlTheoreticalMz('y2+U-H2O-H2O+', 1, peptide, chemistry).mz).toBeCloseTo(plain('y2+', 1) + ump - 2 * water, 6)
+    expect(nuxlTheoreticalMz('[M+2H]+pUp++', 2, peptide, chemistry).mz).toBeCloseTo(plain('[M+2H]++', 2) + (ump + hpo3) / 2, 6)
+    // a nucleotide the search does not have
+    expect(nuxlTheoreticalMz('b4+pTp+', 1, peptide, chemistry).mz).toBeNull()
   })
 })

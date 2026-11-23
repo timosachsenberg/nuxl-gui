@@ -43,7 +43,7 @@ const ALLOWED = [
   'modifications:variable_max_per_peptide', 'peptide:min_size', 'peptide:max_size', 'peptide:missed_cleavages', 'peptide:enzyme',
   'peptide:clip_nterm_methionine', 'report:top_hits', 'report:xl_fdr_groups', 'NuXL:presets', 'NuXL:length', 'NuXL:sequence',
   'NuXL:target_nucleotides', 'NuXL:nt_groups', 'NuXL:mapping', 'NuXL:can_cross_link', 'NuXL:standalone', 'NuXL:localization',
-  'NuXL:fragment_adducts', 'NuXL:modifications', 'NuXL:scoring', 'NuXL:rescoring', 'NuXL:decoy_factor', 'NuXL:CysteineAdduct',
+  'NuXL:oligo_fragment_adducts', 'NuXL:fragment_adducts', 'NuXL:modifications', 'NuXL:scoring', 'NuXL:rescoring', 'NuXL:decoy_factor', 'NuXL:CysteineAdduct',
   'NuXL:filter_fractional_mass', 'NuXL:carbon_labeled_fragments', 'NuXL:only_xl', 'NuXL:filter_small_peptide_mass',
   'NuXL:marker_ions_tolerance', 'filter', 'window_size', 'peak_count',
 ]

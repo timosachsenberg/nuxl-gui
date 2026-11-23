@@ -31,10 +31,16 @@ const peptide = (more: Partial<LibraryHit> = {}): LibraryHit =>
   xl({ sequence: 'WLSLR', crossLink: false, adduct: '', adductMass: NaN, site: -1, siteScore: NaN, ...more })
 
 describe('the library', () => {
-  it('leaves out decoys and the cross-links that are not localized (score 0 or none)', () => {
-    const lib = buildLibrary([xl({ decoy: true }), xl({ siteScore: 0 }), xl({ siteScore: NaN, site: -1 }), xl({ sequence: 'AAK', siteScore: 1e-9 })])
+  it('leaves out decoys and the cross-links that are not localized (no site)', () => {
+    const lib = buildLibrary([xl({ decoy: true }), xl({ siteScore: 0, site: -1 }), xl({ siteScore: NaN, site: -1 }), xl({ sequence: 'AAK', siteScore: 1e-9 })])
     expect(lib).toMatchObject({ decoys: 1, unlocalized: 2, crossLinks: 1, peptides: 0 })
     expect(lib.precursors.map((p) => p.modified)).toEqual(['A[C-H3N1]AK'])
+  })
+
+  it("keeps a cross-link the loss-aware localization puts on a residue at a score of 0 or below", () => {
+    const lib = buildLibrary([xl({ sequence: 'GGK', site: 1, siteScore: -0.4 }), xl({ sequence: 'AAK', site: 0, siteScore: 0 })])
+    expect(lib).toMatchObject({ unlocalized: 0, crossLinks: 2 })
+    expect(lib.precursors.map((p) => p.modified).sort()).toEqual(['A[C-H3N1]AK', 'GG[C-H3N1]K'])
   })
 
   it("keeps a cross-link on an oxidised residue apart from the plain one, the adduct's mass its own (OpenNuXL's 'NuXL:U-H2O1~Oxidation')", () => {

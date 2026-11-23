@@ -4,7 +4,9 @@
 // Ported from nuxl-app src/nuxl2dia.py (NuXL Team; NuXLDIA, github.com/timosachsenberg/NuXLDIA:
 // `NuXLLibraryConverter.run_pipeline`), BSD-3, Copyright OpenMS Inc. -- Eberhard Karls University Tuebingen, ETH
 // Zurich, and Freie Universitaet Berlin 2002-present. As nuxl2dia.py: decoys left out (a hit whose proteins are all
-// decoys), cross-links only when localized (NuXL:best_localization_score > 0), one cross-link per peptide, adduct and
+// decoys), cross-links only when localized (a site, NuXL:best_localization_position >= 0; nuxl2dia.py:
+// NuXL:best_localization_score > 0, which is the same with the 'fragments' localization, but OpenNuXL's default
+// 'loss_aware' localizes some cross-links at a score of 0 or below), one cross-link per peptide, adduct and
 // charge (the best localization score, then the best NuXL:score), one peptide per modified peptide and charge (the best
 // NuXL:score), the precursors in that order (cross-links first), its columns in its order. Differences (design.md):
 // the PSMs are the search's within the export's two FDRs (nuxl-app: Percolator's 1 % files); the column
@@ -80,7 +82,7 @@ export type Library = {
   fragments: number
   /** the adducts of the cross-links, by their names in brackets, with their masses (NaN unknown) */
   adducts: Map<string, number>
-  /** cross-link PSMs left out as not localized (best localization score 0 or none) */
+  /** cross-link PSMs left out as not localized (no site) */
   unlocalized: number
   /** decoy PSMs left out */
   decoys: number
@@ -120,7 +122,7 @@ export function buildLibrary(
   for (const h of hits) {
     if (h.decoy) decoys++
     else if (!h.crossLink) peptides.push(h)
-    else if (h.siteScore > 0) xls.push(h)
+    else if (h.site >= 0) xls.push(h)
     else unlocalized++
   }
   const sequenceOf = new Map<LibraryHit, ReturnType<typeof librarySequence>>()

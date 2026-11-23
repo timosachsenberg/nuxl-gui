@@ -90,6 +90,20 @@
       const sequence = pt.sequence[k]
       list.push({ name: 'Cross-linked residue', value: site >= 0 && site < sequence.length ? `${sequence[site]}${site + 1}` : 'not localized' })
       if (Number.isFinite(xl.siteScore[row])) list.push({ name: 'Localization score', value: number(xl.siteScore[row], 3), title: 'NuXL:best_localization_score' })
+      const tied = site >= 0 ? [...xl.siteSequence[row]].flatMap((c, j) => (c !== c.toUpperCase() && j < sequence.length ? [`${sequence[j]}${j + 1}`] : [])) : []
+      if (tied.length > 1)
+        list.push({ name: 'Tied residues', value: tied.join(', '), title: 'Equally likely: no fragment ion tells them apart (NuXL:best_localization in lower case). The site named is the N-terminal-most.' })
+      if (Number.isFinite(xl.siteDelta[row]))
+        list.push({ name: 'Localization delta', value: number(xl.siteDelta[row], 3), title: 'How far the site scores above the best residue not tied with it (NuXL:localization_delta)' })
+      const second = xl.secondarySite[row]
+      if (second >= 0 && second < sequence.length) {
+        const gain = xl.secondaryGain[row]
+        list.push({
+          name: 'Secondary site',
+          value: `${sequence[second]}${second + 1}${Number.isFinite(gain) ? ` (gain ${number(gain, 2)})` : ''}`,
+          title: 'A second cross-linked form the fragment ions show and tell apart from the first (NuXL:secondary_localization_position); the gain is how much it improves the explanation of the ions (NuXL:secondary_localization_gain). A candidate, not a confident site.',
+        })
+      }
     }
     if (xl.fdrGroup[row]) list.push({ name: 'FDR group', value: xl.fdrGroup[row] })
     list.push({ name: 'Precursor error', value: `${signedNumber(ps.precursorErrorPpm[row], 2)} ppm` })
