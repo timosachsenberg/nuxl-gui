@@ -190,6 +190,18 @@ describe('the search request', () => {
     for (const name of Object.keys(r.settings.parameters)) expect(allowlist.has(name), name).toBe(true)
   })
 
+  test('NuXL:localization counts with every protocol that prescribes none (RNA-SDA localizes by NHS)', async () => {
+    await form.addFiles(['/r/run.mzML', '/db/db.fasta'])
+    await settle()
+    form.setProtocol('RNA-UV (U)')
+    form.setParam('NuXL:localization', 'fragments')
+    expect(searchPlan.blockedReason('NuXL:localization')).toBeNull()
+    expect(searchRequest()!.settings.parameters['NuXL:localization']).toBe('fragments')
+    form.setProtocol('RNA-SDA')
+    expect(searchPlan.blockedReason('NuXL:localization')).toMatch(/NHS/)
+    expect('NuXL:localization' in searchRequest()!.settings.parameters).toBe(false)
+  })
+
   test('Advanced: the threads (all cores by default), never a parameter', async () => {
     await form.addFiles(['/r/run.mzML', '/db/db.fasta'])
     await settle()

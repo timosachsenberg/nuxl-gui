@@ -30,6 +30,10 @@
 //    first left unannotated, for each fragment adduct of the cross-linked nucleotide feasible for the precursor
 //    adduct (NuXL:fragment_adducts or the preset's, 'U:C4H2N2O1;U'-H2O': formula and name; its mass
 //    EmpiricalFormula::getMonoWeight):
+//    for a precursor adduct of two or more nucleotides also the larger fragment adducts of NuXL:oligo_fragment_adducts
+//    (NuXLParameterParsing::getFeasibleFragmentAdducts, OpenMS#10957): the complete adduct, named as the precursor
+//    adduct ('UU', mass NuXL:NA_MASS_z0), and it minus H2O ('UU-H2O'); for the listed nucleotides N 'pNp' (N's target
+//    nucleotide formula + HPO3), 'pNp-H2O' and 'N-H2O-H2O' (`shiftMasses`):
 //      shifted a, b, y and precursor ions: the ion of charge z (TheoreticalSpectrumGenerator for z only, a, b, y,
 //        no losses, the precursor of that charge with its -H2O and -NH3) + adduct mass / z; named
 //        '<ion> <adduct>' → 'y5+U'-H2O++', '[M+2H-H2O]+U'++' (the precursor's charge moved to the end)
@@ -102,8 +106,12 @@ const DEFAULT_MARKERS: Record<'RNA' | 'DNA', [string, string][]> = {
   ],
 }
 
-/** The masses of the fragment adducts (shifts) and the marker ions by name; a name may have more than one. */
-export type NuxlChemistry = { adducts: Map<string, number[]>; markers: Map<string, number[]> }
+/**
+ * The masses of the fragment adducts (shifts) and the marker ions by name; a name may have more than one. `nucleotides`:
+ * the masses of the target nucleotides' formulas ('U=C9H13N2O9P'), for the larger fragment adducts of oligonucleotide
+ * adducts ('pUp').
+ */
+export type NuxlChemistry = { adducts: Map<string, number[]>; markers: Map<string, number[]>; nucleotides?: Map<string, number> }
 
 const addMass = (map: Map<string, number[]>, name: string, mass: number) => {
   const list = map.get(name)
@@ -123,9 +131,14 @@ const formulaName = (f: Record<string, number>) =>
  * entries '<nucleotide>:<formula>;<name>' (without a name, the formula's EmpiricalFormula::toString), the formula
  * also as '<precursor adduct>-><formula>'; `rna`: which default marker ions OpenNuXL adds.
  */
-export function nuxlChemistry(fragmentAdducts: readonly string[], rna: boolean): NuxlChemistry {
+export function nuxlChemistry(fragmentAdducts: readonly string[], rna: boolean, targetNucleotides: readonly string[] = DEFAULT_TARGET_NUCLEOTIDES): NuxlChemistry {
   const adducts = new Map<string, number[]>()
   const markers = new Map<string, number[]>()
+  const nucleotides = new Map<string, number>()
+  for (const t of targetNucleotides) {
+    const f = t.length > 2 && t[1] === '=' ? parseFormula(t.slice(2)) : null
+    if (f) nucleotides.set(t[0], monoWeight(f))
+  }
   for (const entry of fragmentAdducts) {
     const t = entry.replace(/\s/g, '')
     if (t[1] !== ':') continue
@@ -139,7 +152,7 @@ export function nuxlChemistry(fragmentAdducts: readonly string[], rna: boolean):
     addMass(markers, n, mass)
   }
   for (const [name, f] of DEFAULT_MARKERS[rna ? 'RNA' : 'DNA']) addMass(markers, name, monoWeight(parseFormula(f)!))
-  return { adducts, markers }
+  return { adducts, markers, nucleotides }
 }
 
 const stringList = (v: unknown): string[] | null => (Array.isArray(v) && v.every((x) => typeof x === 'string') ? (v as string[]) : null)
@@ -158,15 +171,16 @@ export function searchChemistry(parameters: Record<string, unknown>, preset?: st
     const protocol = PROTOCOLS[p]
     if (!protocol) return null
     // (RNA if the name says so, as OpenNuXL decides it; else DNA's default marker ions)
-    return nuxlChemistry(protocol.fragment_adducts, p.includes('RNA'))
+    return nuxlChemistry(protocol.fragment_adducts, p.includes('RNA'), protocol.target_nucleotides)
   }
   const adducts = stringList(parameters['NuXL:fragment_adducts']) ?? DEFAULT_FRAGMENT_ADDUCTS
+  const targets = stringList(parameters['NuXL:target_nucleotides']) ?? DEFAULT_TARGET_NUCLEOTIDES
   let rna = false
-  for (const t of stringList(parameters['NuXL:target_nucleotides']) ?? DEFAULT_TARGET_NUCLEOTIDES) {
+  for (const t of targets) {
     if (/^[Uu]/.test(t)) rna = true
     else if (/^[Tt]/.test(t)) rna = false
   }
-  return nuxlChemistry(adducts, rna)
+  return nuxlChemistry(adducts, rna, targets)
 }
 
 //------------------------------------------------------------------------------
@@ -247,9 +261,25 @@ function pick(candidates: number[], near: number, what: string): NuxlTheoretical
   return { mz: best }
 }
 
-/** The masses of a fragment adduct (shift) by its name. */
-function shiftMasses(name: string, chemistry: NuxlChemistry): number[] {
-  return chemistry.adducts.get(name) ?? []
+const WATER = monoWeight({ H: 2, O: 1 })
+const HPO3 = monoWeight({ H: 1, P: 1, O: 3 })
+
+/**
+ * The masses of a fragment adduct (shift) by its name: the search's, else one of the larger fragment adducts of the
+ * hit's oligonucleotide adduct (NuXL:oligo_fragment_adducts): the precursor adduct itself ('UU'), it minus H2O
+ * ('UU-H2O'), 'pUp', 'pUp-H2O' and 'U-H2O-H2O'.
+ */
+function shiftMasses(name: string, chemistry: NuxlChemistry, peptide: NuxlPeptide): number[] {
+  const known = chemistry.adducts.get(name)
+  if (known) return known
+  if (peptide.adduct !== '' && Number.isFinite(peptide.adductMass)) {
+    if (name === peptide.adduct) return [peptide.adductMass]
+    if (name === `${peptide.adduct}-H2O`) return [peptide.adductMass - WATER]
+  }
+  const m = /^(?:p([A-Za-z])p(-H2O)?|([A-Za-z])-H2O-H2O)$/.exec(name)
+  const nucleotide = m ? chemistry.nucleotides?.get(m[1] ?? m[3]) : undefined
+  if (!m || nucleotide === undefined) return []
+  return [m[1] !== undefined ? nucleotide + HPO3 - (m[2] ? WATER : 0) : nucleotide - 2 * WATER]
 }
 
 /** z·p + the residues' masses + the ion type's offset, of the sequence ion `type``ordinal` (TheoreticalSpectrumGenerator::addPeaks_). */
@@ -284,7 +314,7 @@ export function nuxlTheoreticalMz(label: string, charge: number, peptide: NuxlPe
       const base = sequenceIonMass(p, ion.kind, ion.ordinal, z)
       if (base === null) return fail(`no ion ${ion.kind}${ion.ordinal} of ${peptide.sequence}`)
       if (ion.shift !== '') {
-        const shifts = shiftMasses(ion.shift, chemistry)
+        const shifts = shiftMasses(ion.shift, chemistry, peptide)
         if (shifts.length === 0) return fail(`unknown fragment adduct '${ion.shift}'`)
         return pick(
           shifts.map((s) => base / z + s / z),
@@ -339,7 +369,7 @@ function precursorMz(label: string, z: number, peptide: NuxlPeptide, chemistry: 
     if (loss === null) return fail(`unknown loss '${after}'`)
     return { mz: mz - loss / z }
   }
-  const shifts = shiftMasses(after.slice(1), chemistry)
+  const shifts = shiftMasses(after.slice(1), chemistry, peptide)
   if (shifts.length === 0) return fail(`unknown fragment adduct '${after.slice(1)}'`)
   return pick(
     shifts.map((s) => mz + s / z),
@@ -370,7 +400,7 @@ function immoniumMz(label: string, peptide: NuxlPeptide, chemistry: NuxlChemistr
     bases = IMMONIUM_FORMULAS[residue].map((f) => formulaMass(f)!)
   }
   if (shiftName === '') return pick(bases, near, 'immonium ion')
-  const shifts = shiftMasses(shiftName, chemistry)
+  const shifts = shiftMasses(shiftName, chemistry, peptide)
   if (shifts.length === 0) return fail(`unknown fragment adduct '${shiftName}'`)
   return pick(
     bases.flatMap((b) => shifts.map((s) => b + s)),

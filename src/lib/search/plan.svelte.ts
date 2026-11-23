@@ -7,7 +7,7 @@ import { navigate } from '../route.svelte'
 import { unknownModifications } from '../settings/modifications'
 import { NUXL_PARAMETERS } from '../settings/nuxl'
 import { copyValues, requestParameters } from '../settings/parameters'
-import { CUSTOM_PROTOCOL, PROTOCOL_PARAMETERS } from '../settings/protocols'
+import { CUSTOM_PROTOCOL, PROTOCOL_PARAMETERS, PROTOCOLS } from '../settings/protocols'
 import { boundsMessage, invertedRanges, outOfBounds, rangeMessage } from '../settings/ranges'
 import { keepsOpenResult, showFinished } from './finished'
 import { CRAP_PROTEINS, searchForm as form } from './form.svelte'
@@ -31,8 +31,12 @@ class SearchPlan {
   /** The custom protocol ("none"): OpenNuXL takes the nucleotides and adducts from the NuXL fields. */
   customProtocol = $derived(form.value('NuXL:presets') === CUSTOM_PROTOCOL)
 
+  /** The localization the protocol prescribes in place of NuXL:localization (NHS for RNA-SDA); null: none. */
+  protocolLocalization = $derived(this.customProtocol ? null : (PROTOCOLS[String(form.value('NuXL:presets'))]?.localization ?? null))
+
   /** Why a parameter does nothing with the other settings (the request leaves it out then); null: it counts. */
   blockedReason(name: string): string | null {
+    if (name === 'NuXL:localization' && this.protocolLocalization) return `The protocol localizes the cross-links (${this.protocolLocalization}).`
     return !this.customProtocol && (PROTOCOL_PARAMETERS as readonly string[]).includes(name) ? PROTOCOL_HINT : null
   }
 
@@ -122,6 +126,7 @@ export function searchRequest(): SearchRequest | null {
   const values = $state.snapshot(form.values) as Record<string, unknown>
   const parameters = requestParameters(values, NUXL_PARAMETERS)
   if (!searchPlan.customProtocol) for (const name of PROTOCOL_PARAMETERS) delete parameters[name]
+  if (searchPlan.protocolLocalization) delete parameters['NuXL:localization']
   return {
     files: form.files.map((r) => ({ id: r.id, path: r.file.path })),
     database: form.database.file.path,

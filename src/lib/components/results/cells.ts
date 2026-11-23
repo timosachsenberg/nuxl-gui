@@ -56,7 +56,7 @@ export function adductTitle(adduct: string, mass: number, nucleotide: string, is
   return parts.join(' · ')
 }
 
-/** A localization score (0–1) with two decimals; NaN as "–". */
+/** A localization score (types.ts `siteScore`) with two decimals; NaN as "–". */
 export function siteScoreText(score: number): string {
   return fixed(score, 2)
 }

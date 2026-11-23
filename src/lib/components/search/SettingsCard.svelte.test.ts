@@ -39,7 +39,7 @@ describe('SettingsCard', () => {
     expect((document.getElementById('precursor-tolerance') as HTMLInputElement).value).toBe('6')
     expect((document.getElementById('peptide-fdr') as HTMLInputElement).value).toBe('1')
     expect((document.getElementById('xl-fdr') as HTMLInputElement).value).toBe('1')
-    expect(document.body.textContent).toContain('All 40 parameters')
+    expect(document.body.textContent).toContain('All 41 parameters')
     expect(document.body.textContent).not.toContain('Edit the adducts')
   })
 
@@ -61,7 +61,7 @@ describe('SettingsCard', () => {
 
   it('with a protocol, the dialog shows the adduct fields disabled, saying why', () => {
     show()
-    ;[...document.querySelectorAll('button')].find((b) => b.textContent?.startsWith('All 40 parameters'))!.click()
+    ;[...document.querySelectorAll('button')].find((b) => b.textContent?.startsWith('All 41 parameters'))!.click()
     flushSync()
     expect((document.getElementById('param-NuXL-modifications') as HTMLTextAreaElement).disabled).toBe(true)
     expect(document.body.textContent).toContain('The protocol sets this.')

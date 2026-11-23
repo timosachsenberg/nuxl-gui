@@ -2,7 +2,10 @@
 // nuxl_presets.json (scripts/nuxl-parameters.mjs checks the copy against the pin). A protocol sets the nucleotides,
 // which of them cross-link, and the precursor and fragment adducts (NuXLPresets.cpp); OpenNuXL then ignores the
 // NuXL fields of those (`PROTOCOL_PARAMETERS`). "none" is the custom protocol: OpenNuXL takes the adducts from those
-// fields. The page says in one line what each protocol searches for (`protocolSummary`).
+// fields. A protocol may also prescribe the localization (`localization`, NHS for RNA-SDA; otherwise NuXL:localization
+// counts) and the larger fragment adducts of oligonucleotide adducts (`oligo_fragment_adducts`, what
+// NuXL:oligo_fragment_adducts 'preset' takes). The page says in one line what each protocol searches for
+// (`protocolSummary`).
 
 import presets from './nuxl_presets.json'
 
@@ -14,6 +17,7 @@ export type Protocol = {
   fragment_adducts: string[]
   standalone?: string
   localization?: string
+  oligo_fragment_adducts?: string
 }
 
 /** The protocols by name, in the file's order ("RNA-UV (U)", ..., "none"). */
@@ -34,15 +38,13 @@ export const PROTOCOL_PARAMETERS = [
   'NuXL:mapping',
   'NuXL:can_cross_link',
   'NuXL:standalone',
-  'NuXL:localization',
   'NuXL:modifications',
   'NuXL:fragment_adducts',
 ] as const
 
 /**
  * The values of the protocol parameters that `name` sets, as the NuXL fields hold them (the custom protocol's
- * starting point); null for the custom protocol or an unknown name. A protocol without `standalone` or
- * `localization` has none (OpenNuXL: no standalone nucleotides, localization by the fragments).
+ * starting point); null for the custom protocol or an unknown name. A protocol without `standalone` has none.
  */
 export function protocolParameters(name: string): Record<string, unknown> | null {
   const p = PROTOCOLS[name]
@@ -52,7 +54,6 @@ export function protocolParameters(name: string): Record<string, unknown> | null
     'NuXL:mapping': [...p.mapping],
     'NuXL:can_cross_link': p.can_cross_link,
     'NuXL:standalone': p.standalone ?? '',
-    'NuXL:localization': p.localization ?? 'fragments',
     'NuXL:modifications': [...p.modifications],
     'NuXL:fragment_adducts': [...p.fragment_adducts],
   }

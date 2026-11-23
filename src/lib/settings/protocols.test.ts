@@ -33,9 +33,12 @@ describe('the cross-linking protocols (NuXL:presets)', () => {
     expect(Object.keys(uv).sort()).toEqual([...PROTOCOL_PARAMETERS].sort())
     expect(uv['NuXL:can_cross_link']).toBe('U')
     expect(uv['NuXL:standalone']).toBe('')
-    expect(uv['NuXL:localization']).toBe('fragments')
+    // the localization is the user's (NuXL:localization) with every protocol that prescribes none
+    expect(uv).not.toHaveProperty('NuXL:localization')
+    expect(PROTOCOLS['RNA-UV (U)'].oligo_fragment_adducts).toBe('U')
     expect(uv['NuXL:modifications']).toEqual(PROTOCOLS['RNA-UV (U)'].modifications)
-    expect(protocolParameters('RNA-SDA')).toMatchObject({ 'NuXL:standalone': 's', 'NuXL:localization': 'NHS' })
+    expect(protocolParameters('RNA-SDA')).toMatchObject({ 'NuXL:standalone': 's' })
+    expect(PROTOCOLS['RNA-SDA'].localization).toBe('NHS')
     // copies: editing them leaves the protocol as it is
     ;(uv['NuXL:modifications'] as string[]).push('U:+H2O')
     expect(PROTOCOLS['RNA-UV (U)'].modifications).not.toContain('U:+H2O')

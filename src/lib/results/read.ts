@@ -348,6 +348,9 @@ const P = {
   site: 'NuXL:best_localization_position',
   siteScore: 'NuXL:best_localization_score',
   siteSequence: 'NuXL:best_localization',
+  siteDelta: 'NuXL:localization_delta',
+  secondarySite: 'NuXL:secondary_localization_position',
+  secondaryGain: 'NuXL:secondary_localization_gain',
   fdrGroup: 'NuXL:fdr_group',
   // FalseDiscoveryRate's peptide-level q-value (Constants::UserParam::PEPTIDE_Q_VALUE), which NuXLFDR also filters on
   peptideQValue: 'peptide q-value',
@@ -471,6 +474,9 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     site: new Int16Array(count),
     siteScore: new Float64Array(count),
     siteSequence: new Array<string>(count),
+    siteDelta: new Float64Array(count),
+    secondarySite: new Int16Array(count),
+    secondaryGain: new Float64Array(count),
     fdrGroup: new Array<string>(count),
     peptideQValue: new Float64Array(count),
     annotation: new Array<string>(count),
@@ -523,6 +529,9 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
     const site = num(P.site)
     const siteScore = num(P.siteScore)
     const siteSequence = txt(P.siteSequence)
+    const siteDelta = num(P.siteDelta)
+    const secondarySite = num(P.secondarySite)
+    const secondaryGain = num(P.secondaryGain)
     const fdrGroup = txt(P.fdrGroup)
     const peptideQValue = num(P.peptideQValue)
     const annotation = txt(P.annotation)
@@ -580,6 +589,10 @@ export async function readSearch(files: SearchFiles): Promise<SearchResult> {
       xl.site[i] = at
       xl.siteScore[i] = at >= 0 ? siteScore[h] : NaN
       xl.siteSequence[i] = crossLink && /[a-z]/.test(siteSequence[h]) ? siteSequence[h] : ''
+      xl.siteDelta[i] = at >= 0 ? siteDelta[h] : NaN
+      const second = at >= 0 && secondarySite[h] >= 0 ? secondarySite[h] : -1
+      xl.secondarySite[i] = second
+      xl.secondaryGain[i] = second >= 0 ? secondaryGain[h] : NaN
       xl.fdrGroup[i] = part.kind === 'peptides' ? PEPTIDE_GROUP : fdrGroup[h] || 'XL'
       xl.peptideQValue[i] = peptideQValue[h]
       xl.annotation[i] = annotation[h]

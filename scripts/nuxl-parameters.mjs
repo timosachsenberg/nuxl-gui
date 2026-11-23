@@ -59,6 +59,7 @@ const ALLOWED = [
   'NuXL:can_cross_link',
   'NuXL:standalone',
   'NuXL:localization',
+  'NuXL:oligo_fragment_adducts',
   'NuXL:fragment_adducts',
   'NuXL:modifications',
   'NuXL:scoring',

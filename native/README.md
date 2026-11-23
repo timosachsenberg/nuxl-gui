@@ -159,10 +159,16 @@ of the pinned `OpenNuXL.cpp`: check them when the pin moves. The pin has to incl
 `.raw` with ThermoRawFileParser, and writes `<input stem>_pc.mzML` beside its `-in` when it recalibrates; and
 OpenMS#10829 (develop `5e974cd`): OpenNuXL's `-out_qpx` (the QPX mz view of the spectra of its PSMs, which the app's
 PSM view reads; the app passes it to every run, and an OpenNuXL without it refuses the option); and OpenMS#10843
-(develop `8c6fce6`, the current pin): OpenNuXL rescores with the Percolator built into OpenMS in its own process
+(develop `8c6fce6`): OpenNuXL rescores with the Percolator built into OpenMS in its own process
 (`-percolator_backend builtin`), so the bundle has no PercolatorAdapter (an older OpenNuXL would find none and skip the
 rescoring with "Score recalibration failed."). It includes OpenMS#10834 and #10836 as well: a compiled-in path that
-cannot be checked (a drive that is not ready) no longer ends the tools at their start. CI checks the commit out of
+cannot be checked (a drive that is not ready) no longer ends the tools at their start. The current pin (develop
+`ddf4cee`) adds OpenMS#10948: the loss-aware localization, OpenNuXL's new default (`NuXL:localization loss_aware`),
+with tied residues, `NuXL:localization_delta` and a secondary site (`NuXL:secondary_localization_*`, which the PSM
+view shows), its score no longer between 0 and 1, and `NuXL:localization` counting with every preset that prescribes
+none (only RNA-SDA's NHS does); OpenMS#10949: MS2 deisotoping no longer deletes real fragment ions; and OpenMS#10957:
+the larger fragment adducts of oligonucleotide adducts (`NuXL:oligo_fragment_adducts`, `U` in the RNA-UV presets;
+labels like `y5+UU+`, `b3+pUp-H2O+`, which `nuxl-theoretical.ts` computes). CI checks the commit out of
 OpenMS/OpenMS; it never builds from local state.
 
 ## Bundling OpenNuXL

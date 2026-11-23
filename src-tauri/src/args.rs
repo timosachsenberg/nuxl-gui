@@ -111,6 +111,7 @@ pub const PARAMETERS: &[(&str, Kind)] = &[
     ("NuXL:can_cross_link", Text),
     ("NuXL:standalone", Text),
     ("NuXL:localization", Choice),
+    ("NuXL:oligo_fragment_adducts", Text),
     ("NuXL:fragment_adducts", List),
     ("NuXL:modifications", List),
     ("NuXL:scoring", Choice),
